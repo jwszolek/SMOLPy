@@ -1,0 +1,49 @@
+[project]
+name = "smolpy"
+dynamic = ["version"]
+description = "Network simulation DSL and discrete-event simulator"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "simpy>=4.1",
+    "networkx>=3.3",
+    "plotly>=5.22",
+    "dash>=2.17",
+    "rich>=13",
+    "dearpygui>=1.6",
+]
+
+[project.scripts]
+smolpy = "smolpy.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff", "mypy"]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.1.0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smolpy"]
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff", "mypy"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/smolpy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
