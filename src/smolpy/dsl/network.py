@@ -131,10 +131,22 @@ class Network:
 
     # --- simulation control ---
 
-    def simulate(self, duration: float, *, live: bool = False) -> SimulationResult:
+    def simulate(
+        self,
+        duration: float,
+        *,
+        live: bool = False,
+        text: bool = False,
+    ) -> SimulationResult:
+        import os
+        if os.environ.get("SMOLPY_TEXT_MODE") == "1":
+            live, text = False, True
         if live:
             from smolpy.viz.dashboard import show_live
             return show_live(self, duration)
+        if text:
+            from smolpy.viz.text_dashboard import show_text
+            return show_text(self, duration)
         from smolpy.sim.engine import run_simulation
         return run_simulation(self, duration_ms=duration)
 

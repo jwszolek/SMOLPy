@@ -183,8 +183,9 @@ net.observe(metric, on=node, every=interval_ms)
 ### Simulation
 
 ```python
-result = net.simulate(duration=30_000)             # headless, duration in ms
-result = net.simulate(duration=30_000, live=True)  # with live dashboard
+result = net.simulate(duration=30_000)              # headless — silent, fastest
+result = net.simulate(duration=30_000, text=True)   # rich text dashboard in terminal
+result = net.simulate(duration=30_000, live=True)   # full Dear PyGui desktop window
 
 result.report()   # print summary table (avg / min / max per metric)
 result.plot()     # open static dashboard for a completed result
@@ -193,6 +194,14 @@ result.plot()     # open static dashboard for a completed result
 result.export("results.csv")    # long CSV: time_ms, metric, value
 result.export("results.json")   # JSON dict of lists-of-pairs
 result.export("out.csv", format="csv")   # explicit format override
+```
+
+**Text mode** (`text=True`) displays a live updating table in the terminal — no display server or GUI toolkit required.  Ideal for headless servers, SSH sessions, and CI environments.
+
+### Quick demo
+
+```bash
+smolpy demo          # built-in 3-client scenario, text mode, no script needed
 ```
 
 ---
