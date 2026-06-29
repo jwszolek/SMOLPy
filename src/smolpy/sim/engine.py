@@ -3,16 +3,14 @@ from __future__ import annotations
 import random
 import time
 from collections import defaultdict
+from collections.abc import Generator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Generator
+from typing import TYPE_CHECKING
 
 import simpy
 
 if TYPE_CHECKING:
-    from smolpy.dsl.adapter import Adapter
-    from smolpy.dsl.hub import Hub
     from smolpy.dsl.network import Network, SimulationResult
-    from smolpy.dsl.switch import Switch
 
 _MAX_RETRIES = 16
 _SLOT_TIME_US = 51.2  # 10 Mbps Ethernet slot time (µs)
@@ -431,11 +429,17 @@ def run_simulation(
 
     for link in network._links:
         a, b = link.endpoint_a, link.endpoint_b
-        port_a = next_port[a.name]; next_port[a.name] += 1
-        port_b = next_port[b.name]; next_port[b.name] += 1
+        port_a = next_port[a.name]
+        next_port[a.name] += 1
+        port_b = next_port[b.name]
+        next_port[b.name] += 1
 
-        ch_ab = _LinkChannel(env, link.speed_bps, link.propagation_delay_us, port_b, inbound[b.name])
-        ch_ba = _LinkChannel(env, link.speed_bps, link.propagation_delay_us, port_a, inbound[a.name])
+        ch_ab = _LinkChannel(
+            env, link.speed_bps, link.propagation_delay_us, port_b, inbound[b.name]
+        )
+        ch_ba = _LinkChannel(
+            env, link.speed_bps, link.propagation_delay_us, port_a, inbound[a.name]
+        )
 
         out_channels[a.name][port_a] = ch_ab
         out_channels[b.name][port_b] = ch_ba
@@ -476,9 +480,13 @@ def run_simulation(
                     env, inbound[name], node.mac, node._routes, ch,
                 ))
         elif isinstance(node, Switch):
-            env.process(_switch_forwarder(env, inbound[name], out_channels[name], static_macs.get(name)))
+            env.process(_switch_forwarder(
+                env, inbound[name], out_channels[name], static_macs.get(name)
+            ))
         elif isinstance(node, Hub):
-            env.process(_hub_broadcaster(env, inbound[name], out_channels[name], hub_collisions[name]))
+            env.process(_hub_broadcaster(
+                env, inbound[name], out_channels[name], hub_collisions[name]
+            ))
 
     # Start metric samplers
     # Reuse an externally supplied dict (live mode) or create a fresh one.
@@ -493,13 +501,21 @@ def run_simulation(
         samples = all_samples[key]
 
         if obs.metric == "throughput" and isinstance(target, Adapter):
-            env.process(_throughput_sampler(env, adapter_counters[target.name], interval_us, samples))
+            env.process(_throughput_sampler(
+                env, adapter_counters[target.name], interval_us, samples
+            ))
         elif obs.metric == "latency" and isinstance(target, Adapter):
-            env.process(_latency_sampler(env, adapter_counters[target.name], interval_us, samples))
+            env.process(_latency_sampler(
+                env, adapter_counters[target.name], interval_us, samples
+            ))
         elif obs.metric == "queue_depth" and isinstance(target, Switch):
-            env.process(_queue_depth_sampler(env, out_channels[target.name], interval_us, samples))
+            env.process(_queue_depth_sampler(
+                env, out_channels[target.name], interval_us, samples
+            ))
         elif obs.metric == "collision_rate" and isinstance(target, Hub):
-            env.process(_collision_rate_sampler(env, hub_collisions[target.name], interval_us, samples))
+            env.process(_collision_rate_sampler(
+                env, hub_collisions[target.name], interval_us, samples
+            ))
         elif obs.metric == "utilization":
             chs = in_channels.get(target.name, [])
             if chs:

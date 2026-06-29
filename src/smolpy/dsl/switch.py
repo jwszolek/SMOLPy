@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import Literal
+
 from smolpy.dsl.node import Node
 
 SwitchMode = Literal["store-and-forward", "cut-through"]
