@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from smolpy.dsl.node import Node
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
-from smolpy.dsl.node import Node
+
 from smolpy.dsl.adapter import _derive_mac
+from smolpy.dsl.node import Node
 
 
 class MQTTBroker(Node):

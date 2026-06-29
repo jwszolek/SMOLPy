@@ -1,12 +1,14 @@
 from __future__ import annotations
+
 import networkx as nx
+
 from smolpy.dsl.adapter import Adapter
-from smolpy.dsl.switch import Switch, SwitchMode
 from smolpy.dsl.hub import Hub
 from smolpy.dsl.link import Link
 from smolpy.dsl.mqtt_broker import MQTTBroker
-from smolpy.dsl.observation import Observation, MetricName
 from smolpy.dsl.node import Node
+from smolpy.dsl.observation import MetricName, Observation
+from smolpy.dsl.switch import Switch, SwitchMode
 
 
 class SimulationResult:
