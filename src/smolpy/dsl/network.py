@@ -31,7 +31,7 @@ class SimulationResult:
         import json
         import pathlib
 
-        p   = pathlib.Path(path)
+        p = pathlib.Path(path)
         fmt = (format or p.suffix.lstrip(".")).lower()
 
         if fmt == "csv":
@@ -45,19 +45,17 @@ class SimulationResult:
             payload = {
                 "network": self._network.name,
                 "metrics": {
-                    k: [[round(t, 3), round(v, 6)] for t, v in s]
-                    for k, s in self.metrics.items()
+                    k: [[round(t, 3), round(v, 6)] for t, v in s] for k, s in self.metrics.items()
                 },
             }
             with open(p, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=2)
         else:
-            raise ValueError(
-                f"Unknown format {fmt!r}. Supported formats: 'csv', 'json'."
-            )
+            raise ValueError(f"Unknown format {fmt!r}. Supported formats: 'csv', 'json'.")
 
     def plot(self) -> None:
         from smolpy.viz.dashboard import show
+
         show(self)
 
     def report(self) -> None:
@@ -65,9 +63,14 @@ class SimulationResult:
             print("No metrics collected. Add net.observe(...) calls before simulating.")
             return
         _UNITS = {
-            "throughput": "Mb/s", "latency": "µs", "frame_loss": "%",
-            "collision_rate": "/s", "queue_depth": "fr", "utilization": "%",
-            "bytes_sent": "MB", "bytes_received": "MB",
+            "throughput": "Mb/s",
+            "latency": "µs",
+            "frame_loss": "%",
+            "collision_rate": "/s",
+            "queue_depth": "fr",
+            "utilization": "%",
+            "bytes_sent": "MB",
+            "bytes_received": "MB",
         }
         col = max(len(k) for k in self.metrics) + 2
         header = f"{'Metric':<{col}}  {'n':>6}  {'avg':>10}  {'min':>10}  {'max':>10}"
@@ -141,15 +144,19 @@ class Network:
         text: bool = False,
     ) -> SimulationResult:
         import os
+
         if os.environ.get("SMOLPY_TEXT_MODE") == "1":
             live, text = False, True
         if live:
             from smolpy.viz.dashboard import show_live
+
             return show_live(self, duration)
         if text:
             from smolpy.viz.text_dashboard import show_text
+
             return show_text(self, duration)
         from smolpy.sim.engine import run_simulation
+
         return run_simulation(self, duration_ms=duration)
 
     # --- internals ---

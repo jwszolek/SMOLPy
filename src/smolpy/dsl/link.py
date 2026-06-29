@@ -13,8 +13,8 @@ class Link:
 
     endpoint_a: Node
     endpoint_b: Node
-    speed: float        # Mb/s
-    length: float       # metres
+    speed: float  # Mb/s
+    length: float  # metres
     duplex: bool = True
 
     @property

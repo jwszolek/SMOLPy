@@ -22,6 +22,7 @@ Samples = list[tuple[float, float]]  # (time_ms, value)
 # Frame — internal simulation packet
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _Frame:
     src_mac: str
@@ -31,7 +32,7 @@ class _Frame:
     retries: int = field(default=0)
     in_port: int = field(default=-1)  # port index at the receiving switch/hub
     mqtt_topic: str | None = field(default=None)
-    mqtt_qos:   int        = field(default=0)
+    mqtt_qos: int = field(default=0)
 
 
 def _resolve_size(size: int | str, rng: random.Random) -> int:
@@ -50,6 +51,7 @@ def _resolve_size(size: int | str, rng: random.Random) -> int:
 # Per-adapter runtime counters
 # ---------------------------------------------------------------------------
 
+
 class _AdapterCounters:
     def __init__(self) -> None:
         self.bytes_received: int = 0
@@ -65,6 +67,7 @@ class _AdapterCounters:
 # ---------------------------------------------------------------------------
 # Link channel — one directed lane of a link
 # ---------------------------------------------------------------------------
+
 
 class _LinkChannel:
     """Simulates one direction of a cable: enqueue → tx delay → prop delay → deliver."""
@@ -117,6 +120,7 @@ class _LinkChannel:
 # SimPy processes
 # ---------------------------------------------------------------------------
 
+
 def _bytes_rx_sampler(
     env: simpy.Environment,
     counters: _AdapterCounters,
@@ -159,22 +163,28 @@ def _traffic_gen(
             burst_len = max(1, int(rng.paretovariate(1.5)))
             for _ in range(burst_len):
                 yield env.timeout(interval_us / 4)
-                channel.enqueue(_Frame(
-                    src_mac=src_mac, dst_mac=dst_mac,
-                    size_bytes=_resolve_size(size_spec, rng),
-                    created_at_us=env.now,
-                ))
+                channel.enqueue(
+                    _Frame(
+                        src_mac=src_mac,
+                        dst_mac=dst_mac,
+                        size_bytes=_resolve_size(size_spec, rng),
+                        created_at_us=env.now,
+                    )
+                )
             yield env.timeout(interval_us * burst_len * rng.uniform(0.5, 2.0))
         else:
             if pattern == "constant":
                 yield env.timeout(interval_us)
             else:  # poisson
                 yield env.timeout(rng.expovariate(1.0 / interval_us))
-            channel.enqueue(_Frame(
-                src_mac=src_mac, dst_mac=dst_mac,
-                size_bytes=_resolve_size(size_spec, rng),
-                created_at_us=env.now,
-            ))
+            channel.enqueue(
+                _Frame(
+                    src_mac=src_mac,
+                    dst_mac=dst_mac,
+                    size_bytes=_resolve_size(size_spec, rng),
+                    created_at_us=env.now,
+                )
+            )
 
 
 def _mqtt_traffic_gen(
@@ -194,49 +204,54 @@ def _mqtt_traffic_gen(
     interval_us = 1_000_000.0 / rate_hz
     while True:
         yield env.timeout(interval_us)
-        channel.enqueue(_Frame(
-            src_mac=src_mac,
-            dst_mac=dst_mac,
-            size_bytes=frame_size,
-            created_at_us=env.now,
-            mqtt_topic=topic,
-            mqtt_qos=qos,
-        ))
+        channel.enqueue(
+            _Frame(
+                src_mac=src_mac,
+                dst_mac=dst_mac,
+                size_bytes=frame_size,
+                created_at_us=env.now,
+                mqtt_topic=topic,
+                mqtt_qos=qos,
+            )
+        )
 
 
 def _mqtt_broker_forwarder(
     env: simpy.Environment,
     inbound: simpy.Store,
     broker_mac: str,
-    routes: dict[str, list],      # topic → [Adapter, ...]
-    out_channel: _LinkChannel,    # broker's outbound channel to nearest switch
+    routes: dict[str, list],  # topic → [Adapter, ...]
+    out_channel: _LinkChannel,  # broker's outbound channel to nearest switch
 ) -> Generator:
     """MQTT broker: receives PUBLISH, fans out to subscribers, ACKs QoS 1."""
     # Pre-build topic → [subscriber_mac, ...]
     topic_subs: dict[str, list[str]] = {
-        topic: [a.mac for a in adapters]
-        for topic, adapters in routes.items()
+        topic: [a.mac for a in adapters] for topic, adapters in routes.items()
     }
     while True:
         frame: _Frame = yield inbound.get()
         if frame.mqtt_topic is None:
             continue  # not an MQTT frame
         for sub_mac in topic_subs.get(frame.mqtt_topic, []):
-            out_channel.enqueue(_Frame(
-                src_mac=broker_mac,
-                dst_mac=sub_mac,
-                size_bytes=frame.size_bytes,
-                created_at_us=frame.created_at_us,   # preserve original timestamp for latency
-                mqtt_topic=frame.mqtt_topic,
-            ))
+            out_channel.enqueue(
+                _Frame(
+                    src_mac=broker_mac,
+                    dst_mac=sub_mac,
+                    size_bytes=frame.size_bytes,
+                    created_at_us=frame.created_at_us,  # preserve original timestamp for latency
+                    mqtt_topic=frame.mqtt_topic,
+                )
+            )
         # QoS 1 → PUBACK (4-byte MQTT header + Ethernet/IP/TCP = 58 bytes total)
         if frame.mqtt_qos >= 1:
-            out_channel.enqueue(_Frame(
-                src_mac=broker_mac,
-                dst_mac=frame.src_mac,
-                size_bytes=58,
-                created_at_us=env.now,
-            ))
+            out_channel.enqueue(
+                _Frame(
+                    src_mac=broker_mac,
+                    dst_mac=frame.src_mac,
+                    size_bytes=58,
+                    created_at_us=env.now,
+                )
+            )
 
 
 def _broker_queue_sampler(
@@ -385,6 +400,7 @@ def _utilization_sampler(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+
 def run_simulation(
     network: Network,
     duration_ms: float,
@@ -404,9 +420,7 @@ def run_simulation(
     rng = random.Random(42)
 
     # Every node gets an inbound store where delivered frames arrive
-    inbound: dict[str, simpy.Store] = {
-        name: simpy.Store(env) for name in network._nodes
-    }
+    inbound: dict[str, simpy.Store] = {name: simpy.Store(env) for name in network._nodes}
 
     adapter_counters: dict[str, _AdapterCounters] = {
         name: _AdapterCounters()
@@ -415,9 +429,7 @@ def run_simulation(
     }
 
     hub_collisions: dict[str, list[int]] = {
-        name: [0]
-        for name, node in network._nodes.items()
-        if isinstance(node, Hub)
+        name: [0] for name, node in network._nodes.items() if isinstance(node, Hub)
     }
 
     # Build directed link channels from topology
@@ -462,31 +474,53 @@ def run_simulation(
             ch = adapter_out.get(name)
             if ch:
                 for spec in node.traffic_specs:
-                    env.process(_traffic_gen(
-                        env, node.mac, spec.destination.mac,
-                        spec.rate, spec.size, spec.pattern, ch, rng,
-                        delay_us=spec.delay_ms * 1_000,
-                    ))
+                    env.process(
+                        _traffic_gen(
+                            env,
+                            node.mac,
+                            spec.destination.mac,
+                            spec.rate,
+                            spec.size,
+                            spec.pattern,
+                            ch,
+                            rng,
+                            delay_us=spec.delay_ms * 1_000,
+                        )
+                    )
                 for spec in node.mqtt_specs:
-                    env.process(_mqtt_traffic_gen(
-                        env, node.mac, spec.broker.mac,
-                        spec.topic, spec.rate_hz, spec.frame_size, spec.qos, ch,
-                        delay_us=spec.delay_ms * 1_000,
-                    ))
+                    env.process(
+                        _mqtt_traffic_gen(
+                            env,
+                            node.mac,
+                            spec.broker.mac,
+                            spec.topic,
+                            spec.rate_hz,
+                            spec.frame_size,
+                            spec.qos,
+                            ch,
+                            delay_us=spec.delay_ms * 1_000,
+                        )
+                    )
         elif isinstance(node, MQTTBroker):
             ch = adapter_out.get(name)
             if ch:
-                env.process(_mqtt_broker_forwarder(
-                    env, inbound[name], node.mac, node._routes, ch,
-                ))
+                env.process(
+                    _mqtt_broker_forwarder(
+                        env,
+                        inbound[name],
+                        node.mac,
+                        node._routes,
+                        ch,
+                    )
+                )
         elif isinstance(node, Switch):
-            env.process(_switch_forwarder(
-                env, inbound[name], out_channels[name], static_macs.get(name)
-            ))
+            env.process(
+                _switch_forwarder(env, inbound[name], out_channels[name], static_macs.get(name))
+            )
         elif isinstance(node, Hub):
-            env.process(_hub_broadcaster(
-                env, inbound[name], out_channels[name], hub_collisions[name]
-            ))
+            env.process(
+                _hub_broadcaster(env, inbound[name], out_channels[name], hub_collisions[name])
+            )
 
     # Start metric samplers
     # Reuse an externally supplied dict (live mode) or create a fresh one.
@@ -501,21 +535,17 @@ def run_simulation(
         samples = all_samples[key]
 
         if obs.metric == "throughput" and isinstance(target, Adapter):
-            env.process(_throughput_sampler(
-                env, adapter_counters[target.name], interval_us, samples
-            ))
+            env.process(
+                _throughput_sampler(env, adapter_counters[target.name], interval_us, samples)
+            )
         elif obs.metric == "latency" and isinstance(target, Adapter):
-            env.process(_latency_sampler(
-                env, adapter_counters[target.name], interval_us, samples
-            ))
+            env.process(_latency_sampler(env, adapter_counters[target.name], interval_us, samples))
         elif obs.metric == "queue_depth" and isinstance(target, Switch):
-            env.process(_queue_depth_sampler(
-                env, out_channels[target.name], interval_us, samples
-            ))
+            env.process(_queue_depth_sampler(env, out_channels[target.name], interval_us, samples))
         elif obs.metric == "collision_rate" and isinstance(target, Hub):
-            env.process(_collision_rate_sampler(
-                env, hub_collisions[target.name], interval_us, samples
-            ))
+            env.process(
+                _collision_rate_sampler(env, hub_collisions[target.name], interval_us, samples)
+            )
         elif obs.metric == "utilization":
             chs = in_channels.get(target.name, [])
             if chs:
@@ -531,7 +561,7 @@ def run_simulation(
 
     if _n_chunks > 1:
         chunk_us = duration_us / _n_chunks
-        sleep_s  = 8.0 / _n_chunks  # target ~8 s total wall time
+        sleep_s = 8.0 / _n_chunks  # target ~8 s total wall time
         for i in range(_n_chunks):
             if _sim_state is not None and _sim_state.get("stop", False):
                 break

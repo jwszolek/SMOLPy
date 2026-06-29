@@ -21,8 +21,8 @@ class TrafficSpec:
         delay_ms: float = 0.0,
     ) -> None:
         self.destination = destination
-        self.rate = rate        # frames/s
-        self.size = size        # bytes or "imix"
+        self.rate = rate  # frames/s
+        self.size = size  # bytes or "imix"
         self.pattern = pattern
         self.delay_ms = delay_ms
 
@@ -30,9 +30,9 @@ class TrafficSpec:
 class MQTTSpec:
     def __init__(
         self,
-        broker,           # MQTTBroker
+        broker,  # MQTTBroker
         topic: str,
-        rate_hz: float,   # messages per second
+        rate_hz: float,  # messages per second
         payload_bytes: int,
         qos: int,
         delay_ms: float = 0.0,
@@ -74,10 +74,10 @@ class Adapter(Node):
 
     def publishes(
         self,
-        to,                        # MQTTBroker
+        to,  # MQTTBroker
         topic: str,
-        rate: float = 1.0,         # messages / second
-        payload: int = 20,         # payload bytes
+        rate: float = 1.0,  # messages / second
+        payload: int = 20,  # payload bytes
         qos: int = 0,
         delay_ms: float = 0.0,
     ) -> None:

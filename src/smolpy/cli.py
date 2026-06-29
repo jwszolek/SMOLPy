@@ -12,14 +12,16 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 from rich.theme import Theme
 
-_THEME = Theme({
-    "banner.title": "bold cyan",
-    "banner.sub": "dim white",
-    "info": "bold white",
-    "success": "bold green",
-    "error": "bold red",
-    "dim": "dim white",
-})
+_THEME = Theme(
+    {
+        "banner.title": "bold cyan",
+        "banner.sub": "dim white",
+        "info": "bold white",
+        "success": "bold green",
+        "error": "bold red",
+        "dim": "dim white",
+    }
+)
 
 console = Console(theme=_THEME)
 
@@ -46,6 +48,7 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
     console.print()
 
     import os
+
     if text_mode:
         os.environ["SMOLPY_TEXT_MODE"] = "1"
 
@@ -68,21 +71,25 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
         except Exception:
             progress.stop()
             console.print()
-            console.print(Panel(
-                traceback.format_exc(),
-                title="[error]Error[/]",
-                border_style="red",
-                padding=(1, 2),
-            ))
+            console.print(
+                Panel(
+                    traceback.format_exc(),
+                    title="[error]Error[/]",
+                    border_style="red",
+                    padding=(1, 2),
+                )
+            )
             sys.exit(1)
 
     elapsed = time.perf_counter() - start
     console.print()
-    console.print(Panel(
-        f"[success]Finished in {elapsed:.2f}s[/]",
-        border_style="green",
-        padding=(0, 2),
-    ))
+    console.print(
+        Panel(
+            f"[success]Finished in {elapsed:.2f}s[/]",
+            border_style="green",
+            padding=(0, 2),
+        )
+    )
     console.print()
 
     if output:
@@ -100,22 +107,21 @@ def _cmd_demo() -> None:
     _print_banner()
     console.print("  [info]Demo[/]   3 clients → switch → server  (10 s, text mode)\n")
 
-    net    = Network("demo")
-    sw     = net.switch("core-sw", ports=8, mode="store-and-forward")
-    server = net.adapter("server",   ip="10.0.0.100")
+    net = Network("demo")
+    sw = net.switch("core-sw", ports=8, mode="store-and-forward")
+    server = net.adapter("server", ip="10.0.0.100")
     net.link(server, sw, speed=1_000, length=2)
 
     fps = int(100_000_000 / (1_518 * 8))
     for i in range(1, 4):
         c = net.adapter(f"client-{i}", ip=f"10.0.0.{i}")
         net.link(c, sw, speed=100, length=10)
-        c.sends(to=server, rate=fps, size=1_518, pattern="constant",
-                delay_ms=(i - 1) * 2_000)
+        c.sends(to=server, rate=fps, size=1_518, pattern="constant", delay_ms=(i - 1) * 2_000)
         net.observe("bytes_sent", on=c, every=500)
 
-    net.observe("throughput",     on=server, every=200)
-    net.observe("latency",        on=server, every=200)
-    net.observe("queue_depth",    on=sw,     every=200)
+    net.observe("throughput", on=server, every=200)
+    net.observe("latency", on=server, every=200)
+    net.observe("queue_depth", on=sw, every=200)
     net.observe("bytes_received", on=server, every=500)
 
     result = net.simulate(duration=10_000, text=True)
@@ -136,13 +142,15 @@ def main() -> None:
     )
     run_cmd.add_argument("script", help="Path to the .py script to run")
     run_cmd.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default=None,
         metavar="FILE",
         help="Write metric time-series to FILE (.csv or .json)",
     )
     run_cmd.add_argument(
-        "--text", "-t",
+        "--text",
+        "-t",
         action="store_true",
         default=False,
         help="Force text-mode dashboard even if the script uses live=True",

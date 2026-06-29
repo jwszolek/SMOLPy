@@ -7,8 +7,15 @@ if TYPE_CHECKING:
     from smolpy.dsl.node import Node
 
 MetricName = Literal[
-    "throughput", "latency", "frame_loss", "collision_rate",
-    "queue_depth", "utilization", "bytes_sent", "bytes_received", "broker_queue",
+    "throughput",
+    "latency",
+    "frame_loss",
+    "collision_rate",
+    "queue_depth",
+    "utilization",
+    "bytes_sent",
+    "bytes_received",
+    "broker_queue",
 ]
 
 
