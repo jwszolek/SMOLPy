@@ -1,5 +1,10 @@
 # SMOLPy
 
+[![CI](https://github.com/jwszolek/SMOLPy/actions/workflows/ci.yml/badge.svg)](https://github.com/jwszolek/SMOLPy/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/smolpy)](https://pypi.org/project/smolpy/)
+[![Python](https://img.shields.io/pypi/pyversions/smolpy)](https://pypi.org/project/smolpy/)
+[![License](https://img.shields.io/github/license/jwszolek/SMOLPy)](LICENSE)
+
 Python rewrite of SMOL — a Network Description Language and Discrete-Event Simulator for industrial Measurement-Diagnostics-Control (MDC) networks.
 
 SMOLPy lets you describe a network topology in pure Python, define traffic flows, and run a discrete-event simulation (powered by SimPy) that produces real metric time-series.  A built-in Dear PyGui desktop dashboard shows the topology and live metric charts as the simulation runs.
