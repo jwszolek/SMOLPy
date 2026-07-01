@@ -3,7 +3,14 @@ name = "smolpy"
 dynamic = ["version"]
 description = "Network simulation DSL and discrete-event simulator"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.11"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
 dependencies = [
     "simpy>=4.1",
     "networkx>=3.3",
