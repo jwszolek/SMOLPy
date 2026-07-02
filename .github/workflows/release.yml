@@ -15,18 +15,19 @@ on:
 
 permissions:
   contents: write  # needed to push the new tag
-  id-token: write  # needed for OIDC trusted publishing to PyPI
 
 jobs:
-  release:
-    name: Bump version, tag, build, publish
+  tag:
+    name: Bump version and tag
     runs-on: ubuntu-latest
-    environment: pypi
+
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # full history so git describe finds tags
+          fetch-depth: 0
 
       - name: Compute next version
         id: version
@@ -53,15 +54,9 @@ jobs:
           git tag "${{ steps.version.outputs.tag }}"
           git push origin "${{ steps.version.outputs.tag }}"
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-        with:
-          version: "latest"
-
-      - name: Build package
-        run: uv build
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist/
+  publish:
+    name: Publish to PyPI
+    needs: tag
+    uses: ./.github/workflows/publish.yml
+    permissions:
+      id-token: write
