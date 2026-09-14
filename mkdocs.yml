@@ -1,0 +1,47 @@
+site_name: SMOLPy
+site_description: Network simulation DSL and discrete-event simulator
+site_url: https://jwszolek.github.io/SMOLPy/
+repo_url: https://github.com/jwszolek/SMOLPy
+repo_name: jwszolek/SMOLPy
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - DSL Reference: dsl-reference.md
+  - MQTT: mqtt.md
+  - Modbus TCP: modbus.md
+  - Simulation Engine: simulation-engine.md
+  - Dashboard: dashboard.md
+  - Examples: examples.md
+  - Architecture Decision Records:
+      - ADR-0001 Protocol Package Structure: adr/0001-protocol-package-structure.md
+      - ADR-0002 Modbus TCP Implementation: adr/0002-modbus-tcp-implementation.md
+      - ADR-0003 SMOL External DSL: adr/0003-smol-external-dsl.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.highlight
+  - pymdownx.superfences
