@@ -4,6 +4,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/smolpy)](https://pypi.org/project/smolpy/)
 [![Python](https://img.shields.io/pypi/pyversions/smolpy)](https://pypi.org/project/smolpy/)
 [![License](https://img.shields.io/github/license/jwszolek/SMOLPy)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-mkdocs--material-blue)](https://jwszolek.github.io/SMOLPy/)
 
 Python rewrite of SMOL — a Network Description Language and Discrete-Event Simulator for industrial Measurement-Diagnostics-Control (MDC) networks.
 
