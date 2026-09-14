@@ -105,6 +105,7 @@ adapter = net.adapter("name", ip="10.0.0.1")          # NIC / host / server
 switch  = net.switch("name",  ports=16, mode="store-and-forward")
 hub     = net.hub("name",     ports=8)
 broker  = net.mqtt_broker("name", ip="10.0.2.1")       # MQTT message broker
+slave   = net.modbus_slave("name", ip="10.0.0.10", unit_id=1)  # Modbus TCP slave
 net.link(a, b, speed=1_000, length=10)                 # Mb/s and metres
 ```
 
@@ -131,6 +132,10 @@ sensor.publishes(to=broker, topic="plant/temp", rate=1.0, payload=20, qos=0, del
 
 # Broker topic routing — must be called before simulate()
 broker.routes("plant/temp", to=[server])
+
+# Modbus TCP poll (master → slave, Read Holding Registers)
+plc.polls(slave, register=40001, count=10, rate=1.0)
+plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
 ```
 
 | Parameter | Type | Description |
@@ -151,6 +156,16 @@ broker.routes("plant/temp", to=[server])
 | `payload` | int | Payload bytes (default 20) |
 | `qos` | int | 0 = fire-and-forget, 1 = PUBACK acknowledgement |
 | `delay_ms` | float | Simulation time before publishing starts (default 0) |
+
+**`polls()` parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `slave` | ModbusSlave | Target slave to poll |
+| `register` | int | Starting holding-register address |
+| `count` | int | Number of registers to read |
+| `rate` | float | Polls per second (default 1.0) |
+| `delay_ms` | float | Simulation time before polling starts (default 0) |
 
 **Traffic patterns**
 
@@ -184,6 +199,7 @@ net.observe(metric, on=node, every=interval_ms)
 | `utilization` | % | Any node |
 | `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
+| `modbus_latency` | µs | Adapter (master) |
 
 ### Simulation
 
@@ -236,6 +252,30 @@ A typical small sensor message (`topic="plant/temperature"`, `payload=20`, `qos=
 
 ---
 
+## Modbus TCP master/slave polling
+
+SMOLPy also models Modbus TCP — a request/response protocol, unlike MQTT's fire-and-forget publish/subscribe. Because Modbus TCP already wraps its PDU in a standard Ethernet/IP/TCP frame (no serial bus, no gateway required), a `ModbusSlave` is a first-class network node wired into the same switch fabric as any `Adapter`.
+
+### What is modelled
+
+- **The master** is a regular `Adapter` — it calls `polls()` to periodically send Read Holding Registers (FC 03) requests toward a `ModbusSlave`.
+- **Each slave** is addressed by its own `unit_id` (1–247); it replies only to requests matching its `unit_id` and ignores everything else. Multiple sensors can share one switch, each polled independently by the same master.
+- **Every poll is a request/response round trip** — both frames traverse the network and contend for bandwidth, unlike MQTT where only the publisher-to-broker leg carries the payload.
+- **`modbus_latency`** measures poll round-trip time (RTT): the time from when the master sends a request to when the matching response arrives back. This is the key metric for judging whether a polling interval is achievable on a given network.
+
+### Frame size formula
+
+```
+request_size  = 65 bytes                                  (constant — Ethernet/IP/TCP + MBAP + FC + address + quantity)
+response_size = 62 + 2 × register_count bytes              (grows with the number of registers read)
+```
+
+### Dashboard
+
+`ModbusSlave` nodes appear as **coral red** circles in the topology panel.
+
+---
+
 ## Simulation engine
 
 - **MAC-learning switch** — each switch pre-seeds its forwarding table from the topology wiring, eliminating spurious flooding toward silent endpoints (e.g. a server that only receives).  Dynamic learning still operates for traffic through intermediate switches.
@@ -248,7 +288,7 @@ A typical small sensor message (`topic="plant/temperature"`, `payload=20`, `qos=
 
 ## Examples
 
-See [`examples/README.md`](examples/README.md) for eight ready-to-run scenarios covering single-switch saturation, oversubscription, two-tier access bottlenecks, and MQTT publish-subscribe.
+See [`examples/README.md`](examples/README.md) for nine ready-to-run scenarios covering single-switch saturation, oversubscription, two-tier access bottlenecks, MQTT publish-subscribe, and Modbus TCP polling.
 
 ```bash
 uv run smolpy run examples/example.py

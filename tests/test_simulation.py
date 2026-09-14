@@ -7,7 +7,7 @@ import pathlib
 
 import pytest
 
-from smolpy import Network, MQTTBroker
+from smolpy import ModbusSlave, MQTTBroker, Network
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +182,101 @@ class TestMQTT:
         assert spec.qos == 0
         # frame_size = 54 (Ethernet+IP+TCP) + 2+2+3 (MQTT hdr + topic "t/1") + 32 payload = 93
         assert spec.frame_size == 54 + 2 + 2 + len("t/1") + 32
+
+
+# ---------------------------------------------------------------------------
+# Modbus TCP
+# ---------------------------------------------------------------------------
+
+class TestModbus:
+    def _modbus_net(self, duration_ms: float = 10_000):
+        net = Network("modbus-test")
+        sw = net.switch("sw", ports=6)
+        plc = net.adapter("plc", ip="10.0.0.1")
+        sensor = net.modbus_slave("sensor", ip="10.0.0.10", unit_id=1)
+        net.link(plc, sw, speed=100, length=5)
+        net.link(sensor, sw, speed=100, length=10)
+        plc.polls(sensor, register=40001, count=10, rate=1.0)
+        net.observe("modbus_latency", on=plc, every=500)
+        result = net.simulate(duration=duration_ms)
+        return result, plc, sensor
+
+    def test_modbus_slave_is_modbusslave_type(self):
+        net = Network("t")
+        s = net.modbus_slave("s", ip="10.0.0.10", unit_id=1)
+        assert isinstance(s, ModbusSlave)
+
+    def test_polls_adds_spec(self):
+        net = Network("t")
+        plc = net.adapter("plc", ip="10.0.0.1")
+        sensor = net.modbus_slave("sensor", ip="10.0.0.10", unit_id=1)
+        plc.polls(sensor, register=40001, count=10, rate=2.0)
+        assert len(plc.modbus_specs) == 1
+        spec = plc.modbus_specs[0]
+        assert spec.rate_hz == 2.0
+        # Request frame is constant regardless of register count.
+        assert spec.request_frame_size == 65
+        # Response frame grows with register count: 62 B overhead + 2 B/register.
+        assert spec.response_frame_size == 62 + 2 * 10
+
+    def test_modbus_latency_samples_produced(self):
+        result, *_ = self._modbus_net()
+        samples = result.metrics.get("modbus_latency:plc", [])
+        assert len(samples) > 5
+
+    def test_modbus_latency_is_positive(self):
+        result, *_ = self._modbus_net()
+        vals = [v for _, v in result.metrics["modbus_latency:plc"] if v > 0]
+        assert vals, "no positive Modbus RTT samples"
+        assert all(v > 0 for v in vals)
+
+    def _mixed_net(self, *, with_bulk_traffic: bool, duration_ms: float = 8_000):
+        """A PLC sharing one 10 Mbps uplink for Modbus polling and (optionally)
+        bulk Ethernet traffic to a separate server — same switch fabric."""
+        net = Network("mixed-eth-modbus")
+        sw = net.switch("sw", ports=6)
+        plc = net.adapter("plc", ip="10.0.0.1")
+        sensor = net.modbus_slave("sensor", ip="10.0.0.10", unit_id=1)
+        net.link(plc, sw, speed=10, length=5)  # slow shared uplink
+        net.link(sensor, sw, speed=100, length=10)
+        plc.polls(sensor, register=40001, count=10, rate=2.0)
+        if with_bulk_traffic:
+            bulk_server = net.adapter("bulk-server", ip="10.0.0.20")
+            net.link(bulk_server, sw, speed=100, length=5)
+            # ~9.7 Mbps on the PLC's 10 Mbps uplink — near saturation. Poisson
+            # (not constant) spacing avoids a coincidental lock-step alignment
+            # with the poll interval that would let every poll dodge the queue.
+            plc.sends(to=bulk_server, rate=800, size=1_518, pattern="poisson")
+            net.observe("throughput", on=bulk_server, every=200)
+        net.observe("modbus_latency", on=plc, every=200)
+        return net.simulate(duration=duration_ms)
+
+    def test_modbus_coexists_with_ethernet_traffic(self):
+        """Modbus polling and bulk Ethernet traffic on the same uplink both
+        produce metrics — no gateway/converter node is needed since Modbus
+        TCP already rides on Ethernet."""
+        result = self._mixed_net(with_bulk_traffic=True)
+        modbus_samples = result.metrics.get("modbus_latency:plc", [])
+        bulk_samples = [v for _, v in result.metrics.get("throughput:bulk-server", []) if v > 0]
+        assert modbus_samples, "Modbus polling produced no RTT samples"
+        assert bulk_samples, "bulk Ethernet traffic produced no throughput samples"
+
+    def test_modbus_latency_increases_under_ethernet_congestion(self):
+        """Modbus responses queue behind bulk Ethernet frames on a shared,
+        near-saturated uplink, so average RTT should rise noticeably."""
+        baseline = self._mixed_net(with_bulk_traffic=False)
+        congested = self._mixed_net(with_bulk_traffic=True)
+
+        base_vals = [v for _, v in baseline.metrics["modbus_latency:plc"] if v > 0]
+        cong_vals = [v for _, v in congested.metrics["modbus_latency:plc"] if v > 0]
+        assert base_vals and cong_vals
+
+        base_avg = sum(base_vals) / len(base_vals)
+        cong_avg = sum(cong_vals) / len(cong_vals)
+        assert cong_avg > base_avg, (
+            f"expected congestion to raise Modbus RTT, got baseline={base_avg:.1f}us "
+            f"congested={cong_avg:.1f}us"
+        )
 
 
 # ---------------------------------------------------------------------------

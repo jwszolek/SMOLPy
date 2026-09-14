@@ -1,6 +1,6 @@
 # SMOLPy Examples
 
-Eight ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, and MQTT publish-subscribe.  Every example opens a live desktop dashboard as the simulation runs.
+Nine ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, and Modbus TCP polling.  Every example opens a live desktop dashboard as the simulation runs.
 
 ## Prerequisites
 
@@ -265,6 +265,37 @@ uv run smolpy run examples/example_mqtt.py
 
 ---
 
+### 9. `example_modbus.py` — PLC polling 3 field sensors via Modbus TCP
+
+A PLC polls three `ModbusSlave` sensors (temperature, pressure, flow), each on its own `unit_id`, while also pushing periodic bursty traffic to a historian server over the same uplink — showing Modbus and regular Ethernet traffic sharing one network.
+
+```
+[temp-sensor]      ── 100 Mbps / 10 m ──┐
+[pressure-sensor]  ── 100 Mbps / 10 m ──┼── [sw] ── 1 Gbps / 2 m ── [historian]
+[flow-sensor]      ── 100 Mbps / 10 m ──┤
+[plc]              ── 100 Mbps / 5 m ───┘
+```
+
+| Poll | Registers | Rate |
+|---|---|---|
+| temperature | 2 @ 40001 | 1 Hz |
+| pressure | 2 @ 40010 | 1 Hz |
+| flow | 4 @ 40020 | 0.5 Hz |
+
+Simulation: **30 s**
+
+| Metric | Expected behaviour |
+|---|---|
+| `modbus_latency:plc` | Low and stable (~20–30 µs) — 100 Mbps links have plenty of headroom for three low-rate pollers |
+| `queue_depth:sw` | Near zero — no link is close to saturation |
+| `throughput:historian` | Bursty, averaging well under 1 Mb/s |
+
+```bash
+uv run smolpy run examples/example_modbus.py
+```
+
+---
+
 ## DSL quick reference
 
 ```python
@@ -275,6 +306,7 @@ host   = net.adapter("host",   ip="10.0.0.1")
 server = net.adapter("server", ip="10.0.0.2")
 sw     = net.switch("sw1", ports=8, mode="store-and-forward")
 broker = net.mqtt_broker("broker", ip="10.0.2.1")   # MQTT broker
+slave  = net.modbus_slave("field-sensor", ip="10.0.0.10", unit_id=1)  # Modbus TCP slave
 
 net.link(host,   sw, speed=1_000,  length=10)  # speed in Mb/s, length in metres
 net.link(server, sw, speed=10_000, length=2)
@@ -288,6 +320,12 @@ net.link(sensor, sw, speed=100, length=10)
 net.link(sw, broker, speed=1_000, length=2)
 broker.routes("plant/temp", to=[server])
 sensor.publishes(to=broker, topic="plant/temp", rate=1.0, payload=20, qos=1)
+
+# Modbus TCP traffic
+plc = net.adapter("plc", ip="10.0.0.1")
+net.link(plc,   sw, speed=100, length=5)
+net.link(slave, sw, speed=100, length=10)
+plc.polls(slave, register=40001, count=10, rate=1.0)
 
 # Observations — what to measure and how often (interval in ms)
 net.observe("throughput",     on=server, every=100)
@@ -324,6 +362,7 @@ net.link(edge_sw, core_sw, speed=1_000, length=5)   # inter-switch uplink
 | `utilization` | % | Any node |
 | `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
+| `modbus_latency` | µs | Adapter (master) |
 
 ### Traffic patterns
 
