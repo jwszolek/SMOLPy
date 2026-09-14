@@ -8,6 +8,7 @@ from smolpy.core.node import Node
 from smolpy.core.observation import MetricName, Observation
 from smolpy.ethernet.hub import Hub
 from smolpy.ethernet.switch import Switch, SwitchMode
+from smolpy.modbus.slave import ModbusSlave
 from smolpy.mqtt.broker import MQTTBroker
 
 
@@ -118,6 +119,11 @@ class Network:
 
     def mqtt_broker(self, name: str, ip: str, mac: str | None = None) -> MQTTBroker:
         node = MQTTBroker(name, ip=ip, mac=mac)
+        self._register(node)
+        return node
+
+    def modbus_slave(self, name: str, ip: str, unit_id: int, mac: str | None = None) -> ModbusSlave:
+        node = ModbusSlave(name, ip=ip, unit_id=unit_id, mac=mac)
         self._register(node)
         return node
 

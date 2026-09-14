@@ -33,6 +33,9 @@ class _Frame:
     in_port: int = field(default=-1)  # port index at the receiving switch/hub
     mqtt_topic: str | None = field(default=None)
     mqtt_qos: int = field(default=0)
+    modbus_unit_id: int | None = field(default=None)
+    modbus_register_count: int = field(default=0)
+    modbus_is_response: bool = field(default=False)
 
 
 def _resolve_size(size: int | str, rng: random.Random) -> int:
@@ -57,11 +60,14 @@ class _AdapterCounters:
         self.bytes_received: int = 0
         self.frames_received: int = 0
         self.latency_us: list[float] = []
+        self.modbus_rtt_us: list[float] = []
 
     def record(self, frame: _Frame, now: float) -> None:
         self.bytes_received += frame.size_bytes
         self.frames_received += 1
         self.latency_us.append(now - frame.created_at_us)
+        if frame.modbus_is_response:
+            self.modbus_rtt_us.append(now - frame.created_at_us)
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +118,9 @@ class _LinkChannel:
                 in_port=self.in_port,
                 mqtt_topic=frame.mqtt_topic,
                 mqtt_qos=frame.mqtt_qos,
+                modbus_unit_id=frame.modbus_unit_id,
+                modbus_register_count=frame.modbus_register_count,
+                modbus_is_response=frame.modbus_is_response,
             )
             self.dst_store.put(delivered)
 
@@ -212,6 +221,61 @@ def _mqtt_traffic_gen(
                 created_at_us=env.now,
                 mqtt_topic=topic,
                 mqtt_qos=qos,
+            )
+        )
+
+
+def _modbus_poll_gen(
+    env: simpy.Environment,
+    src_mac: str,
+    dst_mac: str,
+    unit_id: int,
+    register_count: int,
+    frame_size: int,
+    rate_hz: float,
+    channel: _LinkChannel,
+    delay_us: float = 0.0,
+) -> Generator:
+    """Periodic Modbus TCP poll request (Read Holding Registers, FC 03)."""
+    if delay_us > 0.0:
+        yield env.timeout(delay_us)
+    interval_us = 1_000_000.0 / rate_hz
+    while True:
+        yield env.timeout(interval_us)
+        channel.enqueue(
+            _Frame(
+                src_mac=src_mac,
+                dst_mac=dst_mac,
+                size_bytes=frame_size,
+                created_at_us=env.now,
+                modbus_unit_id=unit_id,
+                modbus_register_count=register_count,
+            )
+        )
+
+
+def _modbus_slave_responder(
+    env: simpy.Environment,
+    inbound: simpy.Store,
+    slave_mac: str,
+    unit_id: int,
+    out_channel: _LinkChannel,  # slave's outbound channel toward the master
+) -> Generator:
+    """Modbus slave: replies to Read Holding Registers requests addressed to unit_id."""
+    while True:
+        frame: _Frame = yield inbound.get()
+        if frame.modbus_unit_id != unit_id:
+            continue  # not a Modbus frame, or addressed to a different slave
+        response_size = 62 + 2 * frame.modbus_register_count
+        out_channel.enqueue(
+            _Frame(
+                src_mac=slave_mac,
+                dst_mac=frame.src_mac,
+                size_bytes=response_size,
+                created_at_us=frame.created_at_us,  # preserve original timestamp for RTT
+                modbus_unit_id=unit_id,
+                modbus_register_count=frame.modbus_register_count,
+                modbus_is_response=True,
             )
         )
 
@@ -352,6 +416,22 @@ def _latency_sampler(
             samples.append((env.now / 1_000, avg))
 
 
+def _modbus_latency_sampler(
+    env: simpy.Environment,
+    counters: _AdapterCounters,
+    interval_us: float,
+    samples: Samples,
+) -> Generator:
+    last_idx = 0
+    while True:
+        yield env.timeout(interval_us)
+        window = counters.modbus_rtt_us[last_idx:]
+        last_idx = len(counters.modbus_rtt_us)
+        if window:
+            avg = sum(window) / len(window)
+            samples.append((env.now / 1_000, avg))
+
+
 def _queue_depth_sampler(
     env: simpy.Environment,
     out_channels: dict[int, _LinkChannel],
@@ -413,6 +493,7 @@ def run_simulation(
     from smolpy.core.network import SimulationResult
     from smolpy.ethernet.hub import Hub
     from smolpy.ethernet.switch import Switch
+    from smolpy.modbus.slave import ModbusSlave
     from smolpy.mqtt.broker import MQTTBroker
 
     env = simpy.Environment()
@@ -458,11 +539,11 @@ def run_simulation(
         in_channels[b.name].append(ch_ab)
         in_channels[a.name].append(ch_ba)
 
-        if isinstance(a, (Adapter, MQTTBroker)):
+        if isinstance(a, (Adapter, MQTTBroker, ModbusSlave)):
             adapter_out[a.name] = ch_ab
             if isinstance(b, Switch):
                 static_macs[b.name][a.mac] = port_b
-        if isinstance(b, (Adapter, MQTTBroker)):
+        if isinstance(b, (Adapter, MQTTBroker, ModbusSlave)):
             adapter_out[b.name] = ch_ba
             if isinstance(a, Switch):
                 static_macs[a.name][b.mac] = port_a
@@ -501,6 +582,20 @@ def run_simulation(
                             delay_us=spec.delay_ms * 1_000,
                         )
                     )
+                for spec in node.modbus_specs:
+                    env.process(
+                        _modbus_poll_gen(
+                            env,
+                            node.mac,
+                            spec.slave.mac,
+                            spec.slave.unit_id,
+                            spec.count,
+                            spec.request_frame_size,
+                            spec.rate_hz,
+                            ch,
+                            delay_us=spec.delay_ms * 1_000,
+                        )
+                    )
         elif isinstance(node, MQTTBroker):
             ch = adapter_out.get(name)
             if ch:
@@ -513,6 +608,10 @@ def run_simulation(
                         ch,
                     )
                 )
+        elif isinstance(node, ModbusSlave):
+            ch = adapter_out.get(name)
+            if ch:
+                env.process(_modbus_slave_responder(env, inbound[name], node.mac, node.unit_id, ch))
         elif isinstance(node, Switch):
             env.process(
                 _switch_forwarder(env, inbound[name], out_channels[name], static_macs.get(name))
@@ -558,6 +657,10 @@ def run_simulation(
                 env.process(_bytes_tx_sampler(env, ch, interval_us, samples))
         elif obs.metric == "broker_queue" and isinstance(target, MQTTBroker):
             env.process(_broker_queue_sampler(env, inbound[target.name], interval_us, samples))
+        elif obs.metric == "modbus_latency" and isinstance(target, Adapter):
+            env.process(
+                _modbus_latency_sampler(env, adapter_counters[target.name], interval_us, samples)
+            )
 
     if _n_chunks > 1:
         chunk_us = duration_us / _n_chunks
