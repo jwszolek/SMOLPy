@@ -10,6 +10,8 @@ Python rewrite of SMOL — a Network Description Language and Discrete-Event Sim
 
 SMOLPy lets you describe a network topology in pure Python, define traffic flows, and run a discrete-event simulation (powered by SimPy) that produces real metric time-series.  A built-in Dear PyGui desktop dashboard shows the topology and live metric charts as the simulation runs.
 
+📖 **Full documentation:** [jwszolek.github.io/SMOLPy](https://jwszolek.github.io/SMOLPy/)
+
 ---
 
 ## Install
