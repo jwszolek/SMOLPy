@@ -71,6 +71,12 @@ Simulation: **10 s**
 uv run smolpy run examples/example.py
 ```
 
+Also available as a standalone `.smol` file — no Python required, same topology, same metrics: [`example.smol`](example.smol). See the [SMOL Language Reference](https://jwszolek.github.io/SMOLPy/language-reference/) for the full syntax.
+
+```bash
+uv run smolpy run examples/example.smol
+```
+
 ---
 
 ### 2. `example_file_transfer.py` — File transfer with background traffic

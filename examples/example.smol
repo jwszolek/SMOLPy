@@ -1,0 +1,23 @@
+# SMOL translation of example.py — see docs/language-reference.md for the full syntax spec.
+
+network "office-net" {
+
+    adapter host-A ip=10.0.0.1
+    adapter host-B ip=10.0.0.2
+    adapter server ip=10.0.0.10
+    switch  sw1    ports=8 mode=store-and-forward
+
+    link host-A -- sw1 speed=1000   length=5
+    link host-B -- sw1 speed=1000   length=10
+    link server -- sw1 speed=10000  length=2
+
+    flow host-A -> server rate=500 size=512  pattern=constant
+    flow host-B -> server rate=200 size=imix pattern=poisson
+
+    observe throughput  on server every=100
+    observe latency     on server every=100
+    observe queue_depth on sw1    every=10
+    observe utilization on server every=100
+
+    simulate duration=10000 mode=live
+}

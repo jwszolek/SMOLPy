@@ -30,6 +30,8 @@ Simulation: **10 s**
 | `latency:server` | Low and stable — switch is not congested |
 | `queue_depth:sw1` | Near zero — 10 Gbps server link has plenty of headroom |
 
+Also available as a standalone [`.smol` file](https://github.com/jwszolek/SMOLPy/blob/main/examples/example.smol) — same topology, no Python required (`uv run smolpy run examples/example.smol`). See the [SMOL Language Reference](language-reference.md).
+
 ## 2. File transfer with background traffic — [`example_file_transfer.py`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_file_transfer.py)
 
 A client saturates its 100 Mbps uplink pushing a large file to the server while a background host adds light web traffic.
