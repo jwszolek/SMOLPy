@@ -47,6 +47,7 @@ smolpy demo          # built-in 3-client scenario, text mode, no script needed
 ## Where to go next
 
 - **[DSL Reference](dsl-reference.md)** — topology builders, traffic generators, observations, and simulation control
+- **[SMOL Language Reference](language-reference.md)** — describe a network in a standalone `.smol` file, no Python required
 - **[MQTT](mqtt.md)** — publish/subscribe messaging model
 - **[Modbus TCP](modbus.md)** — master/slave polling model
 - **[Simulation Engine](simulation-engine.md)** — how the discrete-event model works under the hood

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import pathlib
 import runpy
 import sys
 import time
@@ -26,12 +27,12 @@ _THEME = Theme(
 console = Console(theme=_THEME)
 
 _BANNER = Text.assemble(
-    ("██████╗ ██╗   ██╗███████╗███╗   ███╗ ██████╗ ██╗\n", "bold cyan"),
-    ("██╔══██╗╚██╗ ██╔╝██╔════╝████╗ ████║██╔═══██╗██║\n", "bold cyan"),
-    ("██████╔╝ ╚████╔╝ ███████╗██╔████╔██║██║   ██║██║\n", "bold cyan"),
-    ("██╔═══╝   ╚██╔╝  ╚════██║██║╚██╔╝██║██║   ██║██║\n", "bold cyan"),
-    ("██║        ██║   ███████║██║ ╚═╝ ██║╚██████╔╝███████╗\n", "bold cyan"),
-    ("╚═╝        ╚═╝   ╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚══════╝\n", "bold cyan"),
+    ("███████╗███╗   ███╗ ██████╗ ██╗     ██████╗ ██╗   ██╗\n", "bold cyan"),
+    ("██╔════╝████╗ ████║██╔═══██╗██║     ██╔══██╗╚██╗ ██╔╝\n", "bold cyan"),
+    ("███████╗██╔████╔██║██║   ██║██║     ██████╔╝ ╚████╔╝ \n", "bold cyan"),
+    ("╚════██║██║╚██╔╝██║██║   ██║██║     ██╔═══╝   ╚██╔╝  \n", "bold cyan"),
+    ("███████║██║ ╚═╝ ██║╚██████╔╝███████╗██║        ██║   \n", "bold cyan"),
+    ("╚══════╝╚═╝     ╚═╝ ╚═════╝ ╚══════╝╚═╝        ╚═╝   \n", "bold cyan"),
     ("  Network Description Language & Discrete-Event Simulator", "dim white"),
 )
 
@@ -52,8 +53,10 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
     if text_mode:
         os.environ["SMOLPY_TEXT_MODE"] = "1"
 
+    is_smol = pathlib.Path(script).suffix == ".smol"
+
     start = time.perf_counter()
-    namespace: dict = {}
+    result = None
 
     with Progress(
         SpinnerColumn(spinner_name="dots", style="cyan"),
@@ -65,8 +68,27 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
         task = progress.add_task("Running simulation…", total=None)
 
         try:
-            sys.argv = [script] + extra_args
-            namespace = runpy.run_path(script, run_name="__main__")
+            if is_smol:
+                from smolpy.lang import SMOLSemanticError, SMOLSyntaxError, interpret_and_run
+
+                try:
+                    result = interpret_and_run(pathlib.Path(script))
+                except (SMOLSyntaxError, SMOLSemanticError) as exc:
+                    progress.stop()
+                    console.print()
+                    console.print(
+                        Panel(
+                            str(exc),
+                            title="[error]Error[/]",
+                            border_style="red",
+                            padding=(1, 2),
+                        )
+                    )
+                    sys.exit(1)
+            else:
+                sys.argv = [script] + extra_args
+                namespace = runpy.run_path(script, run_name="__main__")
+                result = namespace.get("result")
             progress.update(task, description="Simulation complete")
         except Exception:
             progress.stop()
@@ -92,12 +114,10 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
     )
     console.print()
 
-    if output:
-        result = namespace.get("result")
-        if result is not None:
-            result.export(output)
-            console.print(f"  Results exported → {output}")
-            console.print()
+    if output and result is not None:
+        result.export(output)
+        console.print(f"  Results exported → {output}")
+        console.print()
 
 
 def _cmd_demo() -> None:
@@ -138,9 +158,9 @@ def main() -> None:
     run_cmd = sub.add_parser(
         "run",
         help="Execute a SMOLPy simulation script",
-        description="Load and run a Python script that uses the SMOLPy DSL.",
+        description="Load and run a Python script or .smol file that uses the SMOLPy DSL.",
     )
-    run_cmd.add_argument("script", help="Path to the .py script to run")
+    run_cmd.add_argument("script", help="Path to the .py script or .smol file to run")
     run_cmd.add_argument(
         "--output",
         "-o",

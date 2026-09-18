@@ -230,6 +230,36 @@ smolpy demo          # built-in 3-client scenario, text mode, no script needed
 
 ---
 
+## SMOL external DSL
+
+Network topologies can also be described in a standalone `.smol` file — no Python required. `smolpy run` executes `.smol` files directly, using the same simulation engine underneath.
+
+```
+network "office-net" {
+    adapter host-A ip=10.0.0.1
+    adapter server ip=10.0.0.10
+    switch  sw1    ports=8 mode=store-and-forward
+
+    link host-A -- sw1 speed=1000  length=5
+    link server -- sw1 speed=10000 length=2
+
+    flow host-A -> server rate=8000 size=1518 pattern=constant
+
+    observe throughput  on server every=100
+    observe queue_depth on sw1    every=50
+
+    simulate duration=30000 mode=text
+}
+```
+
+```bash
+uv run smolpy run topology.smol
+```
+
+Malformed or semantically invalid `.smol` files (undeclared node references, wrong node type for a statement, an unsupported metric, ...) produce a clean `file:line: message` error — no Python traceback. See the [SMOL Language Reference](https://jwszolek.github.io/SMOLPy/language-reference/) for the complete syntax.
+
+---
+
 ## MQTT publish-subscribe
 
 SMOLPy models application-layer MQTT traffic on top of the standard Ethernet/IP/TCP wire model.

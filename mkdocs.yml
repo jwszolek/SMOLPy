@@ -30,6 +30,7 @@ theme:
 nav:
   - Home: index.md
   - DSL Reference: dsl-reference.md
+  - SMOL Language Reference: language-reference.md
   - MQTT: mqtt.md
   - Modbus TCP: modbus.md
   - Simulation Engine: simulation-engine.md

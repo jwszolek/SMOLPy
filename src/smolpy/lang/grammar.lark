@@ -1,0 +1,43 @@
+// SMOL external DSL grammar — see docs/language-reference.md for the full spec.
+// Arrows/connectors ("->", "--") and commas must be surrounded by whitespace.
+
+start: "network" STRING "{" statement* "}"
+
+statement: adapter_decl
+         | switch_decl
+         | hub_decl
+         | mqtt_broker_decl
+         | modbus_slave_decl
+         | link_decl
+         | flow_decl
+         | publish_decl
+         | route_decl
+         | poll_decl
+         | observe_decl
+         | simulate_decl
+
+adapter_decl:      "adapter" WORD arg*
+switch_decl:       "switch" WORD arg*
+hub_decl:          "hub" WORD arg*
+mqtt_broker_decl:  "mqtt_broker" WORD arg*
+modbus_slave_decl: "modbus_slave" WORD arg*
+link_decl:         "link" WORD "--" WORD arg*
+flow_decl:         "flow" WORD "->" WORD arg*
+publish_decl:      "publish" WORD "->" WORD arg*
+route_decl:        "route" WORD arg+ "->" node_list
+poll_decl:         "poll" WORD "->" WORD arg*
+observe_decl:      "observe" WORD "on" WORD arg*
+simulate_decl:     "simulate" arg*
+
+arg: WORD "=" value
+value: STRING | WORD | node_list
+node_list: "[" WORD ("," WORD)* "]"
+
+WORD: /[a-zA-Z0-9][a-zA-Z0-9_.:-]*/
+
+%import common.ESCAPED_STRING -> STRING
+%import common.WS
+%ignore WS
+
+COMMENT: /#[^\n]*/
+%ignore COMMENT

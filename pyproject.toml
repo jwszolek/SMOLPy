@@ -18,6 +18,7 @@ dependencies = [
     "dash>=2.17",
     "rich>=13",
     "dearpygui>=1.6",
+    "lark>=1.2",
 ]
 
 [project.scripts]
