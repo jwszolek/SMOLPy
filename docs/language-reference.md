@@ -121,10 +121,12 @@ Observing a metric on the wrong node type (or a metric that doesn't exist) is a 
 ### `simulate` — run the simulation
 
 ```
-simulate duration=<ms> [mode=headless|text|live]
+simulate duration=<ms> [mode=headless|text|live] [seed=<int>]
 ```
 
 `mode` defaults to `headless` (no dashboard, fastest). `text` shows a live terminal table; `live` opens the Dear PyGui desktop window. The `--text` CLI flag always overrides `mode` (same as `--text` does for Python scripts).
+
+`seed` sets the random seed of the traffic generators (Poisson and bursty patterns, `imix` frame sizes). It defaults to `42`, so a run without `seed` is reproducible; vary it to repeat an experiment with independent random draws.
 
 ## Errors
 

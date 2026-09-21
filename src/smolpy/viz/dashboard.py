@@ -426,7 +426,7 @@ def show(result: SimulationResult) -> None:
     )
 
 
-def show_live(network: Network, duration_ms: float) -> SimulationResult:
+def show_live(network: Network, duration_ms: float, seed: int = 42) -> SimulationResult:
     """Open dashboard immediately; run simulation in background thread.
 
     Returns the completed SimulationResult when the user closes the window
@@ -444,6 +444,7 @@ def show_live(network: Network, duration_ms: float) -> SimulationResult:
         result = run_simulation(
             network,
             duration_ms,
+            seed=seed,
             _all_samples=all_samples,  # type: ignore[arg-type]
             _sim_state=sim_state,
             _n_chunks=_N_CHUNKS,

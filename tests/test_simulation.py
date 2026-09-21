@@ -335,3 +335,34 @@ class TestExport:
         result, *_ = _simple_net()
         with pytest.raises(ValueError, match="Unknown format"):
             result.export(str(tmp_path / "out.xyz"))
+
+
+# ---------------------------------------------------------------------------
+# Random seed
+# ---------------------------------------------------------------------------
+
+def _poisson_net(duration_ms: float = 500, seed: int | None = None):
+    """Poisson traffic, so the RNG actually influences the result."""
+    net = Network("seeded")
+    client = net.adapter("client", ip="10.0.0.1")
+    server = net.adapter("server", ip="10.0.0.2")
+    sw = net.switch("sw", ports=4)
+    net.link(client, sw, speed=100, length=5)
+    net.link(server, sw, speed=1_000, length=2)
+    client.sends(to=server, rate=2_000, size="imix", pattern="poisson")
+    net.observe("throughput", on=server, every=50)
+    net.observe("latency", on=server, every=50)
+    if seed is None:
+        return net.simulate(duration=duration_ms)
+    return net.simulate(duration=duration_ms, seed=seed)
+
+
+class TestSeed:
+    def test_same_seed_is_reproducible(self):
+        assert _poisson_net(seed=7).metrics == _poisson_net(seed=7).metrics
+
+    def test_different_seeds_give_different_results(self):
+        assert _poisson_net(seed=1).metrics != _poisson_net(seed=2).metrics
+
+    def test_default_seed_is_42(self):
+        assert _poisson_net().metrics == _poisson_net(seed=42).metrics
