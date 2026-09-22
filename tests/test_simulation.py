@@ -366,3 +366,41 @@ class TestSeed:
 
     def test_default_seed_is_42(self):
         assert _poisson_net().metrics == _poisson_net(seed=42).metrics
+
+
+# ---------------------------------------------------------------------------
+# Link pipelining: propagation delay must not steal transmission capacity
+# ---------------------------------------------------------------------------
+
+class TestLinkPipelining:
+    def test_saturated_link_reaches_nominal_capacity(self):
+        """A link fed back-to-back at line rate should deliver ~100% of its
+        configured speed. Propagation delay is latency, not a hold on the
+        wire: serializing it after every frame's transmission (instead of
+        running it concurrently with the next frame's transmission) used to
+        understate achieved throughput, more so the larger propagation delay
+        is relative to a frame's transmission time. A long, slow link makes
+        that ratio large (and the frame rate low, so the test stays fast)
+        without needing an unrealistic link length: here prop. delay is
+        ~20% of transmission time (so the unfixed engine loses ~20% of
+        throughput), versus ~2.4% for a realistic 10 Gb/s, 2 m link with
+        512 B frames.
+        """
+        net = Network("saturation")
+        client = net.adapter("client", ip="10.0.0.1")
+        server = net.adapter("server", ip="10.0.0.2")
+        sw = net.switch("sw", ports=4)
+        speed_mbps = 1  # slow link -> few frames needed to saturate it
+        size_bytes = 512
+        net.link(client, sw, speed=speed_mbps, length=200_000)  # exaggerated length
+        net.link(server, sw, speed=speed_mbps, length=2)
+        fps = int(speed_mbps * 1_000_000 / (size_bytes * 8))  # exactly saturate the link
+        client.sends(to=server, rate=fps, size=size_bytes, pattern="constant")
+        net.observe("throughput", on=server, every=200)
+        result = net.simulate(duration=2_000)
+        samples = [v for _, v in result.metrics["throughput:server"]]
+        # Sampling-interval quantization (a frame stradding a 200 ms bucket
+        # boundary) adds a few percent of noise per bucket, so check the mean
+        # rather than every sample. It should be close to the nominal
+        # 1 Mb/s, not ~20% below it as with the unfixed engine.
+        assert sum(samples) / len(samples) > speed_mbps * 0.98

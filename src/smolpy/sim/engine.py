@@ -92,7 +92,6 @@ class _LinkChannel:
         self.in_port = in_port
         self.dst_store = dst_store
         self.queue: simpy.Store = simpy.Store(env)
-        self._medium = simpy.Resource(env, capacity=1)
         self.bits_sent: int = 0
         env.process(self._run())
 
@@ -100,29 +99,37 @@ class _LinkChannel:
         self.queue.put(frame)
 
     def _run(self) -> Generator:
+        # Serialization (tx) is the only thing that occupies the wire: the next
+        # frame's transmission starts as soon as this one's bits have been put
+        # on the wire. Propagation delay is a fixed, one-time latency incurred
+        # by that frame in flight, not a hold on the link, so it runs in its
+        # own process instead of blocking this loop — otherwise it would be
+        # spent serially on top of transmission time and understate capacity
+        # (a 2 m/10 ns link previously cost ~2.4 % of throughput at 10 Gb/s).
         while True:
             frame: _Frame = yield self.queue.get()
-            with self._medium.request() as req:
-                yield req
-                tx_us = (frame.size_bytes * 8) / self.speed_bps * 1_000_000
-                yield self.env.timeout(tx_us)
-                self.bits_sent += frame.size_bytes * 8
-            yield self.env.timeout(self.prop_delay_us)
-            # Copy frame so flooding to multiple channels doesn't create in_port conflicts
-            delivered = _Frame(
-                src_mac=frame.src_mac,
-                dst_mac=frame.dst_mac,
-                size_bytes=frame.size_bytes,
-                created_at_us=frame.created_at_us,
-                retries=frame.retries,
-                in_port=self.in_port,
-                mqtt_topic=frame.mqtt_topic,
-                mqtt_qos=frame.mqtt_qos,
-                modbus_unit_id=frame.modbus_unit_id,
-                modbus_register_count=frame.modbus_register_count,
-                modbus_is_response=frame.modbus_is_response,
-            )
-            self.dst_store.put(delivered)
+            tx_us = (frame.size_bytes * 8) / self.speed_bps * 1_000_000
+            yield self.env.timeout(tx_us)
+            self.bits_sent += frame.size_bytes * 8
+            self.env.process(self._propagate_and_deliver(frame))
+
+    def _propagate_and_deliver(self, frame: _Frame) -> Generator:
+        yield self.env.timeout(self.prop_delay_us)
+        # Copy frame so flooding to multiple channels doesn't create in_port conflicts
+        delivered = _Frame(
+            src_mac=frame.src_mac,
+            dst_mac=frame.dst_mac,
+            size_bytes=frame.size_bytes,
+            created_at_us=frame.created_at_us,
+            retries=frame.retries,
+            in_port=self.in_port,
+            mqtt_topic=frame.mqtt_topic,
+            mqtt_qos=frame.mqtt_qos,
+            modbus_unit_id=frame.modbus_unit_id,
+            modbus_register_count=frame.modbus_register_count,
+            modbus_is_response=frame.modbus_is_response,
+        )
+        self.dst_store.put(delivered)
 
 
 # ---------------------------------------------------------------------------
