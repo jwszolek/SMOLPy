@@ -148,6 +148,7 @@ class Network:
         *,
         live: bool = False,
         text: bool = False,
+        seed: int = 42,
     ) -> SimulationResult:
         import os
 
@@ -156,14 +157,14 @@ class Network:
         if live:
             from smolpy.viz.dashboard import show_live
 
-            return show_live(self, duration)
+            return show_live(self, duration, seed=seed)
         if text:
             from smolpy.viz.text_dashboard import show_text
 
-            return show_text(self, duration)
+            return show_text(self, duration, seed=seed)
         from smolpy.sim.engine import run_simulation
 
-        return run_simulation(self, duration_ms=duration)
+        return run_simulation(self, duration_ms=duration, seed=seed)
 
     # --- internals ---
 

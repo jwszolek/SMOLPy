@@ -485,6 +485,7 @@ def run_simulation(
     network: Network,
     duration_ms: float,
     *,
+    seed: int = 42,
     _all_samples: dict[str, Samples] | None = None,
     _sim_state: dict | None = None,
     _n_chunks: int = 1,
@@ -498,7 +499,7 @@ def run_simulation(
 
     env = simpy.Environment()
     duration_us = duration_ms * 1_000
-    rng = random.Random(42)
+    rng = random.Random(seed)
 
     # Every node gets an inbound store where delivered frames arrive
     inbound: dict[str, simpy.Store] = {name: simpy.Store(env) for name in network._nodes}

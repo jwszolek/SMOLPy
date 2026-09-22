@@ -152,7 +152,12 @@ class _Interpreter:
                 d.line,
                 f"invalid simulate mode '{d.mode}' — expected one of {_SIMULATE_MODES}",
             )
-        return net.simulate(duration=d.duration, live=(d.mode == "live"), text=(d.mode == "text"))
+        return net.simulate(
+            duration=d.duration,
+            live=(d.mode == "live"),
+            text=(d.mode == "text"),
+            seed=d.seed,
+        )
 
 
 def interpret_and_run(path: Path) -> SimulationResult:

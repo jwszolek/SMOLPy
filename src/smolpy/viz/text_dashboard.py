@@ -93,7 +93,7 @@ def _build_display(
     )
 
 
-def show_text(network: Network, duration_ms: float) -> SimulationResult:
+def show_text(network: Network, duration_ms: float, seed: int = 42) -> SimulationResult:
     """Run simulation in background thread; display live metric table in terminal."""
     from smolpy.sim.engine import run_simulation
 
@@ -106,6 +106,7 @@ def show_text(network: Network, duration_ms: float) -> SimulationResult:
         result = run_simulation(
             network,
             duration_ms,
+            seed=seed,
             _all_samples=all_samples,  # type: ignore[arg-type]
             _sim_state=sim_state,
             _n_chunks=_N_CHUNKS,

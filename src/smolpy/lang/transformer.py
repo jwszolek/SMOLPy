@@ -207,6 +207,7 @@ class _SmolTransformer(Transformer):
             ),
             mode=str(kw.get("mode", "headless")),
             line=meta.line,
+            seed=int(float(kw.get("seed", 42))),
         )
 
     def statement(self, meta: Any, children: list) -> Decl:

@@ -111,6 +111,7 @@ net.observe(metric, on=node, every=interval_ms)
 result = net.simulate(duration=30_000)              # headless — silent, fastest
 result = net.simulate(duration=30_000, text=True)   # rich text dashboard in terminal
 result = net.simulate(duration=30_000, live=True)   # full Dear PyGui desktop window
+result = net.simulate(duration=30_000, seed=7)      # seed of the traffic generators (default 42)
 
 result.report()   # print summary table (avg / min / max per metric)
 result.plot()     # open static dashboard for a completed result

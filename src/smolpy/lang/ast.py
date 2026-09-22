@@ -105,6 +105,7 @@ class SimulateDecl:
     duration: float
     mode: str
     line: int
+    seed: int = 42
 
 
 Decl = (

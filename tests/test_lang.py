@@ -136,6 +136,39 @@ class TestInterpreter:
         assert vals
 
 
+class TestSimulateSeed:
+    _TEMPLATE = """
+    network "t" {
+        adapter a ip=10.0.0.1
+        adapter b ip=10.0.0.2
+        switch  sw1 ports=4
+        link a -- sw1 speed=100 length=5
+        link b -- sw1 speed=1000 length=2
+        flow a -> b rate=2000 size=imix pattern=poisson
+        observe latency on b every=50
+        simulate duration=500 mode=headless%s
+    }
+    """
+
+    def _metrics(self, tmp_path, extra: str):
+        f = tmp_path / "t.smol"
+        f.write_text(self._TEMPLATE % extra)
+        return interpret_and_run(f).metrics
+
+    def test_seed_is_parsed(self) -> None:
+        decl = parse_smol(self._TEMPLATE % " seed=7", "t.smol")
+        assert decl.declarations[-1].seed == 7
+
+    def test_seed_defaults_to_42(self) -> None:
+        decl = parse_smol(self._TEMPLATE % "", "t.smol")
+        assert decl.declarations[-1].seed == 42
+
+    def test_seed_changes_result_and_default_matches_42(self, tmp_path) -> None:
+        default = self._metrics(tmp_path, "")
+        assert default == self._metrics(tmp_path, " seed=42")
+        assert default != self._metrics(tmp_path, " seed=1")
+
+
 # ---------------------------------------------------------------------------
 # Semantic errors
 # ---------------------------------------------------------------------------
