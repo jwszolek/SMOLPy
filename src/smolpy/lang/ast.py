@@ -59,6 +59,7 @@ class FlowDecl:
     pattern: str
     delay_ms: float
     line: int
+    batch: str = "1"
 
 
 @dataclass

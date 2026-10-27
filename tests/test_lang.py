@@ -169,6 +169,44 @@ class TestSimulateSeed:
         assert default != self._metrics(tmp_path, " seed=1")
 
 
+class TestFlowBatch:
+    def test_batch_is_parsed_and_runs(self, tmp_path) -> None:
+        src = """
+        network "t" {
+            adapter a ip=10.0.0.1
+            adapter b ip=10.0.0.2
+            switch  sw1 ports=4
+            link a -- sw1 speed=100 length=5
+            link b -- sw1 speed=1000 length=2
+            flow a -> b rate=500 size=512 pattern=batch batch=pareto:2.5
+            observe throughput on b every=100
+            simulate duration=500 mode=headless
+        }
+        """
+        decl = parse_smol(src, "t.smol")
+        flow = [d for d in decl.declarations if type(d).__name__ == "FlowDecl"][0]
+        assert flow.batch == "pareto:2.5"
+        f = tmp_path / "t.smol"
+        f.write_text(src)
+        assert interpret_and_run(f).metrics["throughput:b"]
+
+    def test_invalid_batch_is_semantic_error(self, tmp_path) -> None:
+        f = tmp_path / "t.smol"
+        f.write_text("""
+        network "t" {
+            adapter a ip=10.0.0.1
+            adapter b ip=10.0.0.2
+            switch  sw1 ports=4
+            link a -- sw1 speed=100 length=5
+            link b -- sw1 speed=1000 length=2
+            flow a -> b rate=500 pattern=batch batch=zipf:2
+            simulate duration=500 mode=headless
+        }
+        """)
+        with pytest.raises(SMOLSemanticError, match="batch kind"):
+            interpret_and_run(f)
+
+
 # ---------------------------------------------------------------------------
 # Semantic errors
 # ---------------------------------------------------------------------------

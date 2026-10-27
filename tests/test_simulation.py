@@ -366,3 +366,90 @@ class TestSeed:
 
     def test_default_seed_is_42(self):
         assert _poisson_net().metrics == _poisson_net(seed=42).metrics
+
+
+# ---------------------------------------------------------------------------
+# Link pipelining: propagation delay must not steal transmission capacity
+# ---------------------------------------------------------------------------
+
+class TestLinkPipelining:
+    def test_saturated_link_reaches_nominal_capacity(self):
+        """A link fed back-to-back at line rate should deliver ~100% of its
+        configured speed. Propagation delay is latency, not a hold on the
+        wire: serializing it after every frame's transmission (instead of
+        running it concurrently with the next frame's transmission) used to
+        understate achieved throughput, more so the larger propagation delay
+        is relative to a frame's transmission time. A long, slow link makes
+        that ratio large (and the frame rate low, so the test stays fast)
+        without needing an unrealistic link length: here prop. delay is
+        ~20% of transmission time (so the unfixed engine loses ~20% of
+        throughput), versus ~2.4% for a realistic 10 Gb/s, 2 m link with
+        512 B frames.
+        """
+        net = Network("saturation")
+        client = net.adapter("client", ip="10.0.0.1")
+        server = net.adapter("server", ip="10.0.0.2")
+        sw = net.switch("sw", ports=4)
+        speed_mbps = 1  # slow link -> few frames needed to saturate it
+        size_bytes = 512
+        net.link(client, sw, speed=speed_mbps, length=200_000)  # exaggerated length
+        net.link(server, sw, speed=speed_mbps, length=2)
+        fps = int(speed_mbps * 1_000_000 / (size_bytes * 8))  # exactly saturate the link
+        client.sends(to=server, rate=fps, size=size_bytes, pattern="constant")
+        net.observe("throughput", on=server, every=200)
+        result = net.simulate(duration=2_000)
+        samples = [v for _, v in result.metrics["throughput:server"]]
+        # Sampling-interval quantization (a frame stradding a 200 ms bucket
+        # boundary) adds a few percent of noise per bucket, so check the mean
+        # rather than every sample. It should be close to the nominal
+        # 1 Mb/s, not ~20% below it as with the unfixed engine.
+        assert sum(samples) / len(samples) > speed_mbps * 0.98
+
+
+# ---------------------------------------------------------------------------
+# Batch (compound Poisson) traffic
+# ---------------------------------------------------------------------------
+
+class TestBatchTraffic:
+    def _net(self, batch, rate=1_000, duration=5_000, seed=3):
+        net = Network("batch")
+        src = net.adapter("src", ip="10.0.0.1")
+        dst = net.adapter("dst", ip="10.0.0.2")
+        sw = net.switch("sw", ports=4)
+        net.link(src, sw, speed=100, length=5)
+        net.link(dst, sw, speed=1_000, length=5)
+        src.sends(to=dst, rate=rate, size=512, pattern="batch", batch=batch)
+        net.observe("bytes_sent", on=src, every=1_000)
+        return net.simulate(duration=duration, seed=seed)
+
+    @pytest.mark.parametrize("batch", [1, 8, "geom:4", "pareto:2.5"])
+    def test_average_rate_is_independent_of_batch_size(self, batch):
+        result = self._net(batch)
+        t_ms, sent_mb = result.metrics["bytes_sent:src"][-1]
+        frames = sent_mb * 1_000_000 / 512
+        # Cumulative frames at the last sample (t = 4 s) at 1000 fr/s on average;
+        # allow statistical noise of the Poisson group process.
+        assert t_ms == pytest.approx(4_000)
+        assert frames == pytest.approx(4_000, rel=0.15)
+
+    def test_batch_requires_batch_pattern(self):
+        net = Network("x")
+        a = net.adapter("a", ip="10.0.0.1")
+        b = net.adapter("b", ip="10.0.0.2")
+        with pytest.raises(ValueError, match="only meaningful"):
+            a.sends(to=b, rate=10, pattern="poisson", batch=4)
+
+    @pytest.mark.parametrize("bad", [0, "geom:0.5", "pareto:1", "zipf:2", "abc"])
+    def test_invalid_batch_specs_rejected(self, bad):
+        net = Network("x")
+        a = net.adapter("a", ip="10.0.0.1")
+        b = net.adapter("b", ip="10.0.0.2")
+        with pytest.raises(ValueError):
+            a.sends(to=b, rate=10, pattern="batch", batch=bad)
+
+    def test_batch_moments(self):
+        from smolpy.core.batch import parse_batch
+        assert parse_batch(8).mean() == 8 and parse_batch(8).second_moment() == 64
+        assert parse_batch("geom:4").second_moment() == pytest.approx(28.0)
+        assert parse_batch("pareto:2.5").mean() == pytest.approx(1.341487, rel=1e-5)
+        assert parse_batch("pareto:1.5").second_moment() == math.inf

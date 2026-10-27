@@ -47,8 +47,9 @@ plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
 | `to` | Adapter | Destination adapter |
 | `rate` | float | Frames per second |
 | `size` | int \| `"imix"` | Frame size in bytes, or Internet Mix distribution |
-| `pattern` | str | `"constant"`, `"poisson"`, or `"bursty"` |
+| `pattern` | str | `"constant"`, `"poisson"`, `"bursty"`, or `"batch"` |
 | `delay_ms` | float | Simulation time before this flow starts (default 0) |
+| `batch` | int \| str | Group size for `pattern="batch"`: `k`, `"geom:<mean>"`, or `"pareto:<shape>"` (default 1) |
 
 ### `publishes()` parameters
 
@@ -78,6 +79,9 @@ plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
 | `"constant"` | Fixed inter-frame gap — models a saturated link |
 | `"poisson"` | Exponentially distributed gaps — models random/bursty traffic |
 | `"bursty"` | Pareto-distributed burst lengths — models ON/OFF sources |
+| `"batch"` | Compound Poisson: groups of `batch` frames arrive together at Poisson instants; `rate` stays the average frames/s, so the group size changes burstiness without changing the load |
+
+With `pattern="batch"`, the group size is fixed (`batch=8`), geometric with a given mean (`batch="geom:4"`), or `floor` of a Pareto variable with a given shape (`batch="pareto:2.5"`; its second moment is infinite for shape ≤ 2). Example: `plc.sends(to=historian, rate=4_000, size=1_518, pattern="batch", batch=16)`.
 
 ### Frame sizes
 

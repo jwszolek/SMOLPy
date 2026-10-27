@@ -93,6 +93,7 @@ class _Interpreter:
                         size=d.size,  # type: ignore[arg-type]
                         pattern=d.pattern,  # type: ignore[arg-type]
                         delay_ms=d.delay_ms,
+                        batch=d.batch,
                     )
                 elif isinstance(d, smol_ast.PublishDecl):
                     src = self._resolve(net, d.src, d.line, expect=Adapter)
