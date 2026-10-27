@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import simpy
 
 if TYPE_CHECKING:
+    from smolpy.core.batch import BatchSpec
     from smolpy.core.network import Network, SimulationResult
 
 _MAX_RETRIES = 16
@@ -169,12 +170,13 @@ def _traffic_gen(
     channel: _LinkChannel,
     rng: random.Random,
     delay_us: float = 0.0,
-    batch=None,  # BatchSpec, only for pattern == "batch"
+    batch: BatchSpec | None = None,  # only for pattern == "batch"
 ) -> Generator:
     if delay_us > 0.0:
         yield env.timeout(delay_us)
     interval_us = 1_000_000.0 / rate_fps
     if pattern == "batch":
+        assert batch is not None, "pattern='batch' needs a BatchSpec"
         # Compound Poisson: groups arrive at rate rate/E[X]; each group's X
         # frames are enqueued back to back at the same instant.
         group_interval_us = interval_us * batch.mean()

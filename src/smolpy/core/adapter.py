@@ -105,8 +105,9 @@ class Adapter(Node):
         if pattern != "batch" and spec != parse_batch(1):
             raise ValueError("batch= is only meaningful with pattern='batch'")
         self.traffic_specs.append(
-            TrafficSpec(to, rate, size, pattern, delay_ms,
-                        batch=spec if pattern == "batch" else None)
+            TrafficSpec(
+                to, rate, size, pattern, delay_ms, batch=spec if pattern == "batch" else None
+            )
         )
 
     def publishes(

@@ -80,8 +80,7 @@ def parse_batch(spec: int | str) -> BatchSpec:
     kind, sep, value = text.partition(":")
     if not sep:
         raise ValueError(
-            f"invalid batch spec {spec!r}: expected an integer, 'geom:<mean>' "
-            "or 'pareto:<shape>'"
+            f"invalid batch spec {spec!r}: expected an integer, 'geom:<mean>' or 'pareto:<shape>'"
         )
     try:
         param = float(value)
@@ -100,7 +99,9 @@ def parse_batch(spec: int | str) -> BatchSpec:
 
 def _zeta(s: float, terms: int = 10_000) -> float:
     """Riemann zeta(s) for s > 1: direct sum plus an Euler-Maclaurin tail."""
-    n = terms
-    head = math.fsum(k ** (-s) for k in range(1, n))
-    tail = n ** (1.0 - s) / (s - 1.0) + 0.5 * n ** (-s) + s * n ** (-s - 1.0) / 12.0
+    n = float(terms)
+    head = math.fsum(math.pow(k, -s) for k in range(1, terms))
+    tail = (
+        math.pow(n, 1.0 - s) / (s - 1.0) + 0.5 * math.pow(n, -s) + s * math.pow(n, -s - 1.0) / 12.0
+    )
     return head + tail
