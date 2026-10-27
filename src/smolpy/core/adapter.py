@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from smolpy.core.batch import BatchSpec, parse_batch
 from smolpy.core.node import Node
 
 if TYPE_CHECKING:
     pass
 
-TrafficPattern = Literal["constant", "poisson", "bursty"]
+TrafficPattern = Literal["constant", "poisson", "bursty", "batch"]
 FrameSize = int | Literal["imix"]
 
 
@@ -19,12 +20,14 @@ class TrafficSpec:
         size: FrameSize,
         pattern: TrafficPattern,
         delay_ms: float = 0.0,
+        batch: BatchSpec | None = None,
     ) -> None:
         self.destination = destination
-        self.rate = rate  # frames/s
+        self.rate = rate  # frames/s (long-run average, also for "batch")
         self.size = size  # bytes or "imix"
         self.pattern = pattern
         self.delay_ms = delay_ms
+        self.batch = batch  # group-size distribution, only for pattern="batch"
 
 
 class MQTTSpec:
@@ -93,8 +96,18 @@ class Adapter(Node):
         size: FrameSize = 512,
         pattern: TrafficPattern = "constant",
         delay_ms: float = 0.0,
+        batch: int | str = 1,
     ) -> None:
-        self.traffic_specs.append(TrafficSpec(to, rate, size, pattern, delay_ms))
+        # batch: group size for pattern="batch" -- an int k, "geom:<mean>" or
+        # "pareto:<shape>" (see smolpy.core.batch). rate stays the average
+        # number of frames per second.
+        spec = parse_batch(batch)
+        if pattern != "batch" and spec != parse_batch(1):
+            raise ValueError("batch= is only meaningful with pattern='batch'")
+        self.traffic_specs.append(
+            TrafficSpec(to, rate, size, pattern, delay_ms,
+                        batch=spec if pattern == "batch" else None)
+        )
 
     def publishes(
         self,

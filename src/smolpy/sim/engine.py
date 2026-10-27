@@ -169,10 +169,26 @@ def _traffic_gen(
     channel: _LinkChannel,
     rng: random.Random,
     delay_us: float = 0.0,
+    batch=None,  # BatchSpec, only for pattern == "batch"
 ) -> Generator:
     if delay_us > 0.0:
         yield env.timeout(delay_us)
     interval_us = 1_000_000.0 / rate_fps
+    if pattern == "batch":
+        # Compound Poisson: groups arrive at rate rate/E[X]; each group's X
+        # frames are enqueued back to back at the same instant.
+        group_interval_us = interval_us * batch.mean()
+        while True:
+            yield env.timeout(rng.expovariate(1.0 / group_interval_us))
+            for _ in range(batch.draw(rng)):
+                channel.enqueue(
+                    _Frame(
+                        src_mac=src_mac,
+                        dst_mac=dst_mac,
+                        size_bytes=_resolve_size(size_spec, rng),
+                        created_at_us=env.now,
+                    )
+                )
     while True:
         if pattern == "bursty":
             # ON: Pareto-distributed burst at 4× rate; OFF: proportional silence
@@ -574,6 +590,7 @@ def run_simulation(
                             ch,
                             rng,
                             delay_us=spec.delay_ms * 1_000,
+                            batch=spec.batch,
                         )
                     )
                 for spec in node.mqtt_specs:

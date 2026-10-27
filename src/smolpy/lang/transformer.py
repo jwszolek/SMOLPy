@@ -148,6 +148,7 @@ class _SmolTransformer(Transformer):
             pattern=str(kw.get("pattern", "constant")),
             delay_ms=float(kw.get("delay", 0.0)),
             line=meta.line,
+            batch=str(kw.get("batch", "1")),
         )
 
     def publish_decl(self, meta: Any, children: list) -> PublishDecl:

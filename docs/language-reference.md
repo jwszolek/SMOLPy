@@ -69,10 +69,10 @@ link <a> -- <b> speed=<mbps> length=<metres>
 ### `flow` — Ethernet traffic (Adapter → Adapter)
 
 ```
-flow <src> -> <dst> rate=<fps> [size=<bytes>|imix] [pattern=constant|poisson|bursty] [delay=<ms>]
+flow <src> -> <dst> rate=<fps> [size=<bytes>|imix] [pattern=constant|poisson|bursty|batch] [batch=<k>|geom:<mean>|pareto:<shape>] [delay=<ms>]
 ```
 
-`size` defaults to `512`, `pattern` to `constant`, `delay` to `0`.
+`size` defaults to `512`, `pattern` to `constant`, `delay` to `0`. `batch` (default `1`) sets the group size of the `batch` pattern, in which groups of frames arrive together at Poisson instants while `rate` stays the average frames/s.
 
 ### `publish` — MQTT PUBLISH (Adapter → MQTTBroker)
 
