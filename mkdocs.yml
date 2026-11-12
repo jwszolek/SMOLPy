@@ -40,6 +40,7 @@ nav:
       - ADR-0001 Protocol Package Structure: adr/0001-protocol-package-structure.md
       - ADR-0002 Modbus TCP Implementation: adr/0002-modbus-tcp-implementation.md
       - ADR-0003 SMOL External DSL: adr/0003-smol-external-dsl.md
+      - ADR-0004 Pluggable Execution Backends: adr/0004-execution-backends.md
 
 markdown_extensions:
   - admonition
