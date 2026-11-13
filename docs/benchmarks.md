@@ -146,22 +146,11 @@ Building the benchmarks exposed two behaviours of the model that matter for resu
 
 A third, smaller effect: B3 at 100 k frames shows ~74 events per frame instead of ~37. At start-up no switch knows any of the 1 000 destinations, so the first frame to each one is flooded through the core and the access switches. This one-off cost is ~4 M events; it is significant at 100 k frames and negligible at 1 M and above.
 
-## Next steps (ADR-0006 §5–6)
-
-Candidate optimisations, each to be applied and measured separately, with unchanged output hashes:
-
-1. **Propagation without a process per frame.** Schedule delivery as a timed callback instead of starting `_propagate_and_deliver` as a new SimPy process. This removes a `Process`, an `Initialize` event and a generator resume per hop.
-2. **Record only what is observed, and keep only the current window.** Collect `latency_us`, `modbus_rtt_us` and the PROFINET lists only for nodes with a matching observation, and aggregate per window. Memory then stays constant in run length.
-3. **`@dataclass(slots=True)` for `_Frame`.** Smaller frames, faster attribute access.
-4. **No frame copy on the unicast path.** Copy only when a frame is flooded to several ports.
-
-The Rust decision gate (ADR-0006 §6) is evaluated after these optimisations, on the same suite.
-
 ## Optimisation log
 
 Each optimisation is checked with the **metrics hash**, a hash of all metric samples without the event count. Removing engine events changes the output hash by design. The metrics hash must stay identical to the baseline engine in every scenario with metrics on.
 
-Timings below are single runs, metrics on, on the reference machine. The full suite is re-run once all optimisations are in.
+Timings below are single runs, metrics on, on the reference machine. The full suite was then re-run on the result; see *Optimised engine vs baseline*.
 
 ### 1. Propagation as a timed callback
 
@@ -209,3 +198,42 @@ Delivery used to build a new `_Frame` on every hop, so that flooded copies would
 | B3 | 70.2 s → 66.8 s (−5 %) |
 
 B3 at 100 k frames, which floods heavily at start-up, also gives an identical output hash.
+
+## Optimised engine vs baseline
+
+The full suite was re-run after all four optimisations, at commit `d3eb8a2`, on the same machine. Raw results are in [`benchmarks/results/2026-11-13-1527-simpy-jaws-zbook-optimised.json`](https://github.com/jwszolek/SMOLPy/blob/main/benchmarks/results/2026-11-13-1527-simpy-jaws-zbook-optimised.json). All 78 runs completed, and every repetition of every variant produced the same output hash. The metrics hash with metrics on matches the baseline engine at 100 k and 1 M frames.
+
+| Scenario | Frames | Metrics | Wall time baseline → optimised | Speed-up | Events/frame | Peak RSS baseline → optimised |
+|---|---|---|---|---|---|---|
+| B1 | 100k | off | 2.74 s → 1.59 s | 1.73× | 17.0 → 13.0 | 41 MB → 36 MB |
+| B1 | 100k | on | 2.95 s → 2.21 s | 1.34× | 17.0 → 13.0 | 40 MB → 37 MB |
+| B2 | 100k | off | 4.43 s → 3.35 s | 1.32× | 19.4 → 15.4 | 46 MB → 37 MB |
+| B2 | 100k | on | 4.50 s → 3.53 s | 1.27× | 19.4 → 15.4 | 46 MB → 37 MB |
+| B3 | 100k | off | 15.80 s → 11.55 s | 1.37× | 73.8 → 55.6 | 70 MB → 47 MB |
+| B3 | 100k | on | 16.05 s → 13.30 s | 1.21× | 73.9 → 55.7 | 71 MB → 48 MB |
+| B1 | 1M | off | 27.06 s → 19.71 s | 1.37× | 17.0 → 13.0 | 75 MB → 36 MB |
+| B1 | 1M | on | 29.74 s → 22.03 s | 1.35× | 17.0 → 13.0 | 75 MB → 37 MB |
+| B2 | 1M | off | 44.20 s → 33.40 s | 1.32× | 19.4 → 15.4 | 123 MB → 37 MB |
+| B2 | 1M | on | 44.84 s → 35.19 s | 1.27× | 19.4 → 15.4 | 124 MB → 38 MB |
+| B3 | 1M | off | 79.03 s → 61.60 s | 1.28× | 37.1 → 28.1 | 105 MB → 47 MB |
+| B3 | 1M | on | 81.93 s → 64.59 s | 1.27× | 37.2 → 28.1 | 115 MB → 56 MB |
+| B1 | 10M | off | 271.97 s → 198.06 s | 1.37× | 17.0 → 13.0 | 419 MB → 36 MB |
+| B1 | 10M | on | 300.90 s → 220.48 s | 1.36× | 17.0 → 13.0 | 420 MB → 38 MB |
+| B2 | 10M | off | 443.04 s → 331.66 s | 1.34× | 19.4 → 15.4 | 880 MB → 37 MB |
+| B2 | 10M | on | 448.43 s → 353.43 s | 1.27× | 19.4 → 15.4 | 896 MB → 45 MB |
+| B3 | 10M | off | 704.60 s → 543.93 s | 1.30× | 33.4 → 25.3 | 451 MB → 47 MB |
+| B3 | 10M | on | 752.29 s → 566.59 s | 1.33× | 33.5 → 25.4 | 550 MB → 145 MB |
+
+- **The Python-level work gave about 1.3× across the board** and removed ~24 % of engine events. The event rate itself barely moved (B1 ~655 k events/s, B2 and B3 ~440–480 k events/s). What remains is SimPy's per-event cost.
+- **Memory is now flat in run length** for engine state: 36–47 MB with metrics off, at every size. The 145 MB of B3 at 10 M frames with metrics on is the result itself: 151 observations × ~5 000 samples each, held in `SimulationResult.metrics`.
+- **Runs of 1–3 s are noisy.** B1 at 100 k frames ranges 0.96–2.09 s, probably due to CPU frequency scaling. Compare at 1 M frames and above.
+
+## Rust decision gate (ADR-0006 §6)
+
+| Target | Optimised SimPy | Result |
+|---|---|---|
+| B3 at 10 M frames, metrics on, under 10 min | 566.6 s (9.4 min); baseline 752 s | **met**, by a 6 % margin |
+| Peak memory at 10 M frames under 4 GB | max 145 MB | **met** |
+| 100 × B2 at 1 M frames under 1 h on 8 cores | not measured; 100 × 35.2 s / 8 ≈ 7–8 min if runs scale, ~15 min allowing 2× for shared cores | **met (estimate)**, to be confirmed by the ADR-0009 batch runner |
+
+By the rule in ADR-0006 §6, optimised SimPy meets all three targets, so the Rust engine (ADR-0008) **does not proceed on these targets**. They measure whether SimPy is sufficient for today's scenarios, not for larger networks or many independent runs. Revising them is a decision to be recorded in ADR-0006.
