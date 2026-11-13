@@ -91,16 +91,18 @@ def build_b2(target_frames: int, metrics: bool) -> Built:
     return Built(net, _duration_ms(target_frames, fps), fps)
 
 
-def build_b3(target_frames: int, metrics: bool) -> Built:
-    """B3 — large plant: 50 access switches x 20 nodes behind one core switch, paired traffic."""
-    n_access, per_access, rate = 50, 20, 20.0
+def _build_plant(
+    name: str, n_access: int, per_access: int, metrics: bool, mac_table: str = "learning"
+) -> Built:
+    """Two-tier plant: access switches behind one core switch, paired traffic."""
+    rate = 20.0
     interval_ms = 1_000 / rate
-    net = Network("bench-b3")
-    core = net.switch("core", ports=n_access + 2)
+    net = Network(name)
+    core = net.switch("core", ports=n_access + 2, mac_table=mac_table)  # type: ignore[arg-type]
     access = []
     nodes: list[list] = []
     for a in range(n_access):
-        sw = net.switch(f"acc-{a}", ports=per_access + 2)
+        sw = net.switch(f"acc-{a}", ports=per_access + 2, mac_table=mac_table)  # type: ignore[arg-type]
         net.link(sw, core, speed=1_000, length=50)
         access.append(sw)
         row = []
@@ -114,8 +116,8 @@ def build_b3(target_frames: int, metrics: bool) -> Built:
     # the core (4 hops). Traffic flows in both directions so every switch learns
     # every destination MAC; one-way traffic would leave the destination unknown
     # to the sender's access switch and flood every frame to all local ports.
-    # Start phases are spread over one interval so the 1 000 flows do not fire
-    # in lock-step.
+    # Start phases are spread over one interval so the flows do not fire in
+    # lock-step.
     total = n_access * per_access
     for a in range(n_access):
         for i in range(per_access):
@@ -133,12 +135,32 @@ def build_b3(target_frames: int, metrics: bool) -> Built:
             net.observe("queue_depth", on=access[a], every=100)
             net.observe("latency", on=nodes[a][0], every=100)
             net.observe("throughput", on=nodes[a][0], every=100)
-    fps = total * rate
-    return Built(net, _duration_ms(target_frames, fps), fps)
+    return Built(net, 0.0, total * rate)
+
+
+def _sized(built: Built, target_frames: int) -> Built:
+    return Built(built.network, _duration_ms(target_frames, built.frames_per_s), built.frames_per_s)
+
+
+def build_b3(target_frames: int, metrics: bool) -> Built:
+    """B3 — large plant: 50 access switches x 20 nodes behind one core switch, paired traffic."""
+    return _sized(_build_plant("bench-b3", 50, 20, metrics), target_frames)
+
+
+def build_b4(target_frames: int, metrics: bool) -> Built:
+    """B4 — very large plant: 200 access switches x 50 nodes (10 000 nodes), as B3.
+
+    Research-scale scenario for the extended Rust decision gate (ADR-0006 §6).
+    Switches start converged (mac_table="topology"): with address learning,
+    start-up flooding alone costs ~300 M events and ~12 GB of queued frame
+    copies, which would measure the start-up artefact instead of scale.
+    """
+    return _sized(_build_plant("bench-b4", 200, 50, metrics, "topology"), target_frames)
 
 
 SCENARIOS: dict[str, Callable[[int, bool], Built]] = {
     "B1": build_b1,
     "B2": build_b2,
     "B3": build_b3,
+    "B4": build_b4,
 }

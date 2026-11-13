@@ -2,18 +2,20 @@
 
 python -m benchmarks run [--scenario B1 B2 B3] [--frames 100k 1M 10M] [--metrics on off]
 python -m benchmarks summarize benchmarks/results/<file>.json
+python -m benchmarks batch --scenario B3 --frames 1M --runs 16 --jobs 8
 python -m benchmarks profile --scenario B1 --frames 1M --tool cprofile|tracemalloc|py-spy
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from benchmarks.runner import parse_size, run_suite, size_label, summarize
+from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
 PROFILES_DIR = Path(__file__).parent / "profiles"
 
@@ -57,6 +59,15 @@ def main() -> None:
     summ = sub.add_parser("summarize", help="markdown summary of a results file")
     summ.add_argument("file", type=Path)
 
+    batch = sub.add_parser("batch", help="time a batch of independent runs in parallel")
+    batch.add_argument("--scenario", default="B3")
+    batch.add_argument("--frames", default="1M")
+    batch.add_argument("--metrics", default="off", choices=("on", "off"))
+    batch.add_argument("--runs", type=int, default=16)
+    batch.add_argument("--jobs", type=int, default=8)
+    batch.add_argument("--timeout", type=float, default=3600, help="per run, seconds")
+    batch.add_argument("--seed", type=int, default=42)
+
     prof = sub.add_parser("profile", help="profile one scenario")
     prof.add_argument("--scenario", default="B1")
     prof.add_argument("--frames", default="1M")
@@ -71,6 +82,10 @@ def main() -> None:
         print(summarize(out))
     elif a.cmd == "summarize":
         print(summarize(a.file))
+    elif a.cmd == "batch":
+        frames = parse_size(a.frames)
+        r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed)
+        print(json.dumps(r, indent=1))
     else:
         _profile(a.scenario, parse_size(a.frames), a.metrics, a.tool)
 

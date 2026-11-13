@@ -13,6 +13,12 @@ uv run python -m benchmarks run --label baseline
 # a subset
 uv run python -m benchmarks run --scenario B1 B2 --frames 100k 1M --metrics off
 
+# B4 (10 000 nodes) at research scale — one run, ~1.5-2 h on SimPy
+uv run python -m benchmarks run --scenario B4 --frames 100M --metrics off --timeout 14400
+
+# batch throughput: N independent runs, J at a time
+uv run python -m benchmarks batch --scenario B3 --frames 1M --runs 16 --jobs 8
+
 # markdown summary of a results file
 uv run python -m benchmarks summarize benchmarks/results/<file>.json
 
@@ -37,8 +43,13 @@ All traffic sources are deterministic (constant rates, periodic protocols), so t
 | **B1 — single path** | sender → switch → receiver, one 50 000 fps constant flow (512 B, 1 Gb/s links) | 50 000 | 20 s |
 | **B2 — industrial cell** | 1 switch, 35 nodes: PLC with 10 PROFINET ARs (2 ms), 10 Modbus slaves (10 Hz), 10 MQTT publishers (10 Hz) → broker → historian, plus a 2 000 fps bulk flow | 12 400 | 80.6 s |
 | **B3 — large plant** | core switch + 50 access switches × 20 nodes (1 051 nodes); paired access switches, every node exchanges 20 fps with its counterpart across the core (4 hops) | 20 000 | 50 s |
+| **B4 — very large plant** | as B3 with 200 access switches × 50 nodes (10 201 nodes); switches start converged (`mac_table="topology"`) | 200 000 | 5 s |
 
 With **metrics on**, each scenario adds a representative set of `observe()` statements, sampled every 100 ms. B3 has 151 observations.
+
+B1–B3 make up the regular suite (`run` without `--scenario`). B4 is the research-scale scenario for the extended Rust decision gate (ADR-0006 §6). It is run on its own, at 100 M frames.
+
+**Why B4 starts converged.** With address learning, every switch floods the first frames to each of the 10 000 destinations. Each flooded frame reaches ~200 access switches × ~50 ports. Queues are unbounded, so all these copies wait in memory. At 1 M frames the result is 329 events per frame instead of 25, 45 min instead of 1 min, and 12 GB peak memory. That cost grows with stations × ports, so it is a start-up artefact of the model, not the scale effect B4 is meant to measure. With `mac_table="topology"`, B4 at 1 M frames takes 60 s and 203 MB, at 24.8 events per frame.
 
 ## Baseline
 
