@@ -1,0 +1,158 @@
+# Benchmarks
+
+Performance baseline and profiling of the SimPy engine, as defined in [ADR-0006](adr/0006-profiling-and-baseline-benchmark.md). This page is the reference point for later performance work: optimisations (ADR-0006 §5), the Scenario IR refactor (ADR-0007) and the Rust engine (ADR-0008) are all measured against it.
+
+## Running the suite
+
+The suite lives in `benchmarks/` at the repository root. It is not part of the PyPI package.
+
+```bash
+# full suite: B1-B3 × 100k / 1M / 10M frames × metrics off/on (~3 h, sequential)
+uv run python -m benchmarks run --label baseline
+
+# a subset
+uv run python -m benchmarks run --scenario B1 B2 --frames 100k 1M --metrics off
+
+# markdown summary of a results file
+uv run python -m benchmarks summarize benchmarks/results/<file>.json
+
+# profiling (reports go to benchmarks/profiles/, not committed)
+uv run python -m benchmarks profile --scenario B3 --frames 1M --tool cprofile
+uv run python -m benchmarks profile --scenario B1 --frames 1M --metrics on --tool tracemalloc
+uv run python -m benchmarks profile --scenario B1 --frames 1M --tool py-spy   # needs py-spy installed
+```
+
+Every measurement runs in a **fresh subprocess**, so that its peak RSS belongs to one run. Measurements run **one at a time**, because parallel runs would compete for CPU and distort the timings.
+
+Results are written as JSON to `benchmarks/results/`, one record per run. Each record includes:
+- the machine, Python, SimPy and SMOLPy versions, and the git commit;
+- an **output hash** of the event count and all metric samples. It confirms that a run computed exactly the same thing as the runs it is compared against.
+
+## Scenarios
+
+All traffic sources are deterministic (constant rates, periodic protocols), so the frame and event counts do not depend on the seed. Each scenario is sized by the number of **injected frames**, which is rate × simulated duration, exact up to ±1 frame per periodic source.
+
+| Scenario | Topology | Injected frames / simulated s | Simulated time for 1 M frames |
+|---|---|---|---|
+| **B1 — single path** | sender → switch → receiver, one 50 000 fps constant flow (512 B, 1 Gb/s links) | 50 000 | 20 s |
+| **B2 — industrial cell** | 1 switch, 35 nodes: PLC with 10 PROFINET ARs (2 ms), 10 Modbus slaves (10 Hz), 10 MQTT publishers (10 Hz) → broker → historian, plus a 2 000 fps bulk flow | 12 400 | 80.6 s |
+| **B3 — large plant** | core switch + 50 access switches × 20 nodes (1 051 nodes); paired access switches, every node exchanges 20 fps with its counterpart across the core (4 hops) | 20 000 | 50 s |
+
+With **metrics on**, each scenario adds a representative set of `observe()` statements, sampled every 100 ms. B3 has 151 observations.
+
+## Baseline
+
+*Measured on Intel Core Ultra 7 255H (16 threads), 31 GB RAM, Linux, Python 3.14, SimPy 4.1.2.*
+
+<!-- BASELINE-TABLE -->
+Raw results: [`benchmarks/results/2026-11-13-0921-simpy-jaws-zbook-baseline.json`](https://github.com/jwszolek/SMOLPy/blob/main/benchmarks/results/2026-11-13-0921-simpy-jaws-zbook-baseline.json). 78 runs, no failures or timeouts; every repetition of every variant produced the same output hash.
+
+| Scenario | Frames | Metrics | Runs | Wall time (median, min–max) | Events | Events/s | Frames/s | Peak RSS | Output |
+|---|---|---|---|---|---|---|---|---|---|
+| B1 | 100k | off | 5 | 2.74 s (2.69–2.76) | 1,699,992 | 620,312 | 36,489 | 41 MB | identical |
+| B1 | 100k | on | 5 | 2.95 s (2.93–2.98) | 1,700,072 | 576,497 | 33,910 | 40 MB | identical |
+| B2 | 100k | off | 5 | 4.43 s (4.41–4.47) | 1,940,224 | 437,845 | 22,567 | 46 MB | identical |
+| B2 | 100k | on | 5 | 4.50 s (4.49–4.56) | 1,940,872 | 430,894 | 22,201 | 46 MB | identical |
+| B3 | 100k | off | 5 | 15.80 s (14.46–15.93) | 7,380,145 | 467,159 | 6,330 | 70 MB | identical |
+| B3 | 100k | on | 5 | 16.05 s (15.93–16.82) | 7,387,695 | 460,244 | 6,230 | 71 MB | identical |
+| B1 | 1M | off | 5 | 27.06 s (26.98–27.53) | 16,999,992 | 628,175 | 36,952 | 75 MB | identical |
+| B1 | 1M | on | 5 | 29.74 s (23.71–29.93) | 17,000,792 | 571,707 | 33,628 | 75 MB | identical |
+| B2 | 1M | off | 5 | 44.20 s (43.01–45.04) | 19,403,129 | 438,950 | 22,623 | 123 MB | identical |
+| B2 | 1M | on | 5 | 44.84 s (43.60–45.00) | 19,409,585 | 432,848 | 22,301 | 124 MB | identical |
+| B3 | 1M | off | 5 | 79.03 s (78.57–79.66) | 37,080,145 | 469,197 | 12,654 | 105 MB | identical |
+| B3 | 1M | on | 5 | 81.93 s (80.35–82.58) | 37,155,645 | 453,509 | 12,206 | 115 MB | identical |
+| B1 | 10M | off | 3 | 271.97 s (271.49–272.23) | 169,999,992 | 625,076 | 36,769 | 419 MB | identical |
+| B1 | 10M | on | 3 | 300.90 s (298.90–305.07) | 170,007,992 | 565,002 | 33,234 | 420 MB | identical |
+| B2 | 10M | off | 3 | 443.04 s (439.23–443.28) | 194,032,022 | 437,953 | 22,571 | 880 MB | identical |
+| B2 | 10M | on | 3 | 448.43 s (448.10–448.51) | 194,096,542 | 432,836 | 22,300 | 896 MB | identical |
+| B3 | 10M | off | 3 | 704.60 s (704.08–718.26) | 334,080,145 | 474,141 | 14,192 | 451 MB | identical |
+| B3 | 10M | on | 3 | 752.29 s (750.99–752.88) | 334,835,145 | 445,087 | 13,293 | 550 MB | identical |
+
+What the baseline shows:
+
+- **Throughput is flat in run length.** Each scenario keeps its event rate from 100 k to 10 M frames: B1 ~625 k events/s, B2 ~438 k events/s, B3 ~470 k events/s. Wall time grows linearly, with no slowdown in long runs.
+- **Frames/s depend on events per frame**, not on the event rate. Those ratios are 17 for B1 (2 hops), ~19.4 for B2 and ~33–37 for B3 (4 hops).
+- **Metrics cost 1–10 % of run time.** The largest share is in B1, where the engine itself does the least work per frame.
+- **Peak memory grows with the number of frames.** From 1 M to 10 M frames: B1 75 → 420 MB, B2 123 → 896 MB, B3 105 → 550 MB. This matches the `latency_us` finding below. B2 grows fastest, because Modbus RTT and PROFINET latency and jitter lists grow alongside it.
+- **B3 at 100 k is inflated by start-up flooding** (~74 instead of ~37 events per frame, see *Findings outside performance*). Compare B3 at 1 M and 10 M.
+- One B1 1 M metrics-on repetition ran in 23.7 s against a median of 29.7 s, with an identical hash. This is most likely CPU frequency or core scheduling; the median is the reported value.
+
+**Baseline against the Rust decision gate (ADR-0006 §6).** The gate is evaluated formally after the §5 optimisations. The baseline starting point is:
+
+| Target | Baseline | Status |
+|---|---|---|
+| B3 at 10 M frames, metrics on, under 10 min | 752 s (12.5 min) | missed by 25 % |
+| Peak memory at 10 M frames under 4 GB | max 896 MB (B2, metrics on) | met |
+| 100 × B2 at 1 M frames under 1 h on 8 cores | ~13 × 45 s ≈ 10 min estimated | not measured yet (needs ADR-0009 batch runner) |
+<!-- /BASELINE-TABLE -->
+
+## Profiling: where the time and memory go
+
+Profiled at 1 M frames, metrics off. CPU times below are **under cProfile**, which slows the run 3–5×; the shares are what matter, not the absolute seconds.
+
+### CPU: SimPy machinery dominates
+
+| | B1 (2 hops) | B3 (4 hops) |
+|---|---|---|
+| Events processed | 17.0 M | 37.1 M |
+| Events per injected frame | 17.0 | 37.1 |
+| Python function calls | 297 M | 649 M |
+
+**One hop costs about 8.5 SimPy events.** The events are, in order:
+1. a put into the link's egress queue (`Store` put event);
+2. the get by the link process (`Store` get event);
+3. the transmission timeout;
+4. **the start of a new SimPy process just to wait out the propagation delay**: a `Process` object, its `Initialize` event and the propagation timeout;
+5. the put into the next node's inbound store;
+6. that node's get.
+
+On top of that, every injected frame costs one timeout in its traffic generator.
+
+In both profiles, most of the run time is spent inside SimPy itself:
+- the event loop (`Environment.step`, `Process._resume`, `schedule`, heap push/pop);
+- `Store` bookkeeping (`_trigger_put`, `_trigger_get`, event constructors).
+
+SMOLPy's own code is only about **12–15 % of own time**: the link process `_LinkChannel._run`, `_propagate_and_deliver`, `enqueue` and the traffic generator. Switch forwarding and receivers do not appear among the top consumers. The cost is per event, not per protocol feature.
+
+### Memory: one list grows with every frame
+
+| B1, 1 M frames | metrics off | metrics on |
+|---|---|---|
+| Python heap at end of run | 39.1 MiB | 39.3 MiB |
+| of which `_AdapterCounters.latency_us` (`engine.py`, `self.latency_us.append(...)`) | **30.9 MiB** (1 M floats) | **30.9 MiB** |
+| everything else (topology, queues, metric samples) | < 1 MiB | < 1 MiB |
+
+Every adapter appends the latency of **every received frame** to a list that is never trimmed, **whether or not anything observes it**. That is 32 B per received frame:
+- about 310 MiB at 10 M frames;
+- about 3 GB at 100 M frames.
+
+`modbus_rtt_us` and the PROFINET latency and jitter lists behave the same way for their traffic. Sampling windows only ever read the newest slice of these lists.
+
+### ADR-0006 hypotheses
+
+| Hypothesis | Result |
+|---|---|
+| Several SimPy events per frame per hop | **Confirmed**: ~8.5 per hop, plus 1 per injected frame |
+| A new process per frame per hop for propagation | **Confirmed**: one `Process` + `Initialize` event + timeout per hop; the single largest avoidable cost |
+| A new `_Frame` object per hop | **Confirmed**: one copy per delivery. Cheaper than the SimPy events, but still one allocation per hop. |
+| Memory grows with frames, not network size | **Confirmed**: `latency_us` holds ~79 % of the Python heap at 1 M frames, with metrics on or off |
+
+## Findings outside performance
+
+Building the benchmarks exposed two behaviours of the model that matter for results, not just for speed:
+
+- **One-way traffic floods.** A switch learns a MAC address only from frames the station *sends*. If a destination never sends, every access switch on the path keeps flooding frames for it to all its ports for the whole run. This is real Ethernet behaviour. It was the reason B3 was changed to paired, two-way traffic, because the one-way version measured 116 instead of ~35 events per frame.
+- **Adapters accept frames not addressed to them.** `_adapter_receiver` counts every frame that arrives, without checking `dst_mac`. Under flooding, `throughput`, `bytes_received` and `latency` of *every* node in the flood domain include traffic meant for someone else. A real NIC drops these frames. **This is a model bug, to be fixed separately**; it does not affect B1–B3, which have no persistent flooding.
+
+A third, smaller effect: B3 at 100 k frames shows ~74 events per frame instead of ~37. At start-up no switch knows any of the 1 000 destinations, so the first frame to each one is flooded through the core and the access switches. This one-off cost is ~4 M events; it is significant at 100 k frames and negligible at 1 M and above.
+
+## Next steps (ADR-0006 §5–6)
+
+Candidate optimisations, each to be applied and measured separately, with unchanged output hashes:
+
+1. **Propagation without a process per frame.** Schedule delivery as a timed callback instead of starting `_propagate_and_deliver` as a new SimPy process. This removes a `Process`, an `Initialize` event and a generator resume per hop.
+2. **Record only what is observed, and keep only the current window.** Collect `latency_us`, `modbus_rtt_us` and the PROFINET lists only for nodes with a matching observation, and aggregate per window. Memory then stays constant in run length.
+3. **`@dataclass(slots=True)` for `_Frame`.** Smaller frames, faster attribute access.
+4. **No frame copy on the unicast path.** Copy only when a frame is flooded to several ports.
+
+The Rust decision gate (ADR-0006 §6) is evaluated after these optimisations, on the same suite.

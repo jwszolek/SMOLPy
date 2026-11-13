@@ -37,3 +37,6 @@ site/
 
 # pyright cache
 pyrightconfig.json
+
+# Benchmark profiles (ADR-0006) — regenerate with `python -m benchmarks profile`
+benchmarks/profiles/
