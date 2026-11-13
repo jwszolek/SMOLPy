@@ -17,6 +17,7 @@ class SwitchDecl:
     ports: int
     mode: str
     line: int
+    qos: str = "strict"
 
 
 @dataclass
@@ -42,6 +43,13 @@ class ModbusSlaveDecl:
 
 
 @dataclass
+class ProfinetDeviceDecl:
+    name: str
+    ip: str
+    line: int
+
+
+@dataclass
 class LinkDecl:
     a: str
     b: str
@@ -60,6 +68,7 @@ class FlowDecl:
     delay_ms: float
     line: int
     batch: str = "1"
+    priority: int = 0
 
 
 @dataclass
@@ -94,6 +103,18 @@ class PollDecl:
 
 
 @dataclass
+class ControlDecl:
+    controller: str
+    device: str
+    cycle: int
+    inputs: int
+    outputs: int
+    hold: int
+    delay_ms: float
+    line: int
+
+
+@dataclass
 class ObserveDecl:
     metric: str
     target: str
@@ -115,11 +136,13 @@ Decl = (
     | HubDecl
     | MqttBrokerDecl
     | ModbusSlaveDecl
+    | ProfinetDeviceDecl
     | LinkDecl
     | FlowDecl
     | PublishDecl
     | RouteDecl
     | PollDecl
+    | ControlDecl
     | ObserveDecl
     | SimulateDecl
 )

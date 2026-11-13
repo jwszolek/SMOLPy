@@ -13,6 +13,7 @@ Each node is drawn as a coloured circle:
 | Orange | Hub |
 | Purple | MQTTBroker |
 | Coral red | ModbusSlave |
+| Teal | ProfinetDevice |
 
 Node fill changes dynamically during the simulation:
 

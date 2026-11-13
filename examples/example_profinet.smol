@@ -1,0 +1,32 @@
+# SMOL version of example_profinet.py — a PLC exchanging cyclic PROFINET RT I/O
+# with three IO devices while an engineering station downloads a project to it.
+# Change qos=strict to qos=fifo on the switch to see the effect of prioritisation.
+
+network "profinet-cell" {
+
+    switch          cell-sw      ports=8 qos=strict
+    adapter         plc          ip=10.0.0.1
+    adapter         eng-station  ip=10.0.0.50
+    profinet_device io-1         ip=10.0.4.1
+    profinet_device io-2         ip=10.0.4.2
+    profinet_device io-3         ip=10.0.4.3
+
+    link plc         -- cell-sw speed=100  length=5
+    link eng-station -- cell-sw speed=1000 length=20
+    link io-1        -- cell-sw speed=100  length=15
+    link io-2        -- cell-sw speed=100  length=15
+    link io-3        -- cell-sw speed=100  length=15
+
+    control plc -> io-1 cycle=2 inputs=32 outputs=16 hold=3
+    control plc -> io-2 cycle=2 inputs=32 outputs=16 hold=3
+    control plc -> io-3 cycle=2 inputs=32 outputs=16 hold=3
+
+    flow eng-station -> plc rate=4000 size=1518 pattern=batch batch=100 delay=2000
+
+    observe pn_latency           on plc     every=100
+    observe pn_jitter            on plc     every=100
+    observe pn_watchdog_expiries on plc     every=100
+    observe queue_depth          on cell-sw every=100
+
+    simulate duration=10000 mode=live
+}

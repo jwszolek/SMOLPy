@@ -13,6 +13,7 @@ from smolpy.lang.errors import SMOLSemanticError
 from smolpy.lang.transformer import parse_smol
 from smolpy.modbus.slave import ModbusSlave
 from smolpy.mqtt.broker import MQTTBroker
+from smolpy.profinet.device import ProfinetDevice
 
 if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
@@ -30,6 +31,9 @@ _METRIC_NODE_TYPES: dict[str, tuple[type[Node], ...] | None] = {
     "queue_depth": (Switch,),
     "collision_rate": (Hub,),
     "broker_queue": (MQTTBroker,),
+    "pn_latency": (Adapter, ProfinetDevice),
+    "pn_jitter": (Adapter, ProfinetDevice),
+    "pn_watchdog_expiries": (Adapter, ProfinetDevice),
     "utilization": None,  # any node type
 }
 
@@ -71,13 +75,15 @@ class _Interpreter:
                 if isinstance(d, smol_ast.AdapterDecl):
                     net.adapter(d.name, ip=d.ip, mac=d.mac)
                 elif isinstance(d, smol_ast.SwitchDecl):
-                    net.switch(d.name, ports=d.ports, mode=d.mode)  # type: ignore[arg-type]
+                    net.switch(d.name, ports=d.ports, mode=d.mode, qos=d.qos)  # type: ignore[arg-type]
                 elif isinstance(d, smol_ast.HubDecl):
                     net.hub(d.name, ports=d.ports)
                 elif isinstance(d, smol_ast.MqttBrokerDecl):
                     net.mqtt_broker(d.name, ip=d.ip)
                 elif isinstance(d, smol_ast.ModbusSlaveDecl):
                     net.modbus_slave(d.name, ip=d.ip, unit_id=d.unit_id)
+                elif isinstance(d, smol_ast.ProfinetDeviceDecl):
+                    net.profinet_device(d.name, ip=d.ip)
                 elif isinstance(d, smol_ast.LinkDecl):
                     a = self._resolve(net, d.a, d.line)
                     b = self._resolve(net, d.b, d.line)
@@ -94,6 +100,7 @@ class _Interpreter:
                         pattern=d.pattern,  # type: ignore[arg-type]
                         delay_ms=d.delay_ms,
                         batch=d.batch,
+                        priority=d.priority,
                     )
                 elif isinstance(d, smol_ast.PublishDecl):
                     src = self._resolve(net, d.src, d.line, expect=Adapter)
@@ -118,6 +125,18 @@ class _Interpreter:
                     assert isinstance(master, Adapter)
                     master.polls(
                         slave, register=d.register, count=d.count, rate=d.rate, delay_ms=d.delay_ms
+                    )
+                elif isinstance(d, smol_ast.ControlDecl):
+                    controller = self._resolve(net, d.controller, d.line, expect=Adapter)
+                    device = self._resolve(net, d.device, d.line, expect=ProfinetDevice)
+                    assert isinstance(controller, Adapter)
+                    controller.controls(
+                        device,
+                        cycle=d.cycle,
+                        inputs=d.inputs,
+                        outputs=d.outputs,
+                        hold=d.hold,
+                        delay_ms=d.delay_ms,
                     )
                 elif isinstance(d, smol_ast.ObserveDecl):
                     self._observe(net, d)

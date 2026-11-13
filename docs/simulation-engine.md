@@ -2,7 +2,7 @@
 
 - **MAC-learning switch** — each switch pre-seeds its forwarding table from the topology wiring, eliminating spurious flooding toward silent endpoints (e.g. a server that only receives). Dynamic learning still operates for traffic through intermediate switches.
 - **Store-and-forward model** — transmission delay + propagation delay per hop.
-- **Queuing** — each link direction is an independent SimPy Store; `queue_depth` reports buffered frames at the switch's outbound ports.
+- **Queuing** — each link direction has its own egress queue with 8 strict 802.1Q priority classes (FIFO within a class, non-preemptive); `qos="fifo"` on a switch ignores priorities. `queue_depth` reports buffered frames at the switch's outbound ports.
 - **Traffic shaping** — constant, Poisson, and Pareto-burst patterns; IMIX frame-size distribution.
 - **Live mode** — simulation runs in 200 chunks (~8 s total wall time); the dashboard reads shared metric arrays between chunks via Python's GIL.
 

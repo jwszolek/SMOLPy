@@ -4,10 +4,11 @@
 
 ```python
 adapter = net.adapter("name", ip="10.0.0.1")          # NIC / host / server
-switch  = net.switch("name",  ports=16, mode="store-and-forward")
+switch  = net.switch("name",  ports=16, mode="store-and-forward")   # qos="strict" (default) or "fifo"
 hub     = net.hub("name",     ports=8)
 broker  = net.mqtt_broker("name", ip="10.0.2.1")       # MQTT message broker
 slave   = net.modbus_slave("name", ip="10.0.0.10", unit_id=1)  # Modbus TCP slave
+device  = net.profinet_device("name", ip="10.0.4.1")   # PROFINET IO device
 net.link(a, b, speed=1_000, length=10)                 # Mb/s and metres
 ```
 
@@ -18,6 +19,8 @@ core_sw = net.switch("core-sw", ports=16, mode="store-and-forward")
 edge_sw = net.switch("edge-sw", ports=8,  mode="store-and-forward")
 net.link(edge_sw, core_sw, speed=1_000, length=5)      # inter-switch uplink
 ```
+
+Every egress queue serves the eight 802.1Q priority classes strictly (higher first, FIFO within a class). `qos="fifo"` makes a switch ignore frame priorities on its outbound ports.
 
 ## Traffic
 
@@ -38,6 +41,9 @@ broker.routes("plant/temp", to=[server])
 # Modbus TCP poll (master → slave, Read Holding Registers)
 plc.polls(slave, register=40001, count=10, rate=1.0)
 plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
+
+# PROFINET RT cyclic I/O (controller ↔ device), 4 ms update time
+plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
 ```
 
 ### `sends()` parameters
@@ -50,6 +56,7 @@ plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
 | `pattern` | str | `"constant"`, `"poisson"`, `"bursty"`, or `"batch"` |
 | `delay_ms` | float | Simulation time before this flow starts (default 0) |
 | `batch` | int \| str | Group size for `pattern="batch"`: `k`, `"geom:<mean>"`, or `"pareto:<shape>"` (default 1) |
+| `priority` | int | 802.1Q priority (PCP) 0–7 (default 0) |
 
 ### `publishes()` parameters
 
@@ -71,6 +78,17 @@ plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
 | `count` | int | Number of registers to read |
 | `rate` | float | Polls per second (default 1.0) |
 | `delay_ms` | float | Simulation time before polling starts (default 0) |
+
+### `controls()` parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `device` | ProfinetDevice | Target IO device |
+| `cycle` | int | Update time in ms: 1, 2, 4, … 512 |
+| `inputs` | int | Input data bytes per frame (device → controller), 1–1440 |
+| `outputs` | int | Output data bytes per frame (controller → device), 1–1440 |
+| `hold` | int | Data hold factor: watchdog = `hold × cycle` (default 3) |
+| `delay_ms` | float | Simulation time before cyclic exchange starts (default 0) |
 
 ### Traffic patterns
 
@@ -108,6 +126,9 @@ net.observe(metric, on=node, every=interval_ms)
 | `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
 | `modbus_latency` | µs | Adapter (master) |
+| `pn_latency` | µs | Adapter (controller), ProfinetDevice |
+| `pn_jitter` | µs | Adapter (controller), ProfinetDevice |
+| `pn_watchdog_expiries` | count | Adapter (controller), ProfinetDevice |
 
 ## Simulation
 

@@ -1,6 +1,6 @@
 # Examples
 
-Nine ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, and Modbus TCP polling. Every example opens a live desktop dashboard as the simulation runs (see [Dashboard](dashboard.md) for what the controls and node colours mean).
+Ten ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, and PROFINET RT cyclic I/O. Every example opens a live desktop dashboard as the simulation runs (see [Dashboard](dashboard.md) for what the controls and node colours mean).
 
 ```bash
 uv sync          # install all dependencies (run once from the project root)
@@ -208,3 +208,21 @@ Simulation: **30 s**
 | `throughput:historian` | Bursty, averaging well under 1 Mb/s |
 
 See [Modbus TCP](modbus.md) for the general model.
+
+## 10. PROFINET RT cell with a project download — [`example_profinet.py`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_profinet.py)
+
+A PLC exchanges 2 ms cyclic I/O with three PROFINET IO devices (watchdog 3 × 2 ms = 6 ms) while an engineering station on a 1 Gb/s link downloads a project to the same PLC in bursts of 100 full frames, starting at t = 2 s. Every burst queues in front of the PLC's 100 Mb/s switch port — the same port that carries the devices' input frames. Set `QOS` at the top of the script (or `qos=` on the switch in the `.smol` file) to `strict` or `fifo` to compare.
+
+```
+[eng-station] ── 1 Gbps / 20 m ──┐
+[io-1 … io-3] ── 100 Mbps / 15 m ─┼── [cell-sw] ── 100 Mbps / 5 m ── [plc]
+```
+
+Simulation: **10 s**
+
+| Switch `qos` | `pn_jitter:plc` max | `pn_latency:plc` max | `pn_watchdog_expiries:plc` |
+|---|---|---|---|
+| `strict` (default) | ~0.12 ms | ~0.07 ms | 0 — RT frames overtake every burst |
+| `fifo` | ~18 ms | ~46 ms | 936 — RT frames wait behind ~12 ms bursts, longer than the 6 ms watchdog |
+
+Also available as [`example_profinet.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_profinet.smol). See [PROFINET RT](profinet.md) for the general model.

@@ -29,6 +29,7 @@ _NODE_RGB: dict[str, tuple[int, int, int]] = {
     "Hub": (230, 155, 60),
     "MQTTBroker": (200, 80, 200),
     "ModbusSlave": (230, 90, 90),
+    "ProfinetDevice": (40, 180, 190),
 }
 _LINK_COLOR = (100, 100, 125, 160)
 _PARTICLE_COLOR = (85, 215, 255)
@@ -45,6 +46,9 @@ _UNITS = {
     "bytes_sent": "MB",
     "bytes_received": "MB",
     "broker_queue": "msgs",
+    "modbus_latency": "µs",
+    "pn_latency": "µs",
+    "pn_jitter": "µs",
 }
 
 

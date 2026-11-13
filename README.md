@@ -14,6 +14,21 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 
 ---
 
+## Supported protocols
+
+| Protocol | Runs over | Communication pattern | Nodes / API | `.smol` statements | Key metrics |
+|---|---|---|---|---|---|
+| **Ethernet** (generic traffic) | Layer 2 frames | One-way flows: constant, Poisson, bursty, batch | `Adapter.sends()` | `flow` | `throughput`, `latency`, `bytes_sent`, `bytes_received` |
+| **MQTT** | TCP/IP | Publish / subscribe through a broker, QoS 0 and 1 | `MQTTBroker`, `Adapter.publishes()`, `MQTTBroker.routes()` | `mqtt_broker`, `publish`, `route` | `broker_queue`, `latency` |
+| **Modbus TCP** | TCP/IP | Request / response polling (Read Holding Registers, FC 03) | `ModbusSlave`, `Adapter.polls()` | `modbus_slave`, `poll` | `modbus_latency` |
+| **PROFINET RT** | Layer 2 (EtherType 0x8892), 802.1Q priority 6 | Cyclic producer / consumer exchange with watchdog | `ProfinetDevice`, `Adapter.controls()` | `profinet_device`, `control` | `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` |
+
+Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation) and shared-medium **hubs**. One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
+
+**Not supported (yet):** PROFINET IRT, PROFIBUS, EtherNet/IP, EtherCAT, OPC UA, Modbus RTU (serial), and Modbus write function codes. See the [Architecture Decision Records](https://jwszolek.github.io/SMOLPy/adr/0001-protocol-package-structure/) for what is planned.
+
+---
+
 ## Install
 
 ```bash
@@ -62,9 +77,12 @@ Each node is drawn as a coloured circle:
 
 | Colour | Node type |
 |---|---|
-| Blue | Adapter (host / server / NIC) |
+| Blue | Adapter (host / server / NIC / PLC) |
 | Green | Switch |
 | Orange | Hub |
+| Purple | MQTTBroker |
+| Coral red | ModbusSlave |
+| Teal | ProfinetDevice |
 
 Node fill changes dynamically during the simulation:
 
@@ -105,10 +123,11 @@ Status indicator:
 
 ```python
 adapter = net.adapter("name", ip="10.0.0.1")          # NIC / host / server
-switch  = net.switch("name",  ports=16, mode="store-and-forward")
+switch  = net.switch("name",  ports=16, mode="store-and-forward")   # qos="strict" (default) or "fifo"
 hub     = net.hub("name",     ports=8)
 broker  = net.mqtt_broker("name", ip="10.0.2.1")       # MQTT message broker
 slave   = net.modbus_slave("name", ip="10.0.0.10", unit_id=1)  # Modbus TCP slave
+device  = net.profinet_device("name", ip="10.0.4.1")   # PROFINET IO device
 net.link(a, b, speed=1_000, length=10)                 # Mb/s and metres
 ```
 
@@ -139,6 +158,9 @@ broker.routes("plant/temp", to=[server])
 # Modbus TCP poll (master → slave, Read Holding Registers)
 plc.polls(slave, register=40001, count=10, rate=1.0)
 plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
+
+# PROFINET RT cyclic I/O (controller ↔ device), 4 ms update time
+plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
 ```
 
 | Parameter | Type | Description |
@@ -146,8 +168,9 @@ plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
 | `to` | Adapter | Destination adapter |
 | `rate` | float | Frames per second |
 | `size` | int \| `"imix"` | Frame size in bytes, or Internet Mix distribution |
-| `pattern` | str | `"constant"`, `"poisson"`, or `"bursty"` |
+| `pattern` | str | `"constant"`, `"poisson"`, `"bursty"`, or `"batch"` |
 | `delay_ms` | float | Simulation time before this flow starts (default 0) |
+| `priority` | int | 802.1Q priority (PCP) 0–7 (default 0) |
 
 **`publishes()` parameters**
 
@@ -169,6 +192,17 @@ plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
 | `count` | int | Number of registers to read |
 | `rate` | float | Polls per second (default 1.0) |
 | `delay_ms` | float | Simulation time before polling starts (default 0) |
+
+**`controls()` parameters**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `device` | ProfinetDevice | Target IO device |
+| `cycle` | int | Update time in ms: 1, 2, 4, … 512 |
+| `inputs` | int | Input data bytes per frame (device → controller), 1–1440 |
+| `outputs` | int | Output data bytes per frame (controller → device), 1–1440 |
+| `hold` | int | Data hold factor: watchdog = `hold × cycle` (default 3) |
+| `delay_ms` | float | Simulation time before cyclic exchange starts (default 0) |
 
 **Traffic patterns**
 
@@ -203,6 +237,9 @@ net.observe(metric, on=node, every=interval_ms)
 | `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
 | `modbus_latency` | µs | Adapter (master) |
+| `pn_latency` | µs | Adapter (controller), ProfinetDevice |
+| `pn_jitter` | µs | Adapter (controller), ProfinetDevice |
+| `pn_watchdog_expiries` | count | Adapter (controller), ProfinetDevice |
 
 ### Simulation
 
@@ -309,11 +346,48 @@ response_size = 62 + 2 × register_count bytes              (grows with the numb
 
 ---
 
+## PROFINET RT cyclic I/O
+
+PROFINET RT is the third industrial pattern SMOLPy models: **cyclic producer–consumer exchange**. Controller and device each send their process data every update time, unprompted, and each supervises the other's frames with a watchdog. RT frames are plain Layer-2 Ethernet frames (EtherType `0x8892`, no IP/TCP) tagged with 802.1Q priority 6.
+
+```python
+plc = net.adapter("plc", ip="10.0.0.1")
+io1 = net.profinet_device("io1", ip="10.0.4.1")
+plc.controls(io1, cycle=4, inputs=32, outputs=16, hold=3)
+
+net.observe("pn_jitter",            on=plc, every=100)
+net.observe("pn_watchdog_expiries", on=plc, every=100)
+```
+
+### What is modelled
+
+- **The controller** is a regular `Adapter`; `controls()` sets up one Application Relationship (AR) with a `ProfinetDevice`.
+- **Both directions are cyclic and independent** — the controller sends output frames, the device sends input frames, each every `cycle` ms.
+- **Watchdog** — a consumer that receives no frame for `hold × cycle` counts an expiry (`pn_watchdog_expiries`). Real devices would drop the AR at that point; SMOLPy counts it and keeps exchanging, so the whole run stays measurable.
+- **`pn_jitter`** — the largest deviation of the frame inter-arrival time from the cycle, per sampling window. **`pn_latency`** — mean send → receive time.
+- **Prioritisation matters** — every egress queue serves 802.1Q priorities strictly, so RT frames (priority 6) overtake ordinary traffic (priority 0). Build the switch with `qos="fifo"` to see what happens without it: under bursty load the cyclic data is delayed by whole bursts and watchdogs start to expire.
+
+### Frame size formula
+
+```
+frame_size = max(60, 14 (Ethernet) + 4 (802.1Q tag) + 2 (FrameID) + io_bytes + 4 (APDU status))
+```
+
+### Not modelled
+
+IRT (isochronous, scheduled) traffic, AR establishment (DCP / RPC connect), acyclic record data, alarms, media redundancy (MRP). Switch buffers are unbounded, so frames are delayed but never dropped.
+
+### Dashboard
+
+`ProfinetDevice` nodes appear as **teal** circles in the topology panel.
+
+---
+
 ## Simulation engine
 
 - **MAC-learning switch** — each switch pre-seeds its forwarding table from the topology wiring, eliminating spurious flooding toward silent endpoints (e.g. a server that only receives).  Dynamic learning still operates for traffic through intermediate switches.
 - **Store-and-forward model** — transmission delay + propagation delay per hop.
-- **Queuing** — each link direction is an independent SimPy Store; `queue_depth` reports buffered frames at the switch's outbound ports.
+- **Queuing** — each link direction has its own egress queue with 8 strict 802.1Q priority classes (FIFO within a class, non-preemptive); `qos="fifo"` on a switch ignores priorities. `queue_depth` reports buffered frames at the switch's outbound ports.
 - **Traffic shaping** — constant, Poisson, and Pareto-burst patterns; IMIX frame-size distribution.
 - **Live mode** — simulation runs in 200 chunks (~8 s total wall time); the dashboard reads shared metric arrays between chunks via Python's GIL.
 
@@ -321,7 +395,7 @@ response_size = 62 + 2 × register_count bytes              (grows with the numb
 
 ## Examples
 
-See [`examples/README.md`](examples/README.md) for nine ready-to-run scenarios covering single-switch saturation, oversubscription, two-tier access bottlenecks, MQTT publish-subscribe, and Modbus TCP polling.
+See [`examples/README.md`](examples/README.md) for ten ready-to-run scenarios covering single-switch saturation, oversubscription, two-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, and PROFINET RT cyclic I/O.
 
 ```bash
 uv run smolpy run examples/example.py
