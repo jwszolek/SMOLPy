@@ -7,9 +7,10 @@ from smolpy.core.link import Link
 from smolpy.core.node import Node
 from smolpy.core.observation import MetricName, Observation
 from smolpy.ethernet.hub import Hub
-from smolpy.ethernet.switch import Switch, SwitchMode
+from smolpy.ethernet.switch import Switch, SwitchMode, SwitchQoS
 from smolpy.modbus.slave import ModbusSlave
 from smolpy.mqtt.broker import MQTTBroker
+from smolpy.profinet.device import ProfinetDevice
 
 
 class SimulationResult:
@@ -66,6 +67,7 @@ class SimulationResult:
         _UNITS = {
             "throughput": "Mb/s",
             "latency": "µs",
+            "jitter": "µs",
             "frame_loss": "%",
             "collision_rate": "/s",
             "queue_depth": "fr",
@@ -107,8 +109,14 @@ class Network:
         self._register(node)
         return node
 
-    def switch(self, name: str, ports: int, mode: SwitchMode = "store-and-forward") -> Switch:
-        node = Switch(name, ports=ports, mode=mode)
+    def switch(
+        self,
+        name: str,
+        ports: int,
+        mode: SwitchMode = "store-and-forward",
+        qos: SwitchQoS = "strict",
+    ) -> Switch:
+        node = Switch(name, ports=ports, mode=mode, qos=qos)
         self._register(node)
         return node
 
@@ -124,6 +132,11 @@ class Network:
 
     def modbus_slave(self, name: str, ip: str, unit_id: int, mac: str | None = None) -> ModbusSlave:
         node = ModbusSlave(name, ip=ip, unit_id=unit_id, mac=mac)
+        self._register(node)
+        return node
+
+    def profinet_device(self, name: str, ip: str, mac: str | None = None) -> ProfinetDevice:
+        node = ProfinetDevice(name, ip=ip, mac=mac)
         self._register(node)
         return node
 

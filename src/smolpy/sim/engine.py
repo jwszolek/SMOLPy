@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import itertools
 import random
 import time
 from collections import defaultdict
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,9 @@ class _Frame:
     modbus_unit_id: int | None = field(default=None)
     modbus_register_count: int = field(default=0)
     modbus_is_response: bool = field(default=False)
+    priority: int = field(default=0)  # 802.1Q PCP 0-7
+    pn_ar_id: int | None = field(default=None)  # PROFINET RT AR this frame belongs to
+    pn_cycle_counter: int = field(default=0)
 
 
 def _resolve_size(size: int | str, rng: random.Random) -> int:
@@ -77,7 +81,12 @@ class _AdapterCounters:
 
 
 class _LinkChannel:
-    """Simulates one direction of a cable: enqueue → tx delay → prop delay → deliver."""
+    """Simulates one direction of a cable: enqueue → tx delay → prop delay → deliver.
+
+    The egress queue serves 802.1Q priority classes strictly (higher first,
+    FIFO within a class, non-preemptive). With strict_priority=False every
+    frame is treated as priority 0, i.e. plain FIFO.
+    """
 
     def __init__(
         self,
@@ -86,18 +95,24 @@ class _LinkChannel:
         prop_delay_us: float,
         in_port: int,
         dst_store: simpy.Store,
+        strict_priority: bool = True,
     ) -> None:
         self.env = env
         self.speed_bps = speed_bps
         self.prop_delay_us = prop_delay_us
         self.in_port = in_port
         self.dst_store = dst_store
-        self.queue: simpy.Store = simpy.Store(env)
+        self.strict_priority = strict_priority
+        self.queue: simpy.PriorityStore = simpy.PriorityStore(env)
+        # PriorityItem compares on the key only, so the sequence number is what
+        # keeps equal-priority frames in FIFO order.
+        self._seq = itertools.count()
         self.bits_sent: int = 0
         env.process(self._run())
 
     def enqueue(self, frame: _Frame) -> None:
-        self.queue.put(frame)
+        cls = -frame.priority if self.strict_priority else 0
+        self.queue.put(simpy.PriorityItem((cls, next(self._seq)), frame))
 
     def _run(self) -> Generator:
         # Serialization (tx) is the only thing that occupies the wire: the next
@@ -108,7 +123,8 @@ class _LinkChannel:
         # spent serially on top of transmission time and understate capacity
         # (a 2 m/10 ns link previously cost ~2.4 % of throughput at 10 Gb/s).
         while True:
-            frame: _Frame = yield self.queue.get()
+            item = yield self.queue.get()
+            frame: _Frame = item.item
             tx_us = (frame.size_bytes * 8) / self.speed_bps * 1_000_000
             yield self.env.timeout(tx_us)
             self.bits_sent += frame.size_bytes * 8
@@ -129,6 +145,9 @@ class _LinkChannel:
             modbus_unit_id=frame.modbus_unit_id,
             modbus_register_count=frame.modbus_register_count,
             modbus_is_response=frame.modbus_is_response,
+            priority=frame.priority,
+            pn_ar_id=frame.pn_ar_id,
+            pn_cycle_counter=frame.pn_cycle_counter,
         )
         self.dst_store.put(delivered)
 
@@ -171,6 +190,7 @@ def _traffic_gen(
     rng: random.Random,
     delay_us: float = 0.0,
     batch: BatchSpec | None = None,  # only for pattern == "batch"
+    priority: int = 0,
 ) -> Generator:
     if delay_us > 0.0:
         yield env.timeout(delay_us)
@@ -189,6 +209,7 @@ def _traffic_gen(
                         dst_mac=dst_mac,
                         size_bytes=_resolve_size(size_spec, rng),
                         created_at_us=env.now,
+                        priority=priority,
                     )
                 )
     while True:
@@ -203,6 +224,7 @@ def _traffic_gen(
                         dst_mac=dst_mac,
                         size_bytes=_resolve_size(size_spec, rng),
                         created_at_us=env.now,
+                        priority=priority,
                     )
                 )
             yield env.timeout(interval_us * burst_len * rng.uniform(0.5, 2.0))
@@ -217,6 +239,7 @@ def _traffic_gen(
                     dst_mac=dst_mac,
                     size_bytes=_resolve_size(size_spec, rng),
                     created_at_us=env.now,
+                    priority=priority,
                 )
             )
 
@@ -354,6 +377,125 @@ def _broker_queue_sampler(
         samples.append((env.now / 1_000, float(len(inbound.items))))
 
 
+class _PnAR:
+    """Consumer-side state of one PROFINET RT data direction."""
+
+    def __init__(self, cycle_us: float, hold: int) -> None:
+        self.cycle_us = cycle_us
+        self.hold = hold
+        self.last_arrival: float | None = None
+        self.arrival: simpy.Event | None = None
+
+
+class _PnConsumer:
+    """Consumer of PROFINET RT cyclic data for one node, across all its ARs."""
+
+    def __init__(self, env: simpy.Environment) -> None:
+        self.env = env
+        self.ars: dict[int, _PnAR] = {}
+        self.latency_us: list[float] = []
+        self.jitter_us: list[float] = []
+        self.watchdog_expiries: int = 0
+
+    def expect(self, ar_id: int, cycle_us: float, hold: int) -> None:
+        self.ars[ar_id] = _PnAR(cycle_us, hold)
+
+    def record(self, frame: _Frame, now: float) -> None:
+        ar = self.ars.get(frame.pn_ar_id) if frame.pn_ar_id is not None else None
+        if ar is None:
+            return
+        self.latency_us.append(now - frame.created_at_us)
+        if ar.last_arrival is None:
+            # Supervision starts with the first frame, as after AR establishment.
+            self.env.process(self._watchdog(ar))
+        else:
+            self.jitter_us.append(abs(now - ar.last_arrival - ar.cycle_us))
+        ar.last_arrival = now
+        if ar.arrival is not None and not ar.arrival.triggered:
+            ar.arrival.succeed()
+
+    def _watchdog(self, ar: _PnAR) -> Generator:
+        timeout_us = ar.hold * ar.cycle_us
+        while True:
+            ar.arrival = self.env.event()
+            fired = yield ar.arrival | self.env.timeout(timeout_us)
+            if ar.arrival in fired:
+                continue
+            # Real devices abort the AR here; we count it and keep exchanging
+            # (ADR-0005), re-arming once data flows again.
+            self.watchdog_expiries += 1
+            yield ar.arrival
+
+
+def _pn_provider(
+    env: simpy.Environment,
+    src_mac: str,
+    dst_mac: str,
+    ar_id: int,
+    frame_size: int,
+    cycle_us: float,
+    channel: _LinkChannel,
+    priority: int,
+    delay_us: float = 0.0,
+) -> Generator:
+    """PROFINET RT provider: one cyclic I/O frame every update time."""
+    if delay_us > 0.0:
+        yield env.timeout(delay_us)
+    counter = 0
+    while True:
+        channel.enqueue(
+            _Frame(
+                src_mac=src_mac,
+                dst_mac=dst_mac,
+                size_bytes=frame_size,
+                created_at_us=env.now,
+                priority=priority,
+                pn_ar_id=ar_id,
+                pn_cycle_counter=counter,
+            )
+        )
+        counter = (counter + 1) & 0xFFFF
+        yield env.timeout(cycle_us)
+
+
+def _pn_device_receiver(
+    env: simpy.Environment,
+    inbound: simpy.Store,
+    consumer: _PnConsumer,
+) -> Generator:
+    while True:
+        frame: _Frame = yield inbound.get()
+        consumer.record(frame, env.now)
+
+
+def _window_sampler(
+    env: simpy.Environment,
+    values: list[float],
+    aggregate: Callable[[list[float]], float],
+    interval_us: float,
+    samples: Samples,
+) -> Generator:
+    """Aggregate the values appended to *values* during each sampling window."""
+    last_idx = 0
+    while True:
+        yield env.timeout(interval_us)
+        window = values[last_idx:]
+        last_idx = len(values)
+        if window:
+            samples.append((env.now / 1_000, aggregate(window)))
+
+
+def _pn_expiries_sampler(
+    env: simpy.Environment,
+    consumer: _PnConsumer,
+    interval_us: float,
+    samples: Samples,
+) -> Generator:
+    while True:
+        yield env.timeout(interval_us)
+        samples.append((env.now / 1_000, float(consumer.watchdog_expiries)))
+
+
 def _switch_forwarder(
     env: simpy.Environment,
     inbound: simpy.Store,
@@ -404,10 +546,13 @@ def _adapter_receiver(
     env: simpy.Environment,
     inbound: simpy.Store,
     counters: _AdapterCounters,
+    pn: _PnConsumer,
 ) -> Generator:
     while True:
         frame: _Frame = yield inbound.get()
         counters.record(frame, env.now)
+        if frame.pn_ar_id is not None:
+            pn.record(frame, env.now)
 
 
 def _throughput_sampler(
@@ -515,12 +660,15 @@ def run_simulation(
     _sim_state: dict | None = None,
     _n_chunks: int = 1,
 ) -> SimulationResult:
-    from smolpy.core.adapter import Adapter
+    from smolpy.core.adapter import PN_RT_PRIORITY, Adapter
     from smolpy.core.network import SimulationResult
     from smolpy.ethernet.hub import Hub
     from smolpy.ethernet.switch import Switch
     from smolpy.modbus.slave import ModbusSlave
     from smolpy.mqtt.broker import MQTTBroker
+    from smolpy.profinet.device import ProfinetDevice
+
+    endpoint_types = (Adapter, MQTTBroker, ModbusSlave, ProfinetDevice)
 
     env = simpy.Environment()
     duration_us = duration_ms * 1_000
@@ -539,6 +687,15 @@ def run_simulation(
         name: [0] for name, node in network._nodes.items() if isinstance(node, Hub)
     }
 
+    pn_consumers: dict[str, _PnConsumer] = {
+        name: _PnConsumer(env)
+        for name, node in network._nodes.items()
+        if isinstance(node, (Adapter, ProfinetDevice))
+    }
+
+    def _strict(node: object) -> bool:
+        return not (isinstance(node, Switch) and node.qos == "fifo")
+
     # Build directed link channels from topology
     next_port: dict[str, int] = defaultdict(int)
     out_channels: dict[str, dict[int, _LinkChannel]] = defaultdict(dict)
@@ -553,11 +710,12 @@ def run_simulation(
         port_b = next_port[b.name]
         next_port[b.name] += 1
 
+        # ch_ab is a's egress queue, ch_ba is b's — each follows its owner's QoS.
         ch_ab = _LinkChannel(
-            env, link.speed_bps, link.propagation_delay_us, port_b, inbound[b.name]
+            env, link.speed_bps, link.propagation_delay_us, port_b, inbound[b.name], _strict(a)
         )
         ch_ba = _LinkChannel(
-            env, link.speed_bps, link.propagation_delay_us, port_a, inbound[a.name]
+            env, link.speed_bps, link.propagation_delay_us, port_a, inbound[a.name], _strict(b)
         )
 
         out_channels[a.name][port_a] = ch_ab
@@ -565,20 +723,58 @@ def run_simulation(
         in_channels[b.name].append(ch_ab)
         in_channels[a.name].append(ch_ba)
 
-        if isinstance(a, (Adapter, MQTTBroker, ModbusSlave)):
+        if isinstance(a, endpoint_types):
             adapter_out[a.name] = ch_ab
             if isinstance(b, Switch):
                 static_macs[b.name][a.mac] = port_b
-        if isinstance(b, (Adapter, MQTTBroker, ModbusSlave)):
+        if isinstance(b, endpoint_types):
             adapter_out[b.name] = ch_ba
             if isinstance(a, Switch):
                 static_macs[a.name][b.mac] = port_a
 
     # Start one process per node
+    ar_ids = itertools.count()
     for name, node in network._nodes.items():
         if isinstance(node, Adapter):
-            env.process(_adapter_receiver(env, inbound[name], adapter_counters[name]))
+            env.process(
+                _adapter_receiver(env, inbound[name], adapter_counters[name], pn_consumers[name])
+            )
             ch = adapter_out.get(name)
+            for pn in node.profinet_specs:
+                ar_id = next(ar_ids)
+                device_ch = adapter_out.get(pn.device.name)
+                if ch is None or device_ch is None:
+                    continue  # one side not wired — no cyclic exchange possible
+                cycle_us = pn.cycle_ms * 1_000
+                delay_us = pn.delay_ms * 1_000
+                pn_consumers[name].expect(ar_id, cycle_us, pn.hold)  # inputs
+                pn_consumers[pn.device.name].expect(ar_id, cycle_us, pn.hold)  # outputs
+                env.process(
+                    _pn_provider(
+                        env,
+                        node.mac,
+                        pn.device.mac,
+                        ar_id,
+                        pn.output_frame_size,
+                        cycle_us,
+                        ch,
+                        PN_RT_PRIORITY,
+                        delay_us,
+                    )
+                )
+                env.process(
+                    _pn_provider(
+                        env,
+                        pn.device.mac,
+                        node.mac,
+                        ar_id,
+                        pn.input_frame_size,
+                        cycle_us,
+                        device_ch,
+                        PN_RT_PRIORITY,
+                        delay_us,
+                    )
+                )
             if ch:
                 for spec in node.traffic_specs:
                     env.process(
@@ -593,6 +789,7 @@ def run_simulation(
                             rng,
                             delay_us=spec.delay_ms * 1_000,
                             batch=spec.batch,
+                            priority=spec.priority,
                         )
                     )
                 for spec in node.mqtt_specs:
@@ -639,6 +836,8 @@ def run_simulation(
             ch = adapter_out.get(name)
             if ch:
                 env.process(_modbus_slave_responder(env, inbound[name], node.mac, node.unit_id, ch))
+        elif isinstance(node, ProfinetDevice):
+            env.process(_pn_device_receiver(env, inbound[name], pn_consumers[name]))
         elif isinstance(node, Switch):
             env.process(
                 _switch_forwarder(env, inbound[name], out_channels[name], static_macs.get(name))
@@ -688,6 +887,16 @@ def run_simulation(
             env.process(
                 _modbus_latency_sampler(env, adapter_counters[target.name], interval_us, samples)
             )
+        elif obs.metric == "pn_latency" and target.name in pn_consumers:
+            pn = pn_consumers[target.name]
+            env.process(
+                _window_sampler(env, pn.latency_us, lambda w: sum(w) / len(w), interval_us, samples)
+            )
+        elif obs.metric == "pn_jitter" and target.name in pn_consumers:
+            pn = pn_consumers[target.name]
+            env.process(_window_sampler(env, pn.jitter_us, max, interval_us, samples))
+        elif obs.metric == "pn_watchdog_expiries" and target.name in pn_consumers:
+            env.process(_pn_expiries_sampler(env, pn_consumers[target.name], interval_us, samples))
 
     if _n_chunks > 1:
         chunk_us = duration_us / _n_chunks

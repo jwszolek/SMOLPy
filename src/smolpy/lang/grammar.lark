@@ -8,11 +8,13 @@ statement: adapter_decl
          | hub_decl
          | mqtt_broker_decl
          | modbus_slave_decl
+         | profinet_device_decl
          | link_decl
          | flow_decl
          | publish_decl
          | route_decl
          | poll_decl
+         | control_decl
          | observe_decl
          | simulate_decl
 
@@ -21,11 +23,13 @@ switch_decl:       "switch" WORD arg*
 hub_decl:          "hub" WORD arg*
 mqtt_broker_decl:  "mqtt_broker" WORD arg*
 modbus_slave_decl: "modbus_slave" WORD arg*
-link_decl:         "link" WORD "--" WORD arg*
+profinet_device_decl: "profinet_device" WORD arg*
+link_decl:       "link" WORD "--" WORD arg*
 flow_decl:         "flow" WORD "->" WORD arg*
 publish_decl:      "publish" WORD "->" WORD arg*
 route_decl:        "route" WORD arg+ "->" node_list
 poll_decl:         "poll" WORD "->" WORD arg*
+control_decl:      "control" WORD "->" WORD arg*
 observe_decl:      "observe" WORD "on" WORD arg*
 simulate_decl:     "simulate" arg*
 

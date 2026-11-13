@@ -37,10 +37,10 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo]
 ```
 
-`mode` defaults to `store-and-forward`.
+`mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch.
 
 ### `hub` — Layer-1 hub
 
@@ -60,6 +60,12 @@ mqtt_broker <name> ip=<ip>
 modbus_slave <name> ip=<ip> unit_id=<n>
 ```
 
+### `profinet_device` — PROFINET IO device
+
+```
+profinet_device <name> ip=<ip>
+```
+
 ### `link` — physical connection between two nodes
 
 ```
@@ -69,10 +75,10 @@ link <a> -- <b> speed=<mbps> length=<metres>
 ### `flow` — Ethernet traffic (Adapter → Adapter)
 
 ```
-flow <src> -> <dst> rate=<fps> [size=<bytes>|imix] [pattern=constant|poisson|bursty|batch] [batch=<k>|geom:<mean>|pareto:<shape>] [delay=<ms>]
+flow <src> -> <dst> rate=<fps> [size=<bytes>|imix] [pattern=constant|poisson|bursty|batch] [batch=<k>|geom:<mean>|pareto:<shape>] [delay=<ms>] [priority=<0-7>]
 ```
 
-`size` defaults to `512`, `pattern` to `constant`, `delay` to `0`. `batch` (default `1`) sets the group size of the `batch` pattern, in which groups of frames arrive together at Poisson instants while `rate` stays the average frames/s.
+`size` defaults to `512`, `pattern` to `constant`, `delay` to `0`, `priority` (802.1Q PCP) to `0`. `batch` (default `1`) sets the group size of the `batch` pattern, in which groups of frames arrive together at Poisson instants while `rate` stays the average frames/s.
 
 ### `publish` — MQTT PUBLISH (Adapter → MQTTBroker)
 
@@ -98,6 +104,14 @@ poll <master> -> <slave> register=<addr> count=<n> [rate=<polls/s>] [delay=<ms>]
 
 `rate` defaults to `1.0`, `delay` to `0`.
 
+### `control` — PROFINET RT cyclic I/O (Adapter controller → ProfinetDevice)
+
+```
+control <controller> -> <device> cycle=<ms> inputs=<bytes> outputs=<bytes> [hold=<n>] [delay=<ms>]
+```
+
+Sets up one Application Relationship: the controller sends `outputs` bytes and the device sends `inputs` bytes, each every `cycle` ms. `cycle` must be 1, 2, 4, … 512; `inputs` and `outputs` 1–1440; `hold` (watchdog = `hold × cycle`) 1–255, default `3`; `delay` defaults to `0`. At most one `control` per controller–device pair.
+
 ### `observe` — register a metric to sample
 
 ```
@@ -111,6 +125,9 @@ observe <metric> on <node> every=<ms>
 | `bytes_sent` | MB | Adapter |
 | `bytes_received` | MB | Adapter |
 | `modbus_latency` | µs | Adapter (Modbus master) |
+| `pn_latency` | µs | Adapter (PROFINET controller), ProfinetDevice |
+| `pn_jitter` | µs | Adapter (PROFINET controller), ProfinetDevice |
+| `pn_watchdog_expiries` | count | Adapter (PROFINET controller), ProfinetDevice |
 | `queue_depth` | frames | Switch |
 | `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
@@ -135,7 +152,7 @@ Two error classes, both reported as `file:line: message`:
 | Class | Raised for |
 |---|---|
 | `SMOLSyntaxError` | Malformed source: unknown keyword, missing `=`, unclosed `{`, missing required argument |
-| `SMOLSemanticError` | Well-formed but invalid: undeclared node reference, duplicate node name, wrong node type for a statement (e.g. `poll` targeting a `switch`), invalid metric for a node type, missing or duplicate `simulate` statement |
+| `SMOLSemanticError` | Well-formed but invalid: undeclared node reference, duplicate node name, wrong node type for a statement (e.g. `poll` targeting a `switch`), invalid metric for a node type, out-of-range parameter (e.g. `control cycle=3`, `priority=9`, `qos=wfq`), missing or duplicate `simulate` statement |
 
 The CLI prints these as a clean error panel with no Python traceback.
 

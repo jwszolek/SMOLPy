@@ -8,6 +8,7 @@ from lark.exceptions import VisitError
 
 from smolpy.lang.ast import (
     AdapterDecl,
+    ControlDecl,
     Decl,
     FlowDecl,
     HubDecl,
@@ -17,6 +18,7 @@ from smolpy.lang.ast import (
     NetworkDecl,
     ObserveDecl,
     PollDecl,
+    ProfinetDeviceDecl,
     PublishDecl,
     RouteDecl,
     SimulateDecl,
@@ -93,6 +95,7 @@ class _SmolTransformer(Transformer):
             ports=int(_require(kw, "ports", file=self.file, line=meta.line, stmt="switch")),
             mode=str(kw.get("mode", "store-and-forward")),
             line=meta.line,
+            qos=str(kw.get("qos", "strict")),
         )
 
     def hub_decl(self, meta: Any, children: list) -> HubDecl:
@@ -125,6 +128,15 @@ class _SmolTransformer(Transformer):
             line=meta.line,
         )
 
+    def profinet_device_decl(self, meta: Any, children: list) -> ProfinetDeviceDecl:
+        name, *pairs = children
+        kw = dict(pairs)
+        return ProfinetDeviceDecl(
+            name=str(name),
+            ip=str(_require(kw, "ip", file=self.file, line=meta.line, stmt="profinet_device")),
+            line=meta.line,
+        )
+
     def link_decl(self, meta: Any, children: list) -> LinkDecl:
         a, b, *pairs = children
         kw = dict(pairs)
@@ -149,6 +161,7 @@ class _SmolTransformer(Transformer):
             delay_ms=float(kw.get("delay", 0.0)),
             line=meta.line,
             batch=str(kw.get("batch", "1")),
+            priority=int(kw.get("priority", 0)),
         )
 
     def publish_decl(self, meta: Any, children: list) -> PublishDecl:
@@ -186,6 +199,24 @@ class _SmolTransformer(Transformer):
             register=int(_require(kw, "register", file=self.file, line=meta.line, stmt="poll")),
             count=int(_require(kw, "count", file=self.file, line=meta.line, stmt="poll")),
             rate=float(kw.get("rate", 1.0)),
+            delay_ms=float(kw.get("delay", 0.0)),
+            line=meta.line,
+        )
+
+    def control_decl(self, meta: Any, children: list) -> ControlDecl:
+        controller, device, *pairs = children
+        kw = dict(pairs)
+
+        def req(key: str) -> Any:
+            return _require(kw, key, file=self.file, line=meta.line, stmt="control")
+
+        return ControlDecl(
+            controller=str(controller),
+            device=str(device),
+            cycle=int(req("cycle")),
+            inputs=int(req("inputs")),
+            outputs=int(req("outputs")),
+            hold=int(kw.get("hold", 3)),
             delay_ms=float(kw.get("delay", 0.0)),
             line=meta.line,
         )

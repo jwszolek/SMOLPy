@@ -1,6 +1,6 @@
 # SMOLPy Examples
 
-Nine ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, and Modbus TCP polling.  Every example opens a live desktop dashboard as the simulation runs.
+Ten ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, and PROFINET RT cyclic I/O.  Every example opens a live desktop dashboard as the simulation runs.
 
 ## Prerequisites
 
@@ -298,6 +298,29 @@ Simulation: **30 s**
 
 ```bash
 uv run smolpy run examples/example_modbus.py
+```
+
+---
+
+### 10. `example_profinet.py` — PROFINET RT cell with a project download
+
+A PLC exchanges 2 ms cyclic I/O with three PROFINET IO devices (watchdog 3 × 2 ms = 6 ms) while an engineering station on a 1 Gb/s link downloads a project to the same PLC in bursts of 100 full frames, starting at t = 2 s. Every burst queues in front of the PLC's 100 Mb/s switch port — the same port that carries the devices' input frames. Set `QOS` at the top of the script (or `qos=` on the switch in the `.smol` file) to `strict` or `fifo` to compare.
+
+```
+[eng-station] ── 1 Gbps / 20 m ──┐
+[io-1 … io-3] ── 100 Mbps / 15 m ─┼── [cell-sw] ── 100 Mbps / 5 m ── [plc]
+```
+
+Simulation: **10 s**
+
+| Switch `qos` | `pn_jitter:plc` max | `pn_latency:plc` max | `pn_watchdog_expiries:plc` |
+|---|---|---|---|
+| `strict` (default) | ~0.12 ms | ~0.07 ms | 0 — RT frames overtake every burst |
+| `fifo` | ~18 ms | ~46 ms | 936 — RT frames wait behind ~12 ms bursts, longer than the 6 ms watchdog |
+
+```bash
+uv run smolpy run examples/example_profinet.py
+uv run smolpy run examples/example_profinet.smol
 ```
 
 ---

@@ -28,6 +28,9 @@ _UNITS: dict[str, str] = {
     "utilization": "%",
     "collision_rate": "/s",
     "broker_queue": "msgs",
+    "modbus_latency": "µs",
+    "pn_latency": "µs",
+    "pn_jitter": "µs",
 }
 
 

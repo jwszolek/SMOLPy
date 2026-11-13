@@ -17,6 +17,9 @@ MetricName = Literal[
     "bytes_received",
     "broker_queue",
     "modbus_latency",
+    "pn_latency",
+    "pn_jitter",
+    "pn_watchdog_expiries",
 ]
 
 

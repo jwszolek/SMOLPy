@@ -33,6 +33,7 @@ nav:
   - SMOL Language Reference: language-reference.md
   - MQTT: mqtt.md
   - Modbus TCP: modbus.md
+  - PROFINET RT: profinet.md
   - Simulation Engine: simulation-engine.md
   - Dashboard: dashboard.md
   - Examples: examples.md
@@ -41,6 +42,7 @@ nav:
       - ADR-0002 Modbus TCP Implementation: adr/0002-modbus-tcp-implementation.md
       - ADR-0003 SMOL External DSL: adr/0003-smol-external-dsl.md
       - ADR-0004 Pluggable Execution Backends: adr/0004-execution-backends.md
+      - ADR-0005 PROFINET RT Cyclic I/O: adr/0005-profinet-rt.md
 
 markdown_extensions:
   - admonition
