@@ -1,7 +1,16 @@
 # ADR-0004: Pluggable Execution Backends (ns-3 first)
 
 **Status:** Proposed  
-**Date:** 2026-10-24
+**Date:** 2026-10-24  
+**Amended by:** ADR-0007 (2026-11-13)
+
+> **Amendment (ADR-0007).** Backends no longer consume the `.smol` AST. They consume the execution-independent **Scenario IR** (`smolpy.model.Scenario`), which both the Python API and `.smol` lower into. As a result:
+>
+> - The Python API is **not** SimPy-only: `Network.simulate(..., backend="ns3")` is supported.
+> - Semantic validation lives in `smolpy.model.validate`, not in `lang/validator.py`.
+> - The ns-3 code generator reads the Scenario IR, not the AST.
+>
+> The ns-3 approach, the SMOL → ns-3 mapping, results interchange and capability checks below are unchanged. Superseded passages are marked in place. Batch runs and the cross-backend equivalence suite are defined in ADR-0009. The ns-3 backend is Phase 6 of the [roadmap](../roadmap.md).
 
 ---
 
@@ -27,7 +36,7 @@ Two needs follow from this:
 **Where backends attach**
 
 - **A — backends consume the Python `Network` object.** Lets the Python API also select a backend, but every backend must reverse-engineer intent from runtime objects (e.g. `Adapter.traffic_specs`), and the Python API's dynamic, imperative nature is harder to translate faithfully.
-- **B — backends consume the `.smol` AST (`NetworkDecl`).** The AST is already a clean, typed, declarative description of the whole scenario, independent of SimPy. **Chosen.**
+- **B — backends consume the `.smol` AST (`NetworkDecl`).** The AST is already a clean, typed, declarative description of the whole scenario, independent of SimPy. **Chosen originally; superseded by ADR-0007, where backends consume the Scenario IR.**
 
 **How the ns-3 backend runs**
 
@@ -46,7 +55,7 @@ Introduce a `backends/` package. Every backend implements one protocol and consu
 ```
 src/smolpy/
 ├── lang/
-│   ├── validator.py      # backend-independent semantic checks (moved out of interpreter.py)
+│   ├── validator.py      # backend-independent semantic checks (superseded: smolpy.model.validate, ADR-0007)
 │   └── ...
 └── backends/
     ├── __init__.py       # registry: name → Backend
@@ -64,13 +73,13 @@ class Backend(Protocol):
     name: str
     capabilities: Capabilities          # supported statements, metrics, simulate modes
 
-    def run(self, decl: NetworkDecl, *, file: str) -> SimulationResult: ...
+    def run(self, decl: NetworkDecl, *, file: str) -> SimulationResult: ...  # ADR-0007: run(scenario: Scenario)
 ```
 
 The `.smol` pipeline becomes three stages:
 
 1. **parse** — `parse_smol()` (unchanged)
-2. **validate** — backend-independent semantic checks (undeclared nodes, wrong node types, duplicate names, metric/node-type compatibility, exactly one `simulate`) move from `interpreter.py` into `lang/validator.py`; then a **capability check** rejects anything the selected backend cannot execute, with a `SMOLSemanticError` such as `ns3 backend does not support metric 'collision_rate'`.
+2. **validate** — backend-independent semantic checks (undeclared nodes, wrong node types, duplicate names, metric/node-type compatibility, exactly one `simulate`) move from `interpreter.py` into `lang/validator.py` (*superseded by ADR-0007: `smolpy.model.validate`, shared by the Python API*); then a **capability check** rejects anything the selected backend cannot execute, with a `SMOLSemanticError` such as `ns3 backend does not support metric 'collision_rate'`.
 3. **execute** — `backend.run(decl)`
 
 The SimPy backend is today's `_Interpreter.build_and_run()` moved behind the protocol, with no behavioural change. All existing tests must pass unchanged.
@@ -85,7 +94,7 @@ smolpy run topology.smol --backend ns3
 smolpy backends                             # list backends and their capabilities
 ```
 
-The Python API (`Network.simulate()`) remains SimPy-only; multi-backend execution is a feature of the language layer. Python users who need it load a `.smol` file (or build a `NetworkDecl`) and call `smolpy.backends.get("ns3").run(decl)`.
+~~The Python API (`Network.simulate()`) remains SimPy-only; multi-backend execution is a feature of the language layer.~~ *Superseded by ADR-0007:* the Python API selects a backend directly with `Network.simulate(..., backend="ns3")`, because both front ends produce the same Scenario IR.
 
 ### ns-3 backend
 
@@ -156,5 +165,5 @@ The ns-3 suite is skipped automatically when ns-3 is not available, and runs in 
 - ns-3 is a large, optional external dependency that users must install and build themselves; it cannot be a regular PyPI dependency.
 - SMOLPy gains C++ code (Applications and samplers) that must be maintained against the pinned ns-3 release.
 - Metric parity is an ongoing cost: every new metric or statement needs an implementation, or an explicit capability exclusion, in every backend.
-- The Python API stays SimPy-only for now; scenarios written in Python cannot use other backends without first being expressed as `.smol`.
+- ~~The Python API stays SimPy-only for now; scenarios written in Python cannot use other backends without first being expressed as `.smol`.~~ *Resolved by ADR-0007.*
 - ns-3 runs are much slower than SimPy runs, so large parameter sweeps remain a SimPy task, with ns-3 used to validate selected points.
