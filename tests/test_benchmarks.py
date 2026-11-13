@@ -14,21 +14,16 @@ from smolpy.sim import engine
 
 @pytest.fixture
 def injected_frames(monkeypatch):
-    """Count frames created by generators/endpoints, excluding per-hop copies."""
-    counts = {"created": 0, "hops": 0}
+    """Count frames built by generators and endpoints. Deliveries reuse the
+    frame and flooding copies it with copy.copy, neither calls __init__."""
+    counts = {"created": 0}
     frame_init = engine._Frame.__init__
-    deliver = engine._LinkChannel._deliver
 
     def counting_init(self, *args, **kwargs):
         counts["created"] += 1
         frame_init(self, *args, **kwargs)
 
-    def counting_deliver(self, in_flight):
-        counts["hops"] += 1  # each delivery builds exactly one copy of the frame
-        return deliver(self, in_flight)
-
     monkeypatch.setattr(engine._Frame, "__init__", counting_init)
-    monkeypatch.setattr(engine._LinkChannel, "_deliver", counting_deliver)
     return counts
 
 
@@ -38,7 +33,7 @@ def injected_frames(monkeypatch):
 def test_scenario_injects_the_expected_number_of_frames(scenario, frames, injected_frames) -> None:
     built = SCENARIOS[scenario](frames, False)
     built.network.simulate(duration=built.duration_ms)
-    injected = injected_frames["created"] - injected_frames["hops"]
+    injected = injected_frames["created"]
     assert injected == pytest.approx(built.frames_expected, rel=0.03)
 
 
