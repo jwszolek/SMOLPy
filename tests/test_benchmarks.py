@@ -17,18 +17,18 @@ def injected_frames(monkeypatch):
     """Count frames created by generators/endpoints, excluding per-hop copies."""
     counts = {"created": 0, "hops": 0}
     frame_init = engine._Frame.__init__
-    deliver = engine._LinkChannel._propagate_and_deliver
+    deliver = engine._LinkChannel._deliver
 
     def counting_init(self, *args, **kwargs):
         counts["created"] += 1
         frame_init(self, *args, **kwargs)
 
-    def counting_deliver(self, frame):
+    def counting_deliver(self, in_flight):
         counts["hops"] += 1  # each delivery builds exactly one copy of the frame
-        return deliver(self, frame)
+        return deliver(self, in_flight)
 
     monkeypatch.setattr(engine._Frame, "__init__", counting_init)
-    monkeypatch.setattr(engine._LinkChannel, "_propagate_and_deliver", counting_deliver)
+    monkeypatch.setattr(engine._LinkChannel, "_deliver", counting_deliver)
     return counts
 
 

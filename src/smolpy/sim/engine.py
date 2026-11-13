@@ -60,19 +60,33 @@ def _resolve_size(size: int | str, rng: random.Random) -> int:
 # ---------------------------------------------------------------------------
 
 
+# Per-frame values (latency, RTT, jitter) are not kept for the whole run.
+# Each observing sampler registers its own window buffer in a list of sinks
+# and clears it after every sample; with no observer the value is not even
+# computed. Memory therefore depends on the sampling window, not on the
+# run length (ADR-0006 §5).
+Sinks = list[list[float]]
+
+
+def _emit(sinks: Sinks, value: float) -> None:
+    for window in sinks:
+        window.append(value)
+
+
 class _AdapterCounters:
     def __init__(self) -> None:
         self.bytes_received: int = 0
         self.frames_received: int = 0
-        self.latency_us: list[float] = []
-        self.modbus_rtt_us: list[float] = []
+        self.latency_sinks: Sinks = []
+        self.modbus_rtt_sinks: Sinks = []
 
     def record(self, frame: _Frame, now: float) -> None:
         self.bytes_received += frame.size_bytes
         self.frames_received += 1
-        self.latency_us.append(now - frame.created_at_us)
-        if frame.modbus_is_response:
-            self.modbus_rtt_us.append(now - frame.created_at_us)
+        if self.latency_sinks:
+            _emit(self.latency_sinks, now - frame.created_at_us)
+        if frame.modbus_is_response and self.modbus_rtt_sinks:
+            _emit(self.modbus_rtt_sinks, now - frame.created_at_us)
 
 
 # ---------------------------------------------------------------------------
@@ -118,20 +132,26 @@ class _LinkChannel:
         # Serialization (tx) is the only thing that occupies the wire: the next
         # frame's transmission starts as soon as this one's bits have been put
         # on the wire. Propagation delay is a fixed, one-time latency incurred
-        # by that frame in flight, not a hold on the link, so it runs in its
-        # own process instead of blocking this loop — otherwise it would be
+        # by that frame in flight, not a hold on the link, so it elapses
+        # in parallel instead of blocking this loop — otherwise it would be
         # spent serially on top of transmission time and understate capacity
         # (a 2 m/10 ns link previously cost ~2.4 % of throughput at 10 Gb/s).
+        #
+        # The propagation delay is a single timeout carrying the frame, with
+        # delivery as its callback. A process per frame would cost a Process
+        # object, its Initialize event and a generator resume on every hop
+        # (ADR-0006 §5).
         while True:
             item = yield self.queue.get()
             frame: _Frame = item.item
             tx_us = (frame.size_bytes * 8) / self.speed_bps * 1_000_000
             yield self.env.timeout(tx_us)
             self.bits_sent += frame.size_bytes * 8
-            self.env.process(self._propagate_and_deliver(frame))
+            in_flight = self.env.timeout(self.prop_delay_us, frame)
+            in_flight.callbacks.append(self._deliver)
 
-    def _propagate_and_deliver(self, frame: _Frame) -> Generator:
-        yield self.env.timeout(self.prop_delay_us)
+    def _deliver(self, in_flight: simpy.Event) -> None:
+        frame: _Frame = in_flight.value
         # Copy frame so flooding to multiple channels doesn't create in_port conflicts
         delivered = _Frame(
             src_mac=frame.src_mac,
@@ -393,8 +413,8 @@ class _PnConsumer:
     def __init__(self, env: simpy.Environment) -> None:
         self.env = env
         self.ars: dict[int, _PnAR] = {}
-        self.latency_us: list[float] = []
-        self.jitter_us: list[float] = []
+        self.latency_sinks: Sinks = []
+        self.jitter_sinks: Sinks = []
         self.watchdog_expiries: int = 0
 
     def expect(self, ar_id: int, cycle_us: float, hold: int) -> None:
@@ -404,12 +424,13 @@ class _PnConsumer:
         ar = self.ars.get(frame.pn_ar_id) if frame.pn_ar_id is not None else None
         if ar is None:
             return
-        self.latency_us.append(now - frame.created_at_us)
+        if self.latency_sinks:
+            _emit(self.latency_sinks, now - frame.created_at_us)
         if ar.last_arrival is None:
             # Supervision starts with the first frame, as after AR establishment.
             self.env.process(self._watchdog(ar))
-        else:
-            self.jitter_us.append(abs(now - ar.last_arrival - ar.cycle_us))
+        elif self.jitter_sinks:
+            _emit(self.jitter_sinks, abs(now - ar.last_arrival - ar.cycle_us))
         ar.last_arrival = now
         if ar.arrival is not None and not ar.arrival.triggered:
             ar.arrival.succeed()
@@ -468,21 +489,35 @@ def _pn_device_receiver(
         consumer.record(frame, env.now)
 
 
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values)
+
+
 def _window_sampler(
     env: simpy.Environment,
-    values: list[float],
+    sinks: Sinks,
     aggregate: Callable[[list[float]], float],
     interval_us: float,
     samples: Samples,
 ) -> Generator:
-    """Aggregate the values appended to *values* during each sampling window."""
-    last_idx = 0
+    """Aggregate the values emitted into *sinks* during each sampling window."""
+    window: list[float] = []
+    sinks.append(window)  # registered now, before any frame can arrive
+    return _window_loop(env, window, aggregate, interval_us, samples)
+
+
+def _window_loop(
+    env: simpy.Environment,
+    window: list[float],
+    aggregate: Callable[[list[float]], float],
+    interval_us: float,
+    samples: Samples,
+) -> Generator:
     while True:
         yield env.timeout(interval_us)
-        window = values[last_idx:]
-        last_idx = len(values)
         if window:
             samples.append((env.now / 1_000, aggregate(window)))
+            window.clear()
 
 
 def _pn_expiries_sampler(
@@ -568,38 +603,6 @@ def _throughput_sampler(
         last_bytes = counters.bytes_received
         mbps = (delta * 8) / (interval_us / 1e6) / 1e6
         samples.append((env.now / 1_000, mbps))
-
-
-def _latency_sampler(
-    env: simpy.Environment,
-    counters: _AdapterCounters,
-    interval_us: float,
-    samples: Samples,
-) -> Generator:
-    last_idx = 0
-    while True:
-        yield env.timeout(interval_us)
-        window = counters.latency_us[last_idx:]
-        last_idx = len(counters.latency_us)
-        if window:
-            avg = sum(window) / len(window)
-            samples.append((env.now / 1_000, avg))
-
-
-def _modbus_latency_sampler(
-    env: simpy.Environment,
-    counters: _AdapterCounters,
-    interval_us: float,
-    samples: Samples,
-) -> Generator:
-    last_idx = 0
-    while True:
-        yield env.timeout(interval_us)
-        window = counters.modbus_rtt_us[last_idx:]
-        last_idx = len(counters.modbus_rtt_us)
-        if window:
-            avg = sum(window) / len(window)
-            samples.append((env.now / 1_000, avg))
 
 
 def _queue_depth_sampler(
@@ -864,7 +867,8 @@ def run_simulation(
                 _throughput_sampler(env, adapter_counters[target.name], interval_us, samples)
             )
         elif obs.metric == "latency" and isinstance(target, Adapter):
-            env.process(_latency_sampler(env, adapter_counters[target.name], interval_us, samples))
+            sinks = adapter_counters[target.name].latency_sinks
+            env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
         elif obs.metric == "queue_depth" and isinstance(target, Switch):
             env.process(_queue_depth_sampler(env, out_channels[target.name], interval_us, samples))
         elif obs.metric == "collision_rate" and isinstance(target, Hub):
@@ -884,17 +888,14 @@ def run_simulation(
         elif obs.metric == "broker_queue" and isinstance(target, MQTTBroker):
             env.process(_broker_queue_sampler(env, inbound[target.name], interval_us, samples))
         elif obs.metric == "modbus_latency" and isinstance(target, Adapter):
-            env.process(
-                _modbus_latency_sampler(env, adapter_counters[target.name], interval_us, samples)
-            )
+            sinks = adapter_counters[target.name].modbus_rtt_sinks
+            env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
         elif obs.metric == "pn_latency" and target.name in pn_consumers:
-            pn = pn_consumers[target.name]
-            env.process(
-                _window_sampler(env, pn.latency_us, lambda w: sum(w) / len(w), interval_us, samples)
-            )
+            sinks = pn_consumers[target.name].latency_sinks
+            env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
         elif obs.metric == "pn_jitter" and target.name in pn_consumers:
-            pn = pn_consumers[target.name]
-            env.process(_window_sampler(env, pn.jitter_us, max, interval_us, samples))
+            sinks = pn_consumers[target.name].jitter_sinks
+            env.process(_window_sampler(env, sinks, max, interval_us, samples))
         elif obs.metric == "pn_watchdog_expiries" and target.name in pn_consumers:
             env.process(_pn_expiries_sampler(env, pn_consumers[target.name], interval_us, samples))
 
