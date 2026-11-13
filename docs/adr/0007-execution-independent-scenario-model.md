@@ -1,7 +1,7 @@
 # ADR-0007: Execution-Independent Scenario Model (Scenario IR)
 
-**Status:** Proposed  
-**Date:** 2026-11-13  
+**Status:** Accepted  
+**Date:** 2026-11-13 (revised the same day after ADR-0006 was implemented)  
 **Amends:** ADR-0004 (backends consume the Scenario IR instead of the `.smol` AST)
 
 ---
@@ -26,6 +26,23 @@ Today the description of a network and its execution are tangled together:
 
 ## Decision
 
+### Scope of the first phase
+
+The first phase covers **modelling and simulation only**:
+- the IR;
+- the SimPy engine reading it;
+- validation;
+- the semantics contract;
+- execution statistics;
+- per-source random streams.
+
+User-facing changes come later, once the Rust engine (ADR-0008) has shown its value in practice:
+- live and text dashboards through the backend interface;
+- a `--backend` option of `smolpy run`;
+- `.smol` lowering straight to the IR.
+
+Until then, the live mode keeps its current SimPy-only path, and `.smol` reaches the IR through the `Network` the interpreter already builds.
+
 ### Layers
 
 ```
@@ -47,14 +64,18 @@ Python API ─┐
     - `Network` becomes a builder of the IR. Its public methods (`adapter()`, `sends()`, `controls()`, …) are unchanged.
     - `Network.to_scenario()` returns the IR.
     - `Network.simulate(duration, ..., backend="simpy")` gains the `backend` argument.
-- **`.smol`:** the interpreter stops building a `Network` and lowers the AST straight to a `Scenario`. `smolpy run file.smol --backend <name>`.
+- **IR fields** follow the current model, including:
+    - `SwitchNode.qos` and `SwitchNode.mac_table` (`learning` / `topology`);
+    - per-traffic `priority`, `delay_ms` and `batch`;
+    - PROFINET `cycle`, `inputs`, `outputs` and `hold`.
+- **`.smol`:** in the first phase the interpreter keeps building a `Network`, and gets the IR from `to_scenario()`. Lowering the AST straight to a `Scenario` and `smolpy run file.smol --backend <name>` come with the user-facing phase.
 - **Validation:** one module, `smolpy.model.validate`, holds every semantic rule:
     - references and declaration order;
     - node-type compatibility of statements and metrics;
     - value ranges: PROFINET cycle and data sizes, priority, `qos`, unit_id;
     - duplicate ARs, exactly one run configuration.
 
-    Errors carry a source location when one is known (`.smol` line; for the Python API the builder call that created the element). The Python API and `.smol` raise the same rules: `ValueError` from Python, `SMOLSemanticError` from `.smol`.
+    Errors name the element they concern, e.g. `flow tx -> rx: priority 9 out of range 0-7`. `.smol` errors also carry the source line. The Python API does not record call sites: that would cost a stack capture per builder call. The Python API and `.smol` raise the same rules: `ValueError` from Python, `SMOLSemanticError` from `.smol`.
 - **Backends:** the `Backend` protocol of ADR-0004 takes a `Scenario`:
 
     ```python
@@ -65,7 +86,15 @@ Python API ─┐
     ```
 
     A capability check runs after validation and rejects anything the chosen backend cannot execute, before any simulation starts.
-- **SimPy engine:** `sim/engine.py` is refactored to read the `Scenario` instead of the `Network`'s private attributes. Its behaviour stays the same; this is checked against the ADR-0006 output hashes and the full test suite.
+- **Execution statistics.** `SimulationResult.stats` carries what the backend reports about its own run:
+    - `backend`;
+    - `events` processed;
+    - `wall_s` of the run itself, without model building.
+
+    The ADR-0006 harness reads these instead of SimPy internals (`Environment._eid` and a patched `Environment` class). This makes SimPy and Rust measurable the same way.
+- **Live mode** is not part of the `Backend` protocol in the first phase. When it moves there, it becomes an optional capability with a per-chunk callback, not shared dictionaries. Only SimPy will declare it (ADR-0008).
+- **SimPy engine:** `sim/engine.py` is refactored to read the `Scenario` instead of the `Network`'s private attributes. Its behaviour stays the same: B1–B4 must give unchanged output hashes, and the full test suite must pass. It must also stay as fast as the optimised engine: the reference is the `optimised` result set (ADR-0006) and B4.
+- **`SimulationResult`** references the `Scenario` it was produced from, not the `Network` builder.
 
 ### Serialisation
 
@@ -84,9 +113,11 @@ Python API ─┐
 A normative document, `docs/model-semantics.md`, defines what every IR element means independently of any engine:
 - frame-size formulas for every protocol;
 - egress queueing: 8 strict 802.1Q classes, FIFO within a class, non-preemptive, `qos=fifo` override;
-- MAC learning and flooding rules;
+- MAC learning and flooding rules:
+    - `learning` and `topology` tables; for `topology`, breadth-first search through switches and hubs, ties going to the lowest port;
+    - end stations accept only frames addressed to their own MAC;
 - **timing:**
-    - time units: integer nanoseconds as the canonical unit;
+    - **units:** the IR keeps values in the units users give: ms, m, Mb/s, bytes. The contract defines how they convert to simulated time. Each engine uses its own internal representation: SimPy float µs, Rust integer ns. The IR stays readable and independent of any engine.
     - propagation constant: 2·10⁸ m/s;
     - when generators first fire;
 - **metric definitions:** what each metric aggregates over a window, and the boundary rule that a sample at exactly `t = duration` is not taken (current SimPy behaviour);
@@ -99,19 +130,36 @@ The SimPy engine remains the **reference implementation**. Where the code and th
 - Each traffic source gets its **own random stream**, derived from `(run seed, stable source id)`. The source id is the source node name, the destination and the statement's index in that source's traffic list.
 - Adding, removing or reordering one source no longer changes the draws of the others.
 - The **seed derivation** is specified in the semantics contract and is the same for every engine: the stream seed is the first 8 bytes of SHA-256 of `"<run seed>:<source id>"`. Each engine seeds **its own** generator from it — SimPy uses `random.Random`; Rust uses a native generator (e.g. PCG64). No new Python dependency is needed.
-- **Cross-engine target: statistical equivalence, not bit-identical output.** Bit-identical results would require the same generator, the same sampling algorithms and the same tie-breaking of simultaneous events in every engine. That is left open, not promised; within one engine, a given seed is fully reproducible.
-- **Note:** per-source streams change the exact numbers produced by existing seeded scenarios that use random patterns. This is an intentional, one-time break, recorded in the changelog and in the ADR-0006 baseline hashes.
+- **Cross-engine equivalence has two levels:**
+    - **Deterministic scenarios** (constant rates, periodic protocols, fixed sizes; B1–B4 among them):
+        - injected and delivered frame counts match exactly;
+        - every metric sample matches within a relative tolerance of 1e-9. The only expected difference is float µs against integer ns.
+    - **Stochastic scenarios:** statistical equivalence across replications (ADR-0009). Bit-identical output would need the same generator, the same sampling algorithms and the same tie-breaking in every engine. That is not promised.
+
+  Within one engine, a given seed is always fully reproducible.
+- **Note:** per-source streams change the exact numbers produced by existing seeded scenarios that use random patterns. This is an intentional, one-time break, recorded in the changelog. The benchmark scenarios B1–B4 draw no random numbers, so their hashes must not change.
 
 ### Migration
+
+First phase:
 
 1. **Introduce the IR.**
     - Add `smolpy.model` and `Network.to_scenario()`.
     - The engine still reads `Network` internally.
-    - Tests: round-trip `Network` → `Scenario` → JSON → `Scenario`.
-2. **Switch the SimPy engine to read the IR.** Refactor, then verify against the ADR-0006 benchmark hashes and the full test suite.
+    - Tests: round-trip `Network` → `Scenario` → JSON → `Scenario`, for every example and for B1–B4.
+2. **Switch the SimPy engine to read the IR, and report execution statistics.**
+    - Refactor `sim/engine.py` onto the `Scenario`.
+    - Add `SimulationResult.stats` and move the benchmark harness onto it.
+    - Verify unchanged B1–B4 hashes, the full test suite, and no slowdown against the optimised engine.
+    - Remove the leftovers: the unused `Switch.mac_table` dictionary, and the `Network` reference in `SimulationResult`.
 3. **Move validation into `smolpy.model.validate`.** Python API errors that used to be silent (e.g. observing `pn_jitter` on a switch) now raise.
-4. **Make `.smol` lower straight to the IR.**
-5. **Introduce per-source random streams.** A deliberate output change, with refreshed baselines.
+4. **Write the semantics contract** (`docs/model-semantics.md`), checked against the SimPy engine as it stands after step 2.
+5. **Introduce per-source random streams.** A deliberate output change for random patterns only.
+
+Later, once the Rust engine has proven useful:
+
+6. Make `.smol` lower straight to the IR, and add `smolpy run --backend`.
+7. Move the live and text dashboards behind the `Backend` protocol as an optional capability.
 
 Each step ships separately and keeps the public API unchanged, except for the new `backend=` argument and the stricter validation in step 3.
 
