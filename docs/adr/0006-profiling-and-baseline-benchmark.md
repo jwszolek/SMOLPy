@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-11-13  
-**Implemented:** sections 1–4 (`benchmarks/`, results and hotspot report in [Benchmarks](../benchmarks.md)); sections 5–6 pending
+**Implemented:** sections 1–6. Suite in `benchmarks/`; baseline, hotspot report, optimisation log and gate evaluation in [Benchmarks](../benchmarks.md).
 
 ---
 
@@ -98,6 +98,16 @@ After the optimisations, measure B1–B3 at 1 M and 10 M frames. **Rust proceeds
 | Batch of 100 replications of B2 at 1 M frames | under 1 h on 8 cores |
 
 These targets are deliberately concrete. They may be revised once the baseline is known, but any revision has to be recorded in this ADR.
+
+**Evaluation (2026-11-13, commit `d3eb8a2`, after the four optimisations in §5):**
+
+| Target | Result |
+|---|---|
+| B3 at 10 M frames, metrics on, under 10 min | 566.6 s (9.4 min), down from 752 s: **met** |
+| Peak memory at 10 M frames under 4 GB | 145 MB at most, down from 896 MB: **met** |
+| 100 × B2 at 1 M frames under 1 h on 8 cores | ~7–15 min estimated from 35.2 s per run: **met (estimate)**, to be measured with the ADR-0009 batch runner |
+
+Optimised SimPy meets all three targets, so ADR-0008 does **not** proceed on these targets. Optimisations 1–4 together gave ~1.3×. The remaining cost is SimPy's per-event overhead, which Python-level changes no longer reduce substantially. Any case for a native engine therefore has to rest on revised targets, for example larger networks or batch throughput, recorded here.
 
 ---
 
