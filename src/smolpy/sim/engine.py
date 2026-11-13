@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import itertools
 import random
 import time
@@ -25,7 +26,7 @@ Samples = list[tuple[float, float]]  # (time_ms, value)
 # ---------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(slots=True)
 class _Frame:
     src_mac: str
     dst_mac: str
@@ -152,24 +153,11 @@ class _LinkChannel:
 
     def _deliver(self, in_flight: simpy.Event) -> None:
         frame: _Frame = in_flight.value
-        # Copy frame so flooding to multiple channels doesn't create in_port conflicts
-        delivered = _Frame(
-            src_mac=frame.src_mac,
-            dst_mac=frame.dst_mac,
-            size_bytes=frame.size_bytes,
-            created_at_us=frame.created_at_us,
-            retries=frame.retries,
-            in_port=self.in_port,
-            mqtt_topic=frame.mqtt_topic,
-            mqtt_qos=frame.mqtt_qos,
-            modbus_unit_id=frame.modbus_unit_id,
-            modbus_register_count=frame.modbus_register_count,
-            modbus_is_response=frame.modbus_is_response,
-            priority=frame.priority,
-            pn_ar_id=frame.pn_ar_id,
-            pn_cycle_counter=frame.pn_cycle_counter,
-        )
-        self.dst_store.put(delivered)
+        # The frame is updated in place: a frame object is only ever in one
+        # place at a time, because senders build a new frame per transmission
+        # and flooding (_replicate) gives every port its own copy.
+        frame.in_port = self.in_port
+        self.dst_store.put(frame)
 
 
 # ---------------------------------------------------------------------------
@@ -531,6 +519,13 @@ def _pn_expiries_sampler(
         samples.append((env.now / 1_000, float(consumer.watchdog_expiries)))
 
 
+def _replicate(frame: _Frame, out_channels: dict[int, _LinkChannel]) -> None:
+    """Send a copy of *frame* to every port except the one it arrived on."""
+    for port, ch in out_channels.items():
+        if port != frame.in_port:
+            ch.enqueue(copy.copy(frame))
+
+
 def _switch_forwarder(
     env: simpy.Environment,
     inbound: simpy.Store,
@@ -549,9 +544,7 @@ def _switch_forwarder(
         dst_port = mac_table.get(frame.dst_mac)
         if dst_port is None:
             # Unknown destination: flood to all ports except the one it arrived on
-            for port, ch in out_channels.items():
-                if port != frame.in_port:
-                    ch.enqueue(frame)
+            _replicate(frame, out_channels)
         elif dst_port != frame.in_port:
             out_channels[dst_port].enqueue(frame)
         # dst_port == in_port → hairpin, drop silently
@@ -572,9 +565,7 @@ def _hub_broadcaster(
         frame: _Frame = yield inbound.get()
         if inbound.items:
             collisions[0] += 1
-        for port, ch in out_channels.items():
-            if port != frame.in_port:
-                ch.enqueue(frame)
+        _replicate(frame, out_channels)
 
 
 def _adapter_receiver(

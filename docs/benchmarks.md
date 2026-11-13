@@ -189,3 +189,23 @@ The window keeps the raw values and aggregates them as before, rather than using
 | B2, 10 M | 896 MB → 45 MB | 448 s → 323 s (optimisations 1 + 2) | — |
 
 Peak memory no longer grows with run length. It is now set by the topology and the number of observations.
+
+### 3. `@dataclass(slots=True)` for `_Frame`
+
+Optimisations 3 and 4 do not change the order of events, so the full output hash, event count included, has to match as well. It does in all six scenario and size combinations. Their effect is a few per cent, which is about the noise of a single run, so they were measured A/B, alternating the two variants three times. The table shows medians.
+
+| Scenario, 1 M frames, metrics on | Without → with slots |
+|---|---|
+| B1 | 24.4 s → 23.9 s (−2 %) |
+| B3 | 71.4 s → 69.8 s (−2 %) |
+
+### 4. No frame copy per hop
+
+Delivery used to build a new `_Frame` on every hop, so that flooded copies would not share `in_port`. A frame object is only ever in one place, because every sender builds a new frame per transmission. So delivery now sets `in_port` in place. Only flooding (switch, unknown destination) and hub broadcast copy the frame, once per output port.
+
+| Scenario, 1 M frames, metrics on | Copy → no copy |
+|---|---|
+| B1 | 23.9 s → 22.4 s (−6 %) |
+| B3 | 70.2 s → 66.8 s (−5 %) |
+
+B3 at 100 k frames, which floods heavily at start-up, also gives an identical output hash.
