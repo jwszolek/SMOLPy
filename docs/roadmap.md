@@ -42,6 +42,8 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - Hotspot report is published.
 - Decision gate for Rust is evaluated. Rust goes ahead only if optimised SimPy misses the targets defined in ADR-0006.
 
+**Status:** done. Optimised SimPy met the original targets, so the gate was extended with research targets (B4 with 10 000 nodes, 1 000 replications of B3). These are measured on SimPy before Phase 4 starts.
+
 ## Phase 2: separate the model from its execution ([ADR-0007](adr/0007-execution-independent-scenario-model.md))
 
 - A serialisable, versioned Scenario IR, produced by both the Python API and `.smol`.
@@ -76,8 +78,9 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 
 **Exit criteria:**
 
+- B1 runs at least 10× faster than optimised SimPy; otherwise the work stops (ADR-0008 stop criterion).
 - Equivalence suite passes against SimPy.
-- Benchmark targets from ADR-0006 are met.
+- Research targets from ADR-0006 are met.
 - Wheels are published for Linux, macOS and Windows.
 
 ## Phase 5: Rust protocol parity
