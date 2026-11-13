@@ -109,6 +109,17 @@ These targets are deliberately concrete. They may be revised once the baseline i
 
 Optimised SimPy meets all three targets, so ADR-0008 does **not** proceed on these targets. Optimisations 1–4 together gave ~1.3×. The remaining cost is SimPy's per-event overhead, which Python-level changes no longer reduce substantially. Any case for a native engine therefore has to rest on revised targets, for example larger networks or batch throughput, recorded here.
 
+**Revision (2026-11-13): research targets.** The targets above ask whether SimPy is enough for today's scenarios, and it is. SMOLPy is also meant as a research tool, and there the limit is scale and the number of runs: larger plants, longer runs, and enough replications for confidence intervals and parameter sweeps. The gate is therefore extended with targets for that use. The rule is unchanged: Rust proceeds only if optimised SimPy misses at least one of them.
+
+| Research target | Value | Optimised SimPy (estimate) |
+|---|---|---|
+| **B4 — very large plant** at 100 M frames, metrics off | under 30 min | ~90 min (B3 rate of ~18 k frames/s) |
+| Batch of **1 000 replications of B3 at 1 M frames** | under 30 min on 8 cores | ~2.2 h (1 000 × 64.6 s / 8, ideal scaling) |
+
+**B4** follows the B3 pattern at ten times the size: one core switch and 200 access switches with 50 nodes each (10 000 nodes). Access switches are paired, and every node exchanges 20 fps with its counterpart across the core. B3 is used for the batch target instead of B2, because B2 needs Modbus, MQTT and PROFINET, which the Rust MVP does not include (ADR-0008).
+
+Both SimPy figures are estimates. Before any Rust work starts, B4 is added to the suite and both targets are measured on optimised SimPy. Only a measured miss opens the gate.
+
 ---
 
 ## Consequences

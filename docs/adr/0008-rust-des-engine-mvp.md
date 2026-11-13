@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Date:** 2026-11-13  
-**Depends on:** ADR-0006 (benchmark targets, decision gate), ADR-0007 (Scenario IR, semantics contract)
+**Depends on:** ADR-0006 (benchmark targets, decision gate with research targets), ADR-0007 (Scenario IR, semantics contract)
 
 ---
 
@@ -19,7 +19,7 @@ A native engine written in Rust can remove most of this per-event overhead:
 - there is no interpreter overhead per event;
 - runs execute without holding Python's GIL, so independent simulations can use all cores in one process.
 
-This ADR applies **only if the ADR-0006 decision gate is met**, i.e. if optimised SimPy misses the performance targets. It also requires the Scenario IR (ADR-0007), so that the Rust engine reads exactly the same model as SimPy and is checked against the same semantics contract.
+This ADR applies **only if the ADR-0006 decision gate is met**, i.e. if optimised SimPy misses the performance targets. The original targets were met by optimised SimPy (ADR-0006 §6, evaluation of 2026-11-13). The case for Rust rests on the **research targets** added there: B4 (10 000 nodes) at 100 M frames, and 1 000 replications of B3. Both must first be measured on SimPy. The engine is an optional accelerator for research use; SimPy remains the reference implementation. It also requires the Scenario IR (ADR-0007), so that the Rust engine reads exactly the same model as SimPy and is checked against the same semantics contract.
 
 ### Options considered
 
@@ -101,7 +101,16 @@ Anything outside this scope is rejected by the capability check with a message s
 - **Cross-engine equivalence** against SimPy uses the harness from ADR-0009:
     - **Deterministic scenarios** (constant patterns, fixed sizes) must agree with SimPy within a tight tolerance on every metric window. Differences come only from float µs (SimPy) versus integer ns (Rust).
     - **Stochastic scenarios** must agree statistically across replications.
-- **Benchmark acceptance:** the ADR-0006 suite, run with `--backend rust`, must meet the targets defined there on the reference machine.
+- **Benchmark acceptance:** B1, B3 and B4 of the ADR-0006 suite, run with `--backend rust`, must meet the research targets defined there on the reference machine. B2 follows with protocol parity (Phase 5).
+
+### Stop criterion
+
+The MVP is built first for **B1 only** (one flow, one switch) and measured before the rest of the scope:
+
+- **B1 at 10 M frames, metrics off**, must run **at least 10× faster** than optimised SimPy (198 s, ADR-0006), so **under 20 s**, on the reference machine.
+- It must also pass the equivalence check against SimPy.
+
+If it does not, work on the Rust engine **stops**. The result, with its measurements, is recorded in this ADR. A negative result is still a publishable finding: it bounds what a native engine buys for this model.
 
 ### Build and release
 
