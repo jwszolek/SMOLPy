@@ -49,14 +49,22 @@ def _events_processed() -> int:
     return sum(next(env._eid) - len(env._queue) for env in _ENVS)
 
 
+def _hash(obj: object) -> str:
+    return hashlib.sha256(json.dumps(obj, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _canonical_metrics(metrics: dict[str, list[tuple[float, float]]]) -> dict:
+    return {k: [[round(t, 6), float(f"{v:.9g}")] for t, v in s] for k, s in metrics.items()}
+
+
 def _output_hash(events: int, metrics: dict[str, list[tuple[float, float]]]) -> str:
-    canonical = {
-        "events": events,
-        "metrics": {
-            k: [[round(t, 6), float(f"{v:.9g}")] for t, v in s] for k, s in metrics.items()
-        },
-    }
-    return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()[:16]
+    """Same run, same engine: event count and metrics must both match."""
+    return _hash({"events": events, "metrics": _canonical_metrics(metrics)})
+
+
+def _metrics_hash(metrics: dict[str, list[tuple[float, float]]]) -> str:
+    """Engine changes that remove events must still produce the same metrics."""
+    return _hash(_canonical_metrics(metrics))
 
 
 def measure(
@@ -150,6 +158,7 @@ def _measure(
         "rss_after_build_kb": rss_after_build_kb,
         "peak_rss_kb": _peak_rss_kb(),
         "output_hash": _output_hash(events, result.metrics),
+        "metrics_hash": _metrics_hash(result.metrics),
     }
 
 

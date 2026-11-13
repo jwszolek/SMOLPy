@@ -156,3 +156,36 @@ Candidate optimisations, each to be applied and measured separately, with unchan
 4. **No frame copy on the unicast path.** Copy only when a frame is flooded to several ports.
 
 The Rust decision gate (ADR-0006 §6) is evaluated after these optimisations, on the same suite.
+
+## Optimisation log
+
+Each optimisation is checked with the **metrics hash**, a hash of all metric samples without the event count. Removing engine events changes the output hash by design. The metrics hash must stay identical to the baseline engine in every scenario with metrics on.
+
+Timings below are single runs, metrics on, on the reference machine. The full suite is re-run once all optimisations are in.
+
+### 1. Propagation as a timed callback
+
+`_LinkChannel` no longer starts a SimPy process for every frame on every hop. Each frame is now a single timeout that carries it, with delivery attached as a callback.
+
+| Scenario, 1 M frames | Events before → after | Run time before → after | Metrics hash |
+|---|---|---|---|
+| B1 | 17.0 M → 13.0 M (−24 %) | 30.4 s → 24.7 s (−19 %) | identical |
+| B2 | 19.4 M → 15.4 M (−21 %) | 44.8 s → 37.6 s (−16 %) | identical |
+| B3 | 37.2 M → 28.1 M (−24 %) | 86.9 s → 68.4 s (−21 %) | identical |
+
+One hop now costs ~6.5 events instead of ~8.5.
+
+### 2. Keep only the current window of per-frame values
+
+Latency, Modbus RTT and PROFINET latency and jitter used to be appended to lists that lived for the whole run, observed or not. Now each sampler registers its own window buffer with the node and clears it after every sample. With no observer, the value is not even computed.
+
+The window keeps the raw values and aggregates them as before, rather than using a running sum. Since Python 3.12 `sum()` over floats uses compensated summation, and a running sum could differ in the last bits.
+
+| Scenario, metrics on | Peak RSS before → after | Run time before → after | Metrics hash |
+|---|---|---|---|
+| B1, 1 M | 75 MB → 36 MB | 24.7 s → 23.9 s | identical |
+| B2, 1 M | 124 MB → 37 MB | 37.6 s → 35.0 s | identical |
+| B3, 1 M | 115 MB → 56 MB | 68.4 s → 66.9 s | identical |
+| B2, 10 M | 896 MB → 45 MB | 448 s → 323 s (optimisations 1 + 2) | — |
+
+Peak memory no longer grows with run length. It is now set by the topology and the number of observations.
