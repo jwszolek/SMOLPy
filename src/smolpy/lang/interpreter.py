@@ -75,7 +75,13 @@ class _Interpreter:
                 if isinstance(d, smol_ast.AdapterDecl):
                     net.adapter(d.name, ip=d.ip, mac=d.mac)
                 elif isinstance(d, smol_ast.SwitchDecl):
-                    net.switch(d.name, ports=d.ports, mode=d.mode, qos=d.qos)  # type: ignore[arg-type]
+                    net.switch(
+                        d.name,
+                        ports=d.ports,
+                        mode=d.mode,  # type: ignore[arg-type]
+                        qos=d.qos,  # type: ignore[arg-type]
+                        mac_table=d.mac_table,  # type: ignore[arg-type]
+                    )
                 elif isinstance(d, smol_ast.HubDecl):
                     net.hub(d.name, ports=d.ports)
                 elif isinstance(d, smol_ast.MqttBrokerDecl):

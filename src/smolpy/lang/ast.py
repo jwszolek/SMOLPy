@@ -18,6 +18,7 @@ class SwitchDecl:
     mode: str
     line: int
     qos: str = "strict"
+    mac_table: str = "learning"
 
 
 @dataclass

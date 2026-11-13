@@ -96,6 +96,7 @@ class _SmolTransformer(Transformer):
             mode=str(kw.get("mode", "store-and-forward")),
             line=meta.line,
             qos=str(kw.get("qos", "strict")),
+            mac_table=str(kw.get("mac_table", "learning")),
         )
 
     def hub_decl(self, meta: Any, children: list) -> HubDecl:

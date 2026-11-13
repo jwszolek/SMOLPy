@@ -48,6 +48,7 @@ def test_worker_record_is_complete_and_reproducible() -> None:
 def test_parse_size() -> None:
     assert parse_size("100k") == 100_000
     assert parse_size("10M") == 10_000_000
+    assert parse_size("100M") == 100_000_000
     assert parse_size("2500") == 2_500
 
 
@@ -60,3 +61,12 @@ def test_summarize_marks_differing_outputs(tmp_path) -> None:
     runs = [{**run, "output_hash": "a"}, {**run, "output_hash": "b"}]
     path.write_text(json.dumps({"runs": runs}))
     assert "DIFFERS" in summarize(path)
+
+
+def test_b4_is_ten_thousand_nodes_starting_converged() -> None:
+    built = SCENARIOS["B4"](100_000_000, False)
+    switches = [n for n in built.network._nodes.values() if hasattr(n, "mac_table_mode")]
+    assert len(built.network._nodes) == 1 + 200 + 200 * 50
+    assert {s.mac_table_mode for s in switches} == {"topology"}
+    assert built.frames_per_s == 200_000
+    assert built.duration_ms == 500_000

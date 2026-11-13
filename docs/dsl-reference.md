@@ -5,6 +5,7 @@
 ```python
 adapter = net.adapter("name", ip="10.0.0.1")          # NIC / host / server
 switch  = net.switch("name",  ports=16, mode="store-and-forward")   # qos="strict" (default) or "fifo"
+                                                       # mac_table="learning" (default) or "topology"
 hub     = net.hub("name",     ports=8)
 broker  = net.mqtt_broker("name", ip="10.0.2.1")       # MQTT message broker
 slave   = net.modbus_slave("name", ip="10.0.0.10", unit_id=1)  # Modbus TCP slave
@@ -21,6 +22,12 @@ net.link(edge_sw, core_sw, speed=1_000, length=5)      # inter-switch uplink
 ```
 
 Every egress queue serves the eight 802.1Q priority classes strictly (higher first, FIFO within a class). `qos="fifo"` makes a switch ignore frame priorities on its outbound ports.
+
+By default a switch knows only its directly attached stations and learns the rest from source addresses. Until it has learned a destination, it floods frames for it to all other ports. In large networks this start-up flooding costs a lot of events and memory. Queues are unbounded, so nothing is dropped. `mac_table="topology"` starts the switch with the port towards every end station already known, i.e. in the converged state. Use it when you study steady-state behaviour rather than start-up:
+
+```python
+core = net.switch("core", ports=202, mac_table="topology")
+```
 
 ## Traffic
 

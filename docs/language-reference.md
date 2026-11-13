@@ -37,10 +37,10 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology]
 ```
 
-`mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch.
+`mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
 
 ### `hub` — Layer-1 hub
 

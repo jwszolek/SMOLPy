@@ -496,3 +496,63 @@ class TestNicFiltering:
 
         assert result.metrics["bytes_received:rx"][-1][1] > 0
         assert all(v == 0 for _, v in result.metrics["bytes_received:bystander"])
+
+
+class TestTopologyMacTables:
+    """mac_table="topology" starts switches in the converged state."""
+
+    def _net(self, mac_table: str) -> Network:
+        # tx -- sw1 -- sw2 -- rx, bystander on sw1; rx never sends.
+        net = Network("mac")
+        sw1 = net.switch("sw1", ports=4, mac_table=mac_table)  # type: ignore[arg-type]
+        sw2 = net.switch("sw2", ports=4, mac_table=mac_table)  # type: ignore[arg-type]
+        tx = net.adapter("tx", ip="10.0.0.1")
+        rx = net.adapter("rx", ip="10.0.0.2")
+        bystander = net.adapter("bystander", ip="10.0.0.3")
+        net.link(tx, sw1, speed=100, length=10)
+        net.link(bystander, sw1, speed=100, length=10)
+        net.link(sw1, sw2, speed=100, length=10)
+        net.link(rx, sw2, speed=100, length=10)
+        tx.sends(to=rx, rate=1_000, size=512, pattern="constant")
+        net.observe("utilization", on=bystander, every=100)
+        net.observe("bytes_received", on=rx, every=100)
+        return net
+
+    def test_learning_switch_floods_towards_silent_destination(self):
+        result = self._net("learning").simulate(duration=1_000, seed=1)
+        assert max(v for _, v in result.metrics["utilization:bystander"]) > 0
+
+    def test_topology_switch_does_not_flood(self):
+        result = self._net("topology").simulate(duration=1_000, seed=1)
+        assert all(v == 0 for _, v in result.metrics["utilization:bystander"])
+
+    def test_delivered_traffic_is_the_same(self):
+        learning = self._net("learning").simulate(duration=1_000, seed=1)
+        topology = self._net("topology").simulate(duration=1_000, seed=1)
+        assert learning.metrics["bytes_received:rx"] == topology.metrics["bytes_received:rx"]
+
+    def test_invalid_mac_table_rejected(self):
+        with pytest.raises(ValueError, match="mac_table"):
+            Network("t").switch("sw", ports=4, mac_table="static")  # type: ignore[arg-type]
+
+    def test_smol_mac_table(self, tmp_path):
+        from smolpy.lang import SMOLSemanticError, interpret_and_run
+
+        source = """
+        network "t" {
+            adapter a ip=10.0.0.1
+            adapter b ip=10.0.0.2
+            switch sw ports=4 mac_table=%s
+            link a -- sw speed=100 length=5
+            link b -- sw speed=100 length=5
+            flow a -> b rate=100 size=64 pattern=constant
+            simulate duration=100 mode=headless
+        }
+        """
+        ok = tmp_path / "ok.smol"
+        ok.write_text(source % "topology")
+        interpret_and_run(ok)
+        bad = tmp_path / "bad.smol"
+        bad.write_text(source % "static")
+        with pytest.raises(SMOLSemanticError, match="mac_table"):
+            interpret_and_run(bad)

@@ -10,11 +10,13 @@ import socket
 import statistics
 import subprocess
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from importlib import metadata
 from pathlib import Path
 
 RESULTS_DIR = Path(__file__).parent / "results"
-SIZES = {"100k": 100_000, "1M": 1_000_000, "10M": 10_000_000}
+SIZES = {"100k": 100_000, "1M": 1_000_000, "10M": 10_000_000, "100M": 100_000_000}
 
 
 def parse_size(text: str) -> int:
@@ -28,6 +30,8 @@ def size_label(frames: int) -> str:
 
 
 def default_reps(frames: int) -> int:
+    if frames >= 100_000_000:
+        return 1
     return 3 if frames >= 10_000_000 else 5
 
 
@@ -166,3 +170,32 @@ def summarize(path: Path) -> str:
             f"| {'identical' if len(hashes) == 1 else 'DIFFERS'} |"
         )
     return "\n".join(lines)
+
+
+def run_batch(
+    scenario: str, frames: int, metrics: str, runs: int, jobs: int, timeout_s: float, seed: int
+) -> dict:
+    """Run *runs* independent measurements, *jobs* at a time, and time the whole batch.
+
+    A stand-in for the ADR-0009 batch runner, to measure batch throughput of the
+    SimPy engine: every run is its own process, as SimPy runs cannot share one.
+    """
+    t0 = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        records = list(
+            pool.map(lambda _: run_one(scenario, frames, metrics, seed, timeout_s), range(runs))
+        )
+    wall_s = time.perf_counter() - t0
+    ok = [r for r in records if r["status"] == "ok"]
+    return {
+        "scenario": scenario,
+        "frames_target": frames,
+        "metrics": metrics,
+        "runs": runs,
+        "jobs": jobs,
+        "ok": len(ok),
+        "wall_s": wall_s,
+        "runs_per_hour": len(ok) / wall_s * 3_600,
+        "median_run_s": statistics.median(r["run_s"] for r in ok) if ok else None,
+        "output_hashes": sorted({r["output_hash"] for r in ok}),
+    }

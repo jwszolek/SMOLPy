@@ -533,6 +533,37 @@ def _replicate(frame: _Frame, out_channels: dict[int, _LinkChannel]) -> None:
             ch.enqueue(copy.copy(frame))
 
 
+def _topology_mac_table(
+    network: Network, switch: str, neighbours: dict[str, list[tuple[int, str]]]
+) -> dict[str, int]:
+    """Port towards every reachable end station, by breadth-first search.
+
+    Switches and hubs are traversed, end stations are not. The first port to
+    reach a station wins: shortest path, ties to the lowest port index.
+    """
+    from smolpy.ethernet.hub import Hub
+    from smolpy.ethernet.switch import Switch
+
+    table: dict[str, int] = {}
+    seen = {switch}
+    frontier = sorted(neighbours[switch])
+    for _, peer in frontier:
+        seen.add(peer)
+    while frontier:
+        nxt: list[tuple[int, str]] = []
+        for port, name in frontier:
+            node = network._nodes[name]
+            if isinstance(node, (Switch, Hub)):
+                for _, peer in neighbours[name]:
+                    if peer not in seen:
+                        seen.add(peer)
+                        nxt.append((port, peer))
+            else:
+                table.setdefault(node.mac, port)  # type: ignore[attr-defined]
+        frontier = nxt
+    return table
+
+
 def _switch_forwarder(
     env: simpy.Environment,
     inbound: simpy.Store,
@@ -709,6 +740,7 @@ def run_simulation(
     in_channels: dict[str, list[_LinkChannel]] = defaultdict(list)
     adapter_out: dict[str, _LinkChannel] = {}  # single outbound channel per leaf adapter
     static_macs: dict[str, dict[str, int]] = defaultdict(dict)  # switch_name → {mac: port}
+    neighbours: dict[str, list[tuple[int, str]]] = defaultdict(list)  # name → [(port, peer)]
 
     for link in network._links:
         a, b = link.endpoint_a, link.endpoint_b
@@ -729,6 +761,8 @@ def run_simulation(
         out_channels[b.name][port_b] = ch_ba
         in_channels[b.name].append(ch_ab)
         in_channels[a.name].append(ch_ba)
+        neighbours[a.name].append((port_a, b.name))
+        neighbours[b.name].append((port_b, a.name))
 
         if isinstance(a, endpoint_types):
             adapter_out[a.name] = ch_ab
@@ -738,6 +772,11 @@ def run_simulation(
             adapter_out[b.name] = ch_ba
             if isinstance(a, Switch):
                 static_macs[a.name][b.mac] = port_a
+
+    for name, node in network._nodes.items():
+        if isinstance(node, Switch) and node.mac_table_mode == "topology":
+            for mac, port in _topology_mac_table(network, name, neighbours).items():
+                static_macs[name].setdefault(mac, port)
 
     # Start one process per node
     ar_ids = itertools.count()
