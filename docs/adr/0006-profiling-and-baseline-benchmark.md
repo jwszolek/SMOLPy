@@ -1,7 +1,8 @@
 # ADR-0006: Profiling and Baseline Benchmark
 
-**Status:** Proposed  
-**Date:** 2026-11-13
+**Status:** Accepted  
+**Date:** 2026-11-13  
+**Implemented:** sections 1–4 (`benchmarks/`, results and hotspot report in [Benchmarks](../benchmarks.md)); sections 5–6 pending
 
 ---
 
@@ -37,7 +38,7 @@ A `benchmarks/` directory at the repository root holds the suite. It is not ship
 |---|---|---|
 | **B1 — single path** | 1 sender → 1 switch → 1 receiver, constant-rate Ethernet flow | Pure per-frame engine cost, no protocol logic |
 | **B2 — industrial cell** | 1 PLC, 10 PROFINET devices (2 ms cycle), 10 Modbus slaves, 1 MQTT broker, bulk Ethernet traffic, 1 switch | Mixed-protocol cost at realistic proportions |
-| **B3 — large plant** | 50 access switches × 20 nodes (~1 000 nodes), 2-tier core, a mix of flows | Cost of network size: processes, MAC tables, channels |
+| **B3 — large plant** | 50 access switches × 20 nodes (~1 000 nodes) behind one core switch; access switches are paired and every node exchanges traffic with its counterpart (4 hops, both directions) | Cost of network size: processes, MAC tables, channels |
 
 Each scenario is run at **100 k, 1 M and 10 M frames**, in two variants:
 
@@ -49,15 +50,15 @@ Each scenario is run at **100 k, 1 M and 10 M frames**, in two variants:
 | Quantity | How |
 |---|---|
 | Wall time | `time.perf_counter()` around `simulate()` only (model building measured separately) |
-| Events processed | count of engine events. SimPy has no counter, so the harness uses an `Environment` subclass that counts `step()` calls. A native engine reports its own count. |
-| Events / s, frames / s | events processed and frames delivered, divided by wall time |
+| Events processed | count of engine events. SimPy draws one id from `Environment._eid` for every scheduled event, so processed events = `next(_eid)` − events still queued — exact, with **no per-event overhead**. The harness reads it through an `Environment` subclass that only registers itself. A native engine reports its own count. |
+| Events / s, frames / s | events processed, and frames injected by traffic generators (rate × simulated duration; exact up to ±1 frame per periodic source), divided by wall time. All benchmark generators are deterministic, so both counts are seed-independent. |
 | Peak memory | peak resident set size of the run (`resource.getrusage(...).ru_maxrss`; kB on Linux, bytes on macOS — normalised by the harness). The reference machine runs Linux; Windows has no `resource` module and is not a benchmark platform. |
 | Model build time and memory | time and RSS increase for building the `Network`, reported separately from the run |
 
 Rules for reproducible numbers:
 - **One run per subprocess**, so peak RSS belongs to one scenario and allocator state does not carry over.
 - **Repetitions:** 5 at 100 k and 1 M; 3 at 10 M. Report the median and the min–max range.
-- **Fixed seed.** Each run's metric output is hashed and recorded, so a "faster" run that silently computes something different is caught.
+- **Fixed seed.** Each run's metric output and event count are hashed and recorded, so a "faster" run that silently computes something different is caught.
 - **Environment recorded with every result:** CPU model and core count, RAM, OS, Python and SimPy versions, SMOLPy git commit.
 - **Time limit:** runs above a configurable wall-time limit (default 1 h) are reported as *timed out*, not left out.
 
@@ -73,7 +74,7 @@ Profiling runs separately from benchmarking, because profilers distort timing:
 
 - **CPU:** `py-spy` (sampling profiler, low overhead) produces flame graphs for B1 and B3 at 1 M frames. `cProfile` provides function-level call counts.
 - **Memory:** `tracemalloc` snapshots taken during a run, to find which structures grow with the number of frames.
-- **Report:** `docs/benchmarks.md` gets a hotspot section listing the top CPU and memory consumers with their share of the total. Each hypothesis from the Context section is marked as confirmed or rejected.
+- **Report:** `docs/benchmarks.md` gets a hotspot section listing the top CPU and memory consumers with their share of the total. Each hypothesis from the Context section is marked as confirmed or rejected. Generated profiles go to `benchmarks/profiles/` (not committed).
 
 ### 5. Low-cost Python optimisations, measured one by one
 
@@ -111,5 +112,5 @@ These targets are deliberately concrete. They may be revised once the baseline i
 **Negative / trade-offs**
 - 10 M-frame runs on SimPy may take a long time; the full suite is not part of regular CI. CI runs only B1 at 100 k as a smoke test.
 - Results depend on the machine. Only results from the same reference machine are compared directly.
-- Counting SimPy events through an `Environment` subclass adds a small overhead to the measured runs (it applies to every repetition equally and is documented).
+- The SimPy event count relies on a private attribute (`Environment._eid`, SimPy 4.1). A SimPy upgrade that changes it breaks the counter. The harness tests detect this immediately.
 - Some optimisations change internal structure that ADR-0007 will rework anyway. Only measured, low-risk changes are worth doing before the IR exists.
