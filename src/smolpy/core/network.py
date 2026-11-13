@@ -7,7 +7,7 @@ from smolpy.core.link import Link
 from smolpy.core.node import Node
 from smolpy.core.observation import MetricName, Observation
 from smolpy.ethernet.hub import Hub
-from smolpy.ethernet.switch import Switch, SwitchMode, SwitchQoS
+from smolpy.ethernet.switch import MacTableMode, Switch, SwitchMode, SwitchQoS
 from smolpy.modbus.slave import ModbusSlave
 from smolpy.mqtt.broker import MQTTBroker
 from smolpy.profinet.device import ProfinetDevice
@@ -115,8 +115,9 @@ class Network:
         ports: int,
         mode: SwitchMode = "store-and-forward",
         qos: SwitchQoS = "strict",
+        mac_table: MacTableMode = "learning",
     ) -> Switch:
-        node = Switch(name, ports=ports, mode=mode, qos=qos)
+        node = Switch(name, ports=ports, mode=mode, qos=qos, mac_table=mac_table)
         self._register(node)
         return node
 
