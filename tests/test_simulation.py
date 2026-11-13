@@ -453,3 +453,46 @@ class TestBatchTraffic:
         assert parse_batch("geom:4").second_moment() == pytest.approx(28.0)
         assert parse_batch("pareto:2.5").mean() == pytest.approx(1.341487, rel=1e-5)
         assert parse_batch("pareto:1.5").second_moment() == math.inf
+
+
+class TestNicFiltering:
+    """Stations accept only frames addressed to their own MAC."""
+
+    def test_flooded_frames_are_not_counted_by_bystanders(self):
+        # tx -- sw1 -- sw2 -- rx, bystander on sw1. rx never sends, so sw1 never
+        # learns its MAC and floods every frame for rx to the bystander as well.
+        net = Network("flood")
+        sw1 = net.switch("sw1", ports=4)
+        sw2 = net.switch("sw2", ports=4)
+        tx = net.adapter("tx", ip="10.0.0.1")
+        rx = net.adapter("rx", ip="10.0.0.2")
+        bystander = net.adapter("bystander", ip="10.0.0.3")
+        net.link(tx, sw1, speed=100, length=10)
+        net.link(bystander, sw1, speed=100, length=10)
+        net.link(sw1, sw2, speed=100, length=10)
+        net.link(rx, sw2, speed=100, length=10)
+        tx.sends(to=rx, rate=1_000, size=512, pattern="constant")
+        net.observe("bytes_received", on=rx, every=100)
+        net.observe("bytes_received", on=bystander, every=100)
+        net.observe("latency", on=bystander, every=100)
+        result = net.simulate(duration=1_000, seed=1)
+
+        assert result.metrics["bytes_received:rx"][-1][1] > 0
+        assert all(v == 0 for _, v in result.metrics["bytes_received:bystander"])
+        assert result.metrics["latency:bystander"] == []
+
+    def test_hub_repeated_frames_are_not_counted_by_bystanders(self):
+        net = Network("hub")
+        hub = net.hub("hub", ports=4)
+        tx = net.adapter("tx", ip="10.0.0.1")
+        rx = net.adapter("rx", ip="10.0.0.2")
+        bystander = net.adapter("bystander", ip="10.0.0.3")
+        for node in (tx, rx, bystander):
+            net.link(node, hub, speed=10, length=10)
+        tx.sends(to=rx, rate=100, size=512, pattern="constant")
+        net.observe("bytes_received", on=rx, every=100)
+        net.observe("bytes_received", on=bystander, every=100)
+        result = net.simulate(duration=1_000, seed=1)
+
+        assert result.metrics["bytes_received:rx"][-1][1] > 0
+        assert all(v == 0 for _, v in result.metrics["bytes_received:bystander"])

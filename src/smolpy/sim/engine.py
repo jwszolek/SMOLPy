@@ -320,6 +320,8 @@ def _modbus_slave_responder(
     """Modbus slave: replies to Read Holding Registers requests addressed to unit_id."""
     while True:
         frame: _Frame = yield inbound.get()
+        if frame.dst_mac != slave_mac:
+            continue  # flooded frame for another station: the NIC drops it
         if frame.modbus_unit_id != unit_id:
             continue  # not a Modbus frame, or addressed to a different slave
         response_size = 62 + 2 * frame.modbus_register_count
@@ -350,6 +352,8 @@ def _mqtt_broker_forwarder(
     }
     while True:
         frame: _Frame = yield inbound.get()
+        if frame.dst_mac != broker_mac:
+            continue  # flooded frame for another station: the NIC drops it
         if frame.mqtt_topic is None:
             continue  # not an MQTT frame
         for sub_mac in topic_subs.get(frame.mqtt_topic, []):
@@ -470,10 +474,13 @@ def _pn_provider(
 def _pn_device_receiver(
     env: simpy.Environment,
     inbound: simpy.Store,
+    mac: str,
     consumer: _PnConsumer,
 ) -> Generator:
     while True:
         frame: _Frame = yield inbound.get()
+        if frame.dst_mac != mac:
+            continue  # flooded frame for another station: the NIC drops it
         consumer.record(frame, env.now)
 
 
@@ -571,11 +578,17 @@ def _hub_broadcaster(
 def _adapter_receiver(
     env: simpy.Environment,
     inbound: simpy.Store,
+    mac: str,
     counters: _AdapterCounters,
     pn: _PnConsumer,
 ) -> Generator:
     while True:
         frame: _Frame = yield inbound.get()
+        # A NIC accepts only frames addressed to its own MAC. Frames that reach
+        # it because a switch flooded them (unknown destination) or a hub
+        # repeated them are dropped and do not count towards any metric.
+        if frame.dst_mac != mac:
+            continue
         counters.record(frame, env.now)
         if frame.pn_ar_id is not None:
             pn.record(frame, env.now)
@@ -731,7 +744,9 @@ def run_simulation(
     for name, node in network._nodes.items():
         if isinstance(node, Adapter):
             env.process(
-                _adapter_receiver(env, inbound[name], adapter_counters[name], pn_consumers[name])
+                _adapter_receiver(
+                    env, inbound[name], node.mac, adapter_counters[name], pn_consumers[name]
+                )
             )
             ch = adapter_out.get(name)
             for pn in node.profinet_specs:
@@ -831,7 +846,7 @@ def run_simulation(
             if ch:
                 env.process(_modbus_slave_responder(env, inbound[name], node.mac, node.unit_id, ch))
         elif isinstance(node, ProfinetDevice):
-            env.process(_pn_device_receiver(env, inbound[name], pn_consumers[name]))
+            env.process(_pn_device_receiver(env, inbound[name], node.mac, pn_consumers[name]))
         elif isinstance(node, Switch):
             env.process(
                 _switch_forwarder(env, inbound[name], out_channels[name], static_macs.get(name))
