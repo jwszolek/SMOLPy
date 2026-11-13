@@ -37,12 +37,17 @@ nav:
   - Simulation Engine: simulation-engine.md
   - Dashboard: dashboard.md
   - Examples: examples.md
+  - Roadmap: roadmap.md
   - Architecture Decision Records:
       - ADR-0001 Protocol Package Structure: adr/0001-protocol-package-structure.md
       - ADR-0002 Modbus TCP Implementation: adr/0002-modbus-tcp-implementation.md
       - ADR-0003 SMOL External DSL: adr/0003-smol-external-dsl.md
       - ADR-0004 Pluggable Execution Backends: adr/0004-execution-backends.md
       - ADR-0005 PROFINET RT Cyclic I/O: adr/0005-profinet-rt.md
+      - ADR-0006 Profiling and Baseline Benchmark: adr/0006-profiling-and-baseline-benchmark.md
+      - ADR-0007 Execution-Independent Scenario Model: adr/0007-execution-independent-scenario-model.md
+      - ADR-0008 Rust DES Engine (MVP): adr/0008-rust-des-engine-mvp.md
+      - ADR-0009 Batch Execution and Cross-Backend Validation: adr/0009-batch-execution-and-cross-backend-validation.md
 
 markdown_extensions:
   - admonition
