@@ -40,7 +40,7 @@ Nodes change appearance as the simulation progresses:
 |---|---|
 | Dim | Idle — no traffic yet (e.g. a client whose `delay_ms` has not expired) |
 | Pulsing fill | Actively **transmitting** (`bytes_sent > 0`) |
-| Solid bright fill | Forwarding traffic (switch or hub) |
+| Solid bright fill | Forwarding traffic (switch) |
 | Pulsing amber outer ring | Actively **receiving** data (`bytes_received > 0`) |
 
 Close the window to return to the terminal, where a summary table (avg / min / max per metric) is printed.
@@ -389,7 +389,6 @@ net.link(edge_sw, core_sw, speed=1_000, length=5)   # inter-switch uplink
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
 | `utilization` | % | Any node |
-| `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
 | `modbus_latency` | µs | Adapter (master) |
 

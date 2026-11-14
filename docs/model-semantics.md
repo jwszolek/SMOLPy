@@ -63,12 +63,12 @@ A frame carries its source and destination MAC, its size in bytes, an **origin t
     - a higher class is always served first;
     - frames within a class are served first in, first out;
     - service is non-preemptive: a frame in transmission is never interrupted.
-- **`qos="fifo"`** on a switch puts every frame into one class on that switch's egress queues. All other nodes, including end stations and hubs, use the 8 classes.
+- **`qos="fifo"`** on a switch puts every frame into one class on that switch's egress queues. All other nodes, including end stations, use the 8 classes.
 - **Queues are unbounded,** so no frame is ever dropped for lack of buffer.
 
 *Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, existing priority tests in `test_profinet.py`.*
 
-## 4. Switches and hubs
+## 4. Switches
 
 **Switches** are store-and-forward with zero processing time:
 1. A frame is forwarded at the instant it has fully arrived.
@@ -81,21 +81,19 @@ A frame carries its source and destination MAC, its size in bytes, an **origin t
 **The initial MAC table** depends on `mac_table`:
 - **`learning`:** the table starts with the end stations linked directly to the switch.
 - **`topology`:** the table additionally holds the port towards every reachable end station.
-    - The port is found by breadth-first search through switches and hubs. End stations are not traversed.
+    - The port is found by breadth-first search through switches. End stations are not traversed.
     - The first port to reach a station wins, which means the shortest path, with ties going to the lowest port index.
     - Learning continues on top of this table.
 
 **Ports** are numbered per node from 0, in the order the node's links appear in the scenario.
 
-**Hubs** repeat every frame to every port except the one it arrived on, with zero processing time.
-- Each port has its own egress queue, as on a switch. There is no shared medium and no CSMA/CD.
-- A **collision** is counted when a frame arrives at a hub while another frame that arrived at the same instant is still waiting to be repeated.
+**There are no hubs.** A shared-medium segment (half-duplex, CSMA/CD) is not modelled. A scenario with a `hub` node or a `collision_rate` observation is rejected (open issue 3).
 
 *Tests: `test_cut_through_behaves_as_store_and_forward`, existing MAC tests in `test_simulation.py` (`TestNicFiltering`, `TestTopologyMacTables`).*
 
 ## 5. End stations
 
-**NIC filtering.** Adapters, MQTT brokers, Modbus slaves and PROFINET devices accept only frames addressed to their own MAC. All other frames, flooded by a switch or repeated by a hub, are dropped without being counted.
+**NIC filtering.** Adapters, MQTT brokers, Modbus slaves and PROFINET devices accept only frames addressed to their own MAC. All other frames, flooded by a switch, are dropped without being counted.
 
 **Each kind of end station handles accepted frames with zero processing time:**
 
@@ -154,7 +152,6 @@ An end station sends everything over its single link, in the egress queue order 
 | `modbus_latency` | mean of (arrival − origin time) over Modbus responses the adapter accepted in the window: the round-trip time from generating the request. *Window metric.* | µs |
 | `queue_depth` | frames waiting in all egress queues of the switch, not counting frames being transmitted | frames |
 | `utilization` | bits whose transmission completed on the links *into* the node in the window, as a share of those links' combined capacity over the window | % |
-| `collision_rate` | collisions at the hub in the window / window length | 1/s |
 | `broker_queue` | frames delivered to the broker and not yet processed. The broker has no service time, so this is non-zero only for frames arriving at the sample instant itself. | frames |
 | `pn_latency` | mean PROFINET latency over cyclic frames received in the window. *Window metric.* | µs |
 | `pn_jitter` | maximum jitter over the window. *Window metric.* | µs |
@@ -187,8 +184,8 @@ Every disagreement between this page and the intended model is listed here, with
 
 | # | Issue | Current behaviour (reference engine) | Status |
 |---|---|---|---|
-| 1 | `bursty` does not keep `rate` as its long-run average | Mean ON/OFF cycle per frame is `1.5 T`, so the long-run rate is `rate / 1.5`. All other patterns keep `rate`. | open |
-| 2 | `mode="cut-through"` is not modelled | Accepted and ignored. Every switch is store-and-forward. | open |
-| 3 | Hubs are not a shared medium | Per-port queues with strict priority. Collisions are approximated as simultaneous arrivals, so `collision_rate` rarely counts any, even under load. | open |
+| 1 | `bursty` does not keep `rate` as its long-run average | Mean ON/OFF cycle per frame is `1.5 T`, so the long-run rate is `rate / 1.5`. All other patterns keep `rate`. | to be fixed in ADR-0007 step 5 |
+| 2 | `mode="cut-through"` is not modelled | Accepted and ignored. Every switch is store-and-forward. | accepted: ignored until needed |
+| 3 | Hubs were not a shared medium | They had per-port queues with strict priority, and collisions were approximated as simultaneous arrivals, so `collision_rate` almost never counted any. | resolved: hubs and `collision_rate` removed. A shared segment would come back as a new node kind with half-duplex links and CSMA/CD. |
 | 4 | Wire overhead is not counted | Preamble, SFD, FCS and inter-frame gap (24 B per frame) are not on the wire, so the model's link capacity is higher than real by 24 B per frame: about 2 % for 1 518 B frames and 40 % for 60 B frames. | known simplification |
 | 5 | One random stream for all sources | Adding or reordering one source changes the draws of all others. | to be fixed in ADR-0007 step 5 |

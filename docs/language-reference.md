@@ -42,12 +42,6 @@ switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [
 
 `mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
 
-### `hub` — Layer-1 hub
-
-```
-hub <name> ports=<n>
-```
-
 ### `mqtt_broker` — MQTT message broker
 
 ```
@@ -129,7 +123,6 @@ observe <metric> on <node> every=<ms>
 | `pn_jitter` | µs | Adapter (PROFINET controller), ProfinetDevice |
 | `pn_watchdog_expiries` | count | Adapter (PROFINET controller), ProfinetDevice |
 | `queue_depth` | frames | Switch |
-| `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
 | `utilization` | % | any node |
 

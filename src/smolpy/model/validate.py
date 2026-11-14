@@ -22,7 +22,6 @@ from smolpy.model.frames import PN_CYCLES_MS, PN_MAX_IO_BYTES
 from smolpy.model.scenario import (
     AdapterNode,
     Flow,
-    HubNode,
     Link,
     ModbusSlaveNode,
     MqttBrokerNode,
@@ -55,14 +54,13 @@ class ScenarioError(ValueError):
 KIND_NAMES = {
     "adapter": "Adapter",
     "switch": "Switch",
-    "hub": "Hub",
     "mqtt_broker": "MQTTBroker",
     "modbus_slave": "ModbusSlave",
     "profinet_device": "ProfinetDevice",
 }
 
 ENDPOINTS = (AdapterNode, MqttBrokerNode, ModbusSlaveNode, ProfinetDeviceNode)
-BRIDGES = (SwitchNode, HubNode)
+BRIDGES = (SwitchNode,)
 
 # Metric -> node types it can observe; None means any node. Only metrics the
 # engines implement are listed: "frame_loss" has no implementation yet.
@@ -73,7 +71,6 @@ METRIC_TARGETS: dict[str, tuple[type, ...] | None] = {
     "bytes_received": (AdapterNode,),
     "modbus_latency": (AdapterNode,),
     "queue_depth": (SwitchNode,),
-    "collision_rate": (HubNode,),
     "broker_queue": (MqttBrokerNode,),
     "pn_latency": (AdapterNode, ProfinetDeviceNode),
     "pn_jitter": (AdapterNode, ProfinetDeviceNode),

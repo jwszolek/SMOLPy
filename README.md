@@ -23,7 +23,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 | **Modbus TCP** | TCP/IP | Request / response polling (Read Holding Registers, FC 03) | `ModbusSlave`, `Adapter.polls()` | `modbus_slave`, `poll` | `modbus_latency` |
 | **PROFINET RT** | Layer 2 (EtherType 0x8892), 802.1Q priority 6 | Cyclic producer / consumer exchange with watchdog | `ProfinetDevice`, `Adapter.controls()` | `profinet_device`, `control` | `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` |
 
-Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation) and shared-medium **hubs**. One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
+Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation). One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
 
 **Not supported (yet):** PROFINET IRT, PROFIBUS, EtherNet/IP, EtherCAT, OPC UA, Modbus RTU (serial), and Modbus write function codes. See the [Architecture Decision Records](https://jwszolek.github.io/SMOLPy/adr/0001-protocol-package-structure/) for what is planned.
 
@@ -79,7 +79,6 @@ Each node is drawn as a coloured circle:
 |---|---|
 | Blue | Adapter (host / server / NIC / PLC) |
 | Green | Switch |
-| Orange | Hub |
 | Purple | MQTTBroker |
 | Coral red | ModbusSlave |
 | Teal | ProfinetDevice |
@@ -90,7 +89,7 @@ Node fill changes dynamically during the simulation:
 |---|---|
 | Dim (faded) | Node idle — no traffic yet |
 | Pulsing bright fill | Node actively **transmitting** (`bytes_sent > 0`) |
-| Solid bright fill | Node forwarding traffic (switch / hub) |
+| Solid bright fill | Node forwarding traffic (switch) |
 | Pulsing amber outer ring | Node actively **receiving** data (`bytes_received > 0`) |
 
 Animated particles flow along every link to show live traffic direction.
@@ -124,7 +123,6 @@ Status indicator:
 ```python
 adapter = net.adapter("name", ip="10.0.0.1")          # NIC / host / server
 switch  = net.switch("name",  ports=16, mode="store-and-forward")   # qos="strict" (default) or "fifo"
-hub     = net.hub("name",     ports=8)
 broker  = net.mqtt_broker("name", ip="10.0.2.1")       # MQTT message broker
 slave   = net.modbus_slave("name", ip="10.0.0.10", unit_id=1)  # Modbus TCP slave
 device  = net.profinet_device("name", ip="10.0.4.1")   # PROFINET IO device
@@ -234,7 +232,6 @@ net.observe(metric, on=node, every=interval_ms)
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
 | `utilization` | % | Any node |
-| `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
 | `modbus_latency` | µs | Adapter (master) |
 | `pn_latency` | µs | Adapter (controller), ProfinetDevice |

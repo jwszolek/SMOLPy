@@ -56,7 +56,7 @@ Python API ─┐
 
 - **`smolpy.model`** (new package): frozen dataclasses describing a complete scenario.
     - `Scenario`: the top-level object, with fields `name`, `nodes`, `links`, `traffic`, `observations`, `run`.
-    - **Node types:** `AdapterNode`, `SwitchNode`, `HubNode`, `MqttBrokerNode`, `ModbusSlaveNode`, `ProfinetDeviceNode`.
+    - **Node types:** `AdapterNode`, `SwitchNode`, `HubNode` *(later removed, see [Model Semantics](../model-semantics.md#open-issues), open issue 3)*, `MqttBrokerNode`, `ModbusSlaveNode`, `ProfinetDeviceNode`.
     - **Traffic types:** `Flow`, `Publish`, `Route`, `Poll`, `ProfinetAR`.
     - **Other:** `Link`, `Observation`, and `RunConfig` (duration, seed).
     - Nodes are referenced by **name**, never by object, so the IR is a plain tree with no cycles and can be serialised directly.

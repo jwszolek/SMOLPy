@@ -15,7 +15,6 @@ from smolpy.lang import interpret_to_scenario
 from smolpy.model import (
     AdapterNode,
     Flow,
-    HubNode,
     Link,
     ModbusSlaveNode,
     MqttBrokerNode,
@@ -64,13 +63,13 @@ def _full_network() -> Network:
     plc = net.adapter("plc", ip="10.0.0.1")
     host = net.adapter("host", ip="10.0.0.2", mac="02:aa:bb:cc:dd:ee")
     sw = net.switch("sw", ports=8, mode="cut-through", qos="fifo", mac_table="topology")
-    hub = net.hub("hub", ports=4)
+    edge = net.switch("edge", ports=4)
     broker = net.mqtt_broker("broker", ip="10.0.1.1")
     slave = net.modbus_slave("slave", ip="10.0.2.1", unit_id=7)
     io = net.profinet_device("io", ip="10.0.3.1")
     for node in (plc, host, broker, slave, io):
         net.link(node, sw, speed=100, length=10)
-    net.link(hub, sw, speed=10, length=100, duplex=False)
+    net.link(edge, sw, speed=10, length=100, duplex=False)
 
     plc.controls(io, cycle=4, inputs=32, outputs=16, hold=5, delay_ms=1.5)
     plc.sends(host, rate=500, size="imix", pattern="poisson", priority=3)
@@ -91,13 +90,13 @@ def test_every_kind_maps_to_the_ir() -> None:
         AdapterNode("plc", "10.0.0.1", "02:00:0a:00:00:01"),
         AdapterNode("host", "10.0.0.2", "02:aa:bb:cc:dd:ee"),
         SwitchNode("sw", 8, "cut-through", "fifo", "topology"),
-        HubNode("hub", 4),
+        SwitchNode("edge", 4),
         MqttBrokerNode("broker", "10.0.1.1", "02:00:0a:00:01:01"),
         ModbusSlaveNode("slave", "10.0.2.1", "02:00:0a:00:02:01", 7),
         ProfinetDeviceNode("io", "10.0.3.1", "02:00:0a:00:03:01"),
     )
-    assert sc.links[-1] == Link("hub", "sw", 10, 100, duplex=False)
-    assert [lk.a for lk in sc.links] == ["plc", "host", "broker", "slave", "io", "hub"]
+    assert sc.links[-1] == Link("edge", "sw", 10, 100, duplex=False)
+    assert [lk.a for lk in sc.links] == ["plc", "host", "broker", "slave", "io", "edge"]
     assert sc.traffic == (
         ProfinetAR("plc", "io", 4, 32, 16, 5, 1.5),
         Flow("plc", "host", 500, "imix", "poisson", 0.0, None, 3),
@@ -185,6 +184,7 @@ def test_benchmark_scenario_round_trips(scenario: str) -> None:
         (lambda d: d.update(version=2), "unsupported smol-ir version 2"),
         (lambda d: d.update(extra=1), "unknown field(s) extra"),
         (lambda d: d["nodes"][0].update(kind="router"), "unknown kind 'router'"),
+        (lambda d: d["nodes"][2].update(kind="hub"), "unknown kind 'hub'"),
         (lambda d: d["nodes"][0].pop("ip"), "missing field(s) ip"),
         (lambda d: d["links"][0].update(speed=1), "unknown field(s) speed"),
         (lambda d: d["traffic"][2].update(batch={"kind": "zipf", "param": 2}), "batch kind"),

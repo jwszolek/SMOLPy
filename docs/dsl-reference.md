@@ -6,7 +6,6 @@
 adapter = net.adapter("name", ip="10.0.0.1")          # NIC / host / server
 switch  = net.switch("name",  ports=16, mode="store-and-forward")   # qos="strict" (default) or "fifo"
                                                        # mac_table="learning" (default) or "topology"
-hub     = net.hub("name",     ports=8)
 broker  = net.mqtt_broker("name", ip="10.0.2.1")       # MQTT message broker
 slave   = net.modbus_slave("name", ip="10.0.0.10", unit_id=1)  # Modbus TCP slave
 device  = net.profinet_device("name", ip="10.0.4.1")   # PROFINET IO device
@@ -130,7 +129,6 @@ net.observe(metric, on=node, every=interval_ms)
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
 | `utilization` | % | Any node |
-| `collision_rate` | /s | Hub |
 | `broker_queue` | msgs | MQTTBroker |
 | `modbus_latency` | µs | Adapter (master) |
 | `pn_latency` | µs | Adapter (controller), ProfinetDevice |

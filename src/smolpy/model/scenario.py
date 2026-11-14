@@ -58,15 +58,6 @@ class SwitchNode:
 
 
 @dataclass(frozen=True)
-class HubNode:
-    """Layer-1 hub: one shared collision domain."""
-
-    kind: ClassVar[str] = "hub"
-    name: str
-    ports: int
-
-
-@dataclass(frozen=True)
 class MqttBrokerNode:
     kind: ClassVar[str] = "mqtt_broker"
     name: str
@@ -91,9 +82,7 @@ class ProfinetDeviceNode:
     mac: str
 
 
-NodeSpec = (
-    AdapterNode | SwitchNode | HubNode | MqttBrokerNode | ModbusSlaveNode | ProfinetDeviceNode
-)
+NodeSpec = AdapterNode | SwitchNode | MqttBrokerNode | ModbusSlaveNode | ProfinetDeviceNode
 
 
 # --- links ---
@@ -293,7 +282,6 @@ _NODE_KINDS: dict[str, type] = {
     for c in (
         AdapterNode,
         SwitchNode,
-        HubNode,
         MqttBrokerNode,
         ModbusSlaveNode,
         ProfinetDeviceNode,

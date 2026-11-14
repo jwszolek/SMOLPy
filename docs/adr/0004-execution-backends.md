@@ -111,7 +111,7 @@ smolpy backends                             # list backends and their capabiliti
 | `adapter`, `mqtt_broker`, `modbus_slave` | Node with Internet stack (IPv4 address from `ip`) |
 | `switch` (store-and-forward) | Node with a learning bridge over one device per port |
 | `switch mode=cut-through` | **unsupported** — capability error |
-| `hub` | Shared CSMA channel |
+| `hub` | Shared CSMA channel *(hubs and `collision_rate` were later removed; see [Model Semantics](../model-semantics.md#open-issues), open issue 3)* |
 | `link speed= length=` | Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`) |
 | `flow` | UDP application; payload sized so the on-wire frame matches `size` (constant, Poisson, bursty patterns; `imix` sizes) |
 | `publish` / `route` | MQTT publisher / broker Applications over one persistent TCP connection per client; QoS 1 sends PUBACK |
@@ -128,7 +128,7 @@ smolpy backends                             # list backends and their capabiliti
 | `queue_depth` | ✓ | ✓ (device / traffic-control queue length) |
 | `utilization` | ✓ | ✓ |
 | `broker_queue` | ✓ | ✓ (application-level queue in the broker app) |
-| `collision_rate` | ✓ | — (shared-medium semantics differ; see below) |
+| `collision_rate` | ✓ | — (shared-medium semantics differ; see below) *(removed)* |
 
 ### Cross-backend consistency tests
 
@@ -146,7 +146,7 @@ The ns-3 suite is skipped automatically when ns-3 is not available, and runs in 
 
 ### To verify during implementation
 
-- Exact behaviour of ns-3's CSMA model versus SimPy's collision approximation, to decide whether `hub` support should be limited further.
+- Exact behaviour of ns-3's CSMA model versus SimPy's collision approximation, to decide whether `hub` support should be limited further. *(Resolved: hubs were removed.)*
 - How ns-3 queue lengths should be sampled so that `queue_depth` is comparable to SimPy's per-port frame count.
 - Whether the pinned ns-3 release's build tool supports building scratch programs with an extra module cleanly, or the module should be installed as a contrib module.
 

@@ -10,7 +10,6 @@ MetricName = Literal[
     "throughput",
     "latency",
     "frame_loss",
-    "collision_rate",
     "queue_depth",
     "utilization",
     "bytes_sent",

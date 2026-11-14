@@ -11,7 +11,6 @@ from smolpy.lang.ast import (
     ControlDecl,
     Decl,
     FlowDecl,
-    HubDecl,
     LinkDecl,
     ModbusSlaveDecl,
     MqttBrokerDecl,
@@ -97,15 +96,6 @@ class _SmolTransformer(Transformer):
             line=meta.line,
             qos=str(kw.get("qos", "strict")),
             mac_table=str(kw.get("mac_table", "learning")),
-        )
-
-    def hub_decl(self, meta: Any, children: list) -> HubDecl:
-        name, *pairs = children
-        kw = dict(pairs)
-        return HubDecl(
-            name=str(name),
-            ports=int(_require(kw, "ports", file=self.file, line=meta.line, stmt="hub")),
-            line=meta.line,
         )
 
     def mqtt_broker_decl(self, meta: Any, children: list) -> MqttBrokerDecl:

@@ -13,7 +13,6 @@ from smolpy.lang import SMOLSemanticError, interpret_and_run
 from smolpy.model import (
     AdapterNode,
     Flow,
-    HubNode,
     Link,
     ModbusSlaveNode,
     MqttBrokerNode,
@@ -39,7 +38,7 @@ def _base() -> Scenario:
             AdapterNode("plc", "10.0.0.1", "02:00:0a:00:00:01"),
             AdapterNode("host", "10.0.0.2", "02:00:0a:00:00:02"),
             SwitchNode("sw", 8),
-            HubNode("hub", 2),
+            SwitchNode("edge", 2),
             MqttBrokerNode("broker", "10.0.1.1", "02:00:0a:00:01:01"),
             ModbusSlaveNode("slave", "10.0.2.1", "02:00:0a:00:02:01", 1),
             ProfinetDeviceNode("io", "10.0.3.1", "02:00:0a:00:03:01"),
@@ -50,7 +49,7 @@ def _base() -> Scenario:
             Link("broker", "sw", 100, 10),
             Link("slave", "sw", 100, 10),
             Link("io", "sw", 100, 10),
-            Link("hub", "sw", 10, 10),
+            Link("edge", "sw", 10, 10),
         ),
         traffic=(
             ProfinetAR("plc", "io", 4, 32, 16),
@@ -101,12 +100,12 @@ INVALID = [
     (_with("links", 0, length_m=-1), "length must be zero or positive", ("links", 0)),
     (_with("links", 0, b="nowhere"), "undeclared node 'nowhere'", ("links", 0)),
     (
-        _plus("links", Link("plc", "hub", 10, 1)),
+        _plus("links", Link("plc", "edge", 10, 1)),
         "'plc' is an end station and already has a link",
         ("links", 6),
     ),
     (_with("nodes", 2, ports=5), "'sw' has only 5 ports, all in use", ("links", 5)),
-    (_plus("links", Link("host", "hub", 10, 1)), "already has a link", ("links", 6)),
+    (_plus("links", Link("host", "edge", 10, 1)), "already has a link", ("links", 6)),
     # traffic
     (
         _with("traffic", 1, priority=9),
@@ -155,11 +154,20 @@ INVALID = [
     ),
     (_with("traffic", 4, subscribers=("plc", "plc")), "'plc' listed twice", ("traffic", 4)),
     (_plus("traffic", Route("broker", "t", ("host",))), "topic is routed twice", ("traffic", 5)),
-    (_with("traffic", 4, subscribers=("hub",)), "'hub' is a Hub, expected Adapter", ("traffic", 4)),
+    (
+        _with("traffic", 4, subscribers=("edge",)),
+        "'edge' is a Switch, expected Adapter",
+        ("traffic", 4),
+    ),
     # observations
     (
         _with("observations", 0, metric="frame_loss"),
         "unknown or unsupported metric 'frame_loss'",
+        ("observations", 0),
+    ),
+    (
+        _with("observations", 0, metric="collision_rate"),
+        "unknown or unsupported metric 'collision_rate'",
         ("observations", 0),
     ),
     (
@@ -222,9 +230,9 @@ def test_traffic_between_disconnected_parts_is_rejected() -> None:
 def test_loops_are_rejected() -> None:
     sc = _plus("nodes", SwitchNode("sw2", 4))
     sc = dataclasses.replace(
-        sc, links=sc.links + (Link("sw", "sw2", 100, 1), Link("sw2", "hub", 100, 1))
+        sc, links=sc.links + (Link("sw", "sw2", 100, 1), Link("sw2", "edge", 100, 1))
     )
-    with pytest.raises(ScenarioError, match="link sw2 -- hub: closes a loop"):
+    with pytest.raises(ScenarioError, match="link sw2 -- edge: closes a loop"):
         validate(sc)
 
 
