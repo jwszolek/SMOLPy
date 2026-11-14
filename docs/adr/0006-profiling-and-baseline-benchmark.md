@@ -120,6 +120,17 @@ Optimised SimPy meets all three targets, so ADR-0008 does **not** proceed on the
 
 Both SimPy figures are estimates. Before any Rust work starts, B4 is added to the suite and both targets are measured on optimised SimPy. Only a measured miss opens the gate.
 
+**Evaluation of the research targets (2026-11-13, commit `80a493f`):**
+
+| Research target | Optimised SimPy, measured | Result |
+|---|---|---|
+| B4 at 100 M frames, metrics off, under 30 min | 6 361 s (106 min); 2.50 G events at 393 k events/s; peak 204 MB | **missed**, 3.5× over |
+| 1 000 replications of B3 at 1 M frames under 30 min on 8 cores | 16 runs, 8 at a time, in 183 s, i.e. 315 runs/h; 1 000 runs ≈ 3.2 h | **missed**, 6.4× over |
+
+Running 8 at a time slowed each run only by ~8 % (69.6 s against 64.6 s alone). The batch is bound by the cost of one run, not by contention.
+
+Optimised SimPy misses both research targets, so **the gate is open: ADR-0008 proceeds**, after ADR-0007 and subject to its own stop criterion. B4 also needed switches that start converged (`mac_table="topology"`). With address learning, start-up flooding alone took 45 min and 12 GB at 1 M frames.
+
 ---
 
 ## Consequences

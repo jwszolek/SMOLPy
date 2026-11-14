@@ -42,7 +42,7 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - Hotspot report is published.
 - Decision gate for Rust is evaluated. Rust goes ahead only if optimised SimPy misses the targets defined in ADR-0006.
 
-**Status:** done. Optimised SimPy met the original targets, so the gate was extended with research targets (B4 with 10 000 nodes, 1 000 replications of B3). These are measured on SimPy before Phase 4 starts.
+**Status:** done. Optimised SimPy met the original targets, so the gate was extended with research targets (B4 with 10 000 nodes, 1 000 replications of B3). Optimised SimPy misses both: B4 at 100 M frames takes 106 min against 30 min, and 1 000 × B3 takes ~3.2 h against 30 min. Phase 4 is therefore justified.
 
 ## Phase 2: separate the model from its execution ([ADR-0007](adr/0007-execution-independent-scenario-model.md))
 

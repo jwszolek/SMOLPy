@@ -247,4 +247,19 @@ The full suite was re-run after all four optimisations, at commit `d3eb8a2`, on 
 | Peak memory at 10 M frames under 4 GB | max 145 MB | **met** |
 | 100 × B2 at 1 M frames under 1 h on 8 cores | not measured; 100 × 35.2 s / 8 ≈ 7–8 min if runs scale, ~15 min allowing 2× for shared cores | **met (estimate)**, to be confirmed by the ADR-0009 batch runner |
 
-By the rule in ADR-0006 §6, optimised SimPy meets all three targets, so the Rust engine (ADR-0008) **does not proceed on these targets**. They measure whether SimPy is sufficient for today's scenarios, not for larger networks or many independent runs. Revising them is a decision to be recorded in ADR-0006.
+By the rule in ADR-0006 §6, optimised SimPy meets all three targets, so the Rust engine (ADR-0008) **does not proceed on these targets**. These targets measure whether SimPy is enough for today's scenarios, not for larger networks or many independent runs. The gate was therefore extended with research targets (ADR-0006 §6, revision).
+
+### Research targets
+
+Measured at commit `80a493f`. Raw results are in `benchmarks/results/2026-11-13-2119-simpy-jaws-zbook-research-b4.json` and `…-2116-…-research-batch.json`.
+
+| Target | Optimised SimPy | Result |
+|---|---|---|
+| B4 (10 201 nodes) at 100 M frames, metrics off, under 30 min | 6 361 s (106 min): 2.50 G events, 393 k events/s, 15.7 k frames/s, peak 204 MB | **missed**, 3.5× over |
+| 1 000 × B3 at 1 M frames, metrics on, under 30 min on 8 cores | 16 runs, 8 at a time: 183 s, i.e. 315 runs/h; 1 000 runs ≈ 3.2 h | **missed**, 6.4× over |
+
+- **B4 scales linearly:** 24.8 → 25.0 events per frame from 1 M to 100 M frames. Memory stays flat at ~204 MB, of which the 10 201-node topology is most.
+- **The event rate is lower than in B3:** 393 k against ~465 k events/s. Larger MAC tables and more processes make each event slightly more expensive.
+- **Parallel runs barely slow each other:** ~8 % per run at 8 at a time. Batch throughput is limited by the cost of one run.
+
+Optimised SimPy misses both research targets, so **the gate is open for ADR-0008**. Work there starts after ADR-0007 and is subject to its stop criterion: B1 at least 10× faster than optimised SimPy.

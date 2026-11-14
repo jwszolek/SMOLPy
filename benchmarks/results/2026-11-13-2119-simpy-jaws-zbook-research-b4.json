@@ -1,0 +1,43 @@
+{
+ "format": "smolpy-bench",
+ "version": 1,
+ "label": "research-b4",
+ "backend": "simpy",
+ "created": "2026-11-13T21:19:10",
+ "environment": {
+  "host": "jaws-zbook",
+  "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+  "cpu": "Intel(R) Core(TM) Ultra 7 255H",
+  "cpu_count": 16,
+  "memory": "31745644 kB",
+  "python": "3.14.4",
+  "simpy": "4.1.2",
+  "smolpy": "0.5.1.dev0+ga618933df.d20260918",
+  "git_commit": "80a493f",
+  "git_dirty": false
+ },
+ "runs": [
+  {
+   "scenario": "B4",
+   "frames_target": 100000000,
+   "metrics": "off",
+   "seed": 42,
+   "profile": null,
+   "status": "ok",
+   "sim_duration_ms": 500000.0,
+   "frames_expected": 100000000,
+   "nodes": 10201,
+   "events": 2499800373,
+   "build_s": 0.07391565399302635,
+   "run_s": 6361.407419561001,
+   "events_per_s": 392963.41330272955,
+   "frames_per_s": 15719.791770057855,
+   "rss_import_kb": 37044,
+   "rss_after_build_kb": 53556,
+   "peak_rss_kb": 209168,
+   "output_hash": "8baa4b07a1eb00c8",
+   "metrics_hash": "44136fa355b3678a",
+   "rep": 1
+  }
+ ]
+}
