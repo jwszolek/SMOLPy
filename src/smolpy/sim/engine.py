@@ -5,13 +5,15 @@ import itertools
 import random
 import time
 from collections import defaultdict
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass, field
+from fractions import Fraction
 from typing import TYPE_CHECKING
 
 import simpy
 
 from smolpy import model
+from smolpy.model import timebase as tb
 from smolpy.model.frames import (
     MODBUS_REQUEST_BYTES,
     MQTT_PUBACK_BYTES,
@@ -26,10 +28,19 @@ if TYPE_CHECKING:
     from smolpy.core.batch import BatchSpec
     from smolpy.core.network import SimulationResult
 
-_MAX_RETRIES = 16
-_SLOT_TIME_US = 51.2  # 10 Mbps Ethernet slot time (µs)
+# Simulated time is an integer number of nanoseconds (Model Semantics §1):
+# every timeout and timestamp below is an int, computed by smolpy.model.timebase.
 
 Samples = list[tuple[float, float]]  # (time_ms, value)
+
+
+class _Environment(simpy.Environment):
+    """A SimPy environment whose clock is an integer number of nanoseconds:
+    every timeout is an int, so ``now`` is one too."""
+
+    @property
+    def now(self) -> int:
+        return self._now  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +53,7 @@ class _Frame:
     src_mac: str
     dst_mac: str
     size_bytes: int
-    created_at_us: float
+    created_at_ns: int
     retries: int = field(default=0)
     in_port: int = field(default=-1)  # port index at the receiving switch
     mqtt_topic: str | None = field(default=None)
@@ -77,10 +88,10 @@ def _resolve_size(size: int | str, rng: random.Random) -> int:
 # and clears it after every sample; with no observer the value is not even
 # computed. Memory therefore depends on the sampling window, not on the
 # run length (ADR-0006 §5).
-Sinks = list[list[float]]
+Sinks = list[list[int]]  # values in ns
 
 
-def _emit(sinks: Sinks, value: float) -> None:
+def _emit(sinks: Sinks, value: int) -> None:
     for window in sinks:
         window.append(value)
 
@@ -92,13 +103,13 @@ class _AdapterCounters:
         self.latency_sinks: Sinks = []
         self.modbus_rtt_sinks: Sinks = []
 
-    def record(self, frame: _Frame, now: float) -> None:
+    def record(self, frame: _Frame, now: int) -> None:
         self.bytes_received += frame.size_bytes
         self.frames_received += 1
         if self.latency_sinks:
-            _emit(self.latency_sinks, now - frame.created_at_us)
+            _emit(self.latency_sinks, now - frame.created_at_ns)
         if frame.modbus_is_response and self.modbus_rtt_sinks:
-            _emit(self.modbus_rtt_sinks, now - frame.created_at_us)
+            _emit(self.modbus_rtt_sinks, now - frame.created_at_ns)
 
 
 # ---------------------------------------------------------------------------
@@ -116,16 +127,17 @@ class _LinkChannel:
 
     def __init__(
         self,
-        env: simpy.Environment,
-        speed_bps: float,
-        prop_delay_us: float,
+        env: _Environment,
+        speed_mbps: float,
+        prop_delay_ns: int,
         in_port: int,
         dst_store: simpy.Store,
         strict_priority: bool = True,
     ) -> None:
         self.env = env
-        self.speed_bps = speed_bps
-        self.prop_delay_us = prop_delay_us
+        self.speed_mbps = speed_mbps
+        self.prop_delay_ns = prop_delay_ns
+        self._tx_ns: dict[int, int] = {}  # transmission time by frame size
         self.in_port = in_port
         self.dst_store = dst_store
         self.strict_priority = strict_priority
@@ -156,10 +168,13 @@ class _LinkChannel:
         while True:
             item = yield self.queue.get()
             frame: _Frame = item.item
-            tx_us = (frame.size_bytes * 8) / self.speed_bps * 1_000_000
-            yield self.env.timeout(tx_us)
-            self.bits_sent += frame.size_bytes * 8
-            in_flight = self.env.timeout(self.prop_delay_us, frame)
+            size = frame.size_bytes
+            tx_ns = self._tx_ns.get(size)
+            if tx_ns is None:
+                tx_ns = self._tx_ns[size] = tb.transmission_ns(size, self.speed_mbps)
+            yield self.env.timeout(tx_ns)
+            self.bits_sent += size * 8
+            in_flight = self.env.timeout(self.prop_delay_ns, frame)
             in_flight.callbacks.append(self._deliver)
 
     def _deliver(self, in_flight: simpy.Event) -> None:
@@ -176,30 +191,37 @@ class _LinkChannel:
 # ---------------------------------------------------------------------------
 
 
+def _ticks(env: _Environment, period: tb.Exact) -> Iterator[simpy.Timeout]:
+    """Timeouts to the sample instants ``round(k * period)``, k = 1, 2, ...;
+    after each one ``env.now`` is the instant."""
+    for t in tb.instants(0, period):
+        yield env.timeout(t - env.now)
+
+
 def _bytes_rx_sampler(
-    env: simpy.Environment,
+    env: _Environment,
     counters: _AdapterCounters,
-    interval_us: float,
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
-    while True:
-        yield env.timeout(interval_us)
-        samples.append((env.now / 1_000, counters.bytes_received / 1_000_000))
+    for tick in _ticks(env, period):
+        yield tick
+        samples.append((tb.ns_to_ms(env.now), counters.bytes_received / 1_000_000))
 
 
 def _bytes_tx_sampler(
-    env: simpy.Environment,
+    env: _Environment,
     channel: _LinkChannel,
-    interval_us: float,
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
-    while True:
-        yield env.timeout(interval_us)
-        samples.append((env.now / 1_000, channel.bits_sent / 8 / 1_000_000))
+    for tick in _ticks(env, period):
+        yield tick
+        samples.append((tb.ns_to_ms(env.now), channel.bits_sent // 8 / 1_000_000))
 
 
 def _traffic_gen(
-    env: simpy.Environment,
+    env: _Environment,
     src_mac: str,
     dst_mac: str,
     rate_fps: float,
@@ -207,65 +229,57 @@ def _traffic_gen(
     pattern: str,
     channel: _LinkChannel,
     rng: random.Random,
-    delay_us: float = 0.0,
+    delay_ns: int = 0,
     batch: BatchSpec | None = None,  # only for pattern == "batch"
     priority: int = 0,
 ) -> Generator:
-    if delay_us > 0.0:
-        yield env.timeout(delay_us)
-    interval_us = 1_000_000.0 / rate_fps
-    if pattern == "batch":
+    def send() -> None:
+        channel.enqueue(
+            _Frame(
+                src_mac=src_mac,
+                dst_mac=dst_mac,
+                size_bytes=_resolve_size(size_spec, rng),
+                created_at_ns=env.now,
+                priority=priority,
+            )
+        )
+
+    if delay_ns > 0:
+        yield env.timeout(delay_ns)
+    period = tb.interval_ns(rate_fps)  # exact
+    mean_ns = float(period)  # the mean of random gaps; each draw is rounded
+    if pattern == "constant":
+        for t in tb.instants(delay_ns, period):
+            yield env.timeout(t - env.now)
+            send()
+    elif pattern == "poisson":
+        while True:
+            yield env.timeout(tb.draw_ns(rng.expovariate(1.0 / mean_ns)))
+            send()
+    elif pattern == "batch":
         assert batch is not None, "pattern='batch' needs a BatchSpec"
         # Compound Poisson: groups arrive at rate rate/E[X]; each group's X
         # frames are enqueued back to back at the same instant.
-        group_interval_us = interval_us * batch.mean()
+        group_ns = mean_ns * batch.mean()
         while True:
-            yield env.timeout(rng.expovariate(1.0 / group_interval_us))
+            yield env.timeout(tb.draw_ns(rng.expovariate(1.0 / group_ns)))
             for _ in range(batch.draw(rng)):
-                channel.enqueue(
-                    _Frame(
-                        src_mac=src_mac,
-                        dst_mac=dst_mac,
-                        size_bytes=_resolve_size(size_spec, rng),
-                        created_at_us=env.now,
-                        priority=priority,
-                    )
-                )
-    while True:
-        if pattern == "bursty":
-            # ON: Pareto-distributed burst at 4x rate; OFF: proportional silence
-            # with mean 0.75 T per frame, so a cycle averages T per frame.
+                send()
+    else:  # bursty
+        # ON: Pareto-distributed burst at 4x rate; OFF: proportional silence
+        # with mean 0.75 T per frame, so a cycle averages T per frame.
+        quarter = Fraction(period) / 4
+        while True:
             burst_len = max(1, int(rng.paretovariate(1.5)))
+            in_burst = tb.instants(env.now, quarter)
             for _ in range(burst_len):
-                yield env.timeout(interval_us / 4)
-                channel.enqueue(
-                    _Frame(
-                        src_mac=src_mac,
-                        dst_mac=dst_mac,
-                        size_bytes=_resolve_size(size_spec, rng),
-                        created_at_us=env.now,
-                        priority=priority,
-                    )
-                )
-            yield env.timeout(interval_us * burst_len * rng.uniform(0.3, 1.2))
-        else:
-            if pattern == "constant":
-                yield env.timeout(interval_us)
-            else:  # poisson
-                yield env.timeout(rng.expovariate(1.0 / interval_us))
-            channel.enqueue(
-                _Frame(
-                    src_mac=src_mac,
-                    dst_mac=dst_mac,
-                    size_bytes=_resolve_size(size_spec, rng),
-                    created_at_us=env.now,
-                    priority=priority,
-                )
-            )
+                yield env.timeout(next(in_burst) - env.now)
+                send()
+            yield env.timeout(tb.draw_ns(mean_ns * burst_len * rng.uniform(0.3, 1.2)))
 
 
 def _mqtt_traffic_gen(
-    env: simpy.Environment,
+    env: _Environment,
     src_mac: str,
     dst_mac: str,
     topic: str,
@@ -273,20 +287,19 @@ def _mqtt_traffic_gen(
     frame_size: int,
     qos: int,
     channel: _LinkChannel,
-    delay_us: float = 0.0,
+    delay_ns: int = 0,
 ) -> Generator:
     """Periodic MQTT PUBLISH traffic (constant-rate, sensor-style)."""
-    if delay_us > 0.0:
-        yield env.timeout(delay_us)
-    interval_us = 1_000_000.0 / rate_hz
-    while True:
-        yield env.timeout(interval_us)
+    if delay_ns > 0:
+        yield env.timeout(delay_ns)
+    for t in tb.instants(delay_ns, tb.interval_ns(rate_hz)):
+        yield env.timeout(t - env.now)
         channel.enqueue(
             _Frame(
                 src_mac=src_mac,
                 dst_mac=dst_mac,
                 size_bytes=frame_size,
-                created_at_us=env.now,
+                created_at_ns=env.now,
                 mqtt_topic=topic,
                 mqtt_qos=qos,
             )
@@ -294,7 +307,7 @@ def _mqtt_traffic_gen(
 
 
 def _modbus_poll_gen(
-    env: simpy.Environment,
+    env: _Environment,
     src_mac: str,
     dst_mac: str,
     unit_id: int,
@@ -302,20 +315,19 @@ def _modbus_poll_gen(
     frame_size: int,
     rate_hz: float,
     channel: _LinkChannel,
-    delay_us: float = 0.0,
+    delay_ns: int = 0,
 ) -> Generator:
     """Periodic Modbus TCP poll request (Read Holding Registers, FC 03)."""
-    if delay_us > 0.0:
-        yield env.timeout(delay_us)
-    interval_us = 1_000_000.0 / rate_hz
-    while True:
-        yield env.timeout(interval_us)
+    if delay_ns > 0:
+        yield env.timeout(delay_ns)
+    for t in tb.instants(delay_ns, tb.interval_ns(rate_hz)):
+        yield env.timeout(t - env.now)
         channel.enqueue(
             _Frame(
                 src_mac=src_mac,
                 dst_mac=dst_mac,
                 size_bytes=frame_size,
-                created_at_us=env.now,
+                created_at_ns=env.now,
                 modbus_unit_id=unit_id,
                 modbus_register_count=register_count,
             )
@@ -323,7 +335,7 @@ def _modbus_poll_gen(
 
 
 def _modbus_slave_responder(
-    env: simpy.Environment,
+    env: _Environment,
     inbound: simpy.Store,
     slave_mac: str,
     unit_id: int,
@@ -342,7 +354,7 @@ def _modbus_slave_responder(
                 src_mac=slave_mac,
                 dst_mac=frame.src_mac,
                 size_bytes=response_size,
-                created_at_us=frame.created_at_us,  # preserve original timestamp for RTT
+                created_at_ns=frame.created_at_ns,  # preserve original timestamp for RTT
                 modbus_unit_id=unit_id,
                 modbus_register_count=frame.modbus_register_count,
                 modbus_is_response=True,
@@ -351,7 +363,7 @@ def _modbus_slave_responder(
 
 
 def _mqtt_broker_forwarder(
-    env: simpy.Environment,
+    env: _Environment,
     inbound: simpy.Store,
     broker_mac: str,
     topic_subs: dict[str, list[str]],  # topic → [subscriber_mac, ...]
@@ -370,7 +382,7 @@ def _mqtt_broker_forwarder(
                     src_mac=broker_mac,
                     dst_mac=sub_mac,
                     size_bytes=frame.size_bytes,
-                    created_at_us=frame.created_at_us,  # preserve original timestamp for latency
+                    created_at_ns=frame.created_at_ns,  # preserve original timestamp for latency
                     mqtt_topic=frame.mqtt_topic,
                 )
             )
@@ -381,65 +393,65 @@ def _mqtt_broker_forwarder(
                     src_mac=broker_mac,
                     dst_mac=frame.src_mac,
                     size_bytes=MQTT_PUBACK_BYTES,
-                    created_at_us=env.now,
+                    created_at_ns=env.now,
                 )
             )
 
 
 def _broker_queue_sampler(
-    env: simpy.Environment,
+    env: _Environment,
     inbound: simpy.Store,
-    interval_us: float,
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
-    while True:
-        yield env.timeout(interval_us)
-        samples.append((env.now / 1_000, float(len(inbound.items))))
+    for tick in _ticks(env, period):
+        yield tick
+        samples.append((tb.ns_to_ms(env.now), float(len(inbound.items))))
 
 
 class _PnAR:
     """Consumer-side state of one PROFINET RT data direction."""
 
-    def __init__(self, cycle_us: float, hold: int) -> None:
-        self.cycle_us = cycle_us
+    def __init__(self, cycle_ns: int, hold: int) -> None:
+        self.cycle_ns = cycle_ns
         self.hold = hold
-        self.last_arrival: float | None = None
+        self.last_arrival: int | None = None
         self.arrival: simpy.Event | None = None
 
 
 class _PnConsumer:
     """Consumer of PROFINET RT cyclic data for one node, across all its ARs."""
 
-    def __init__(self, env: simpy.Environment) -> None:
+    def __init__(self, env: _Environment) -> None:
         self.env = env
         self.ars: dict[int, _PnAR] = {}
         self.latency_sinks: Sinks = []
         self.jitter_sinks: Sinks = []
         self.watchdog_expiries: int = 0
 
-    def expect(self, ar_id: int, cycle_us: float, hold: int) -> None:
-        self.ars[ar_id] = _PnAR(cycle_us, hold)
+    def expect(self, ar_id: int, cycle_ns: int, hold: int) -> None:
+        self.ars[ar_id] = _PnAR(cycle_ns, hold)
 
-    def record(self, frame: _Frame, now: float) -> None:
+    def record(self, frame: _Frame, now: int) -> None:
         ar = self.ars.get(frame.pn_ar_id) if frame.pn_ar_id is not None else None
         if ar is None:
             return
         if self.latency_sinks:
-            _emit(self.latency_sinks, now - frame.created_at_us)
+            _emit(self.latency_sinks, now - frame.created_at_ns)
         if ar.last_arrival is None:
             # Supervision starts with the first frame, as after AR establishment.
             self.env.process(self._watchdog(ar))
         elif self.jitter_sinks:
-            _emit(self.jitter_sinks, abs(now - ar.last_arrival - ar.cycle_us))
+            _emit(self.jitter_sinks, abs(now - ar.last_arrival - ar.cycle_ns))
         ar.last_arrival = now
         if ar.arrival is not None and not ar.arrival.triggered:
             ar.arrival.succeed()
 
     def _watchdog(self, ar: _PnAR) -> Generator:
-        timeout_us = ar.hold * ar.cycle_us
+        timeout_ns = ar.hold * ar.cycle_ns
         while True:
             ar.arrival = self.env.event()
-            fired = yield ar.arrival | self.env.timeout(timeout_us)
+            fired = yield ar.arrival | self.env.timeout(timeout_ns)
             if ar.arrival in fired:
                 continue
             # Real devices abort the AR here; we count it and keep exchanging
@@ -449,19 +461,19 @@ class _PnConsumer:
 
 
 def _pn_provider(
-    env: simpy.Environment,
+    env: _Environment,
     src_mac: str,
     dst_mac: str,
     ar_id: int,
     frame_size: int,
-    cycle_us: float,
+    cycle_ns: int,
     channel: _LinkChannel,
     priority: int,
-    delay_us: float = 0.0,
+    delay_ns: int = 0,
 ) -> Generator:
     """PROFINET RT provider: one cyclic I/O frame every update time."""
-    if delay_us > 0.0:
-        yield env.timeout(delay_us)
+    if delay_ns > 0:
+        yield env.timeout(delay_ns)
     counter = 0
     while True:
         channel.enqueue(
@@ -469,18 +481,18 @@ def _pn_provider(
                 src_mac=src_mac,
                 dst_mac=dst_mac,
                 size_bytes=frame_size,
-                created_at_us=env.now,
+                created_at_ns=env.now,
                 priority=priority,
                 pn_ar_id=ar_id,
                 pn_cycle_counter=counter,
             )
         )
         counter = (counter + 1) & 0xFFFF
-        yield env.timeout(cycle_us)
+        yield env.timeout(cycle_ns)  # an integer cycle: exact, no drift
 
 
 def _pn_device_receiver(
-    env: simpy.Environment,
+    env: _Environment,
     inbound: simpy.Store,
     mac: str,
     consumer: _PnConsumer,
@@ -492,46 +504,51 @@ def _pn_device_receiver(
         consumer.record(frame, env.now)
 
 
-def _mean(values: list[float]) -> float:
-    return sum(values) / len(values)
+def _mean_us(values: list[int]) -> float:
+    """Mean of integer ns values, in µs: one division of exact integers."""
+    return sum(values) / (len(values) * tb.NS_PER_US)
+
+
+def _max_us(values: list[int]) -> float:
+    return max(values) / tb.NS_PER_US
 
 
 def _window_sampler(
-    env: simpy.Environment,
+    env: _Environment,
     sinks: Sinks,
-    aggregate: Callable[[list[float]], float],
-    interval_us: float,
+    aggregate: Callable[[list[int]], float],
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
     """Aggregate the values emitted into *sinks* during each sampling window."""
-    window: list[float] = []
+    window: list[int] = []
     sinks.append(window)  # registered now, before any frame can arrive
-    return _window_loop(env, window, aggregate, interval_us, samples)
+    return _window_loop(env, window, aggregate, period, samples)
 
 
 def _window_loop(
-    env: simpy.Environment,
-    window: list[float],
-    aggregate: Callable[[list[float]], float],
-    interval_us: float,
+    env: _Environment,
+    window: list[int],
+    aggregate: Callable[[list[int]], float],
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
-    while True:
-        yield env.timeout(interval_us)
+    for tick in _ticks(env, period):
+        yield tick
         if window:
-            samples.append((env.now / 1_000, aggregate(window)))
+            samples.append((tb.ns_to_ms(env.now), aggregate(window)))
             window.clear()
 
 
 def _pn_expiries_sampler(
-    env: simpy.Environment,
+    env: _Environment,
     consumer: _PnConsumer,
-    interval_us: float,
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
-    while True:
-        yield env.timeout(interval_us)
-        samples.append((env.now / 1_000, float(consumer.watchdog_expiries)))
+    for tick in _ticks(env, period):
+        yield tick
+        samples.append((tb.ns_to_ms(env.now), float(consumer.watchdog_expiries)))
 
 
 def _replicate(frame: _Frame, out_channels: dict[int, _LinkChannel]) -> None:
@@ -570,7 +587,7 @@ def _topology_mac_table(
 
 
 def _switch_forwarder(
-    env: simpy.Environment,
+    env: _Environment,
     inbound: simpy.Store,
     out_channels: dict[int, _LinkChannel],
     initial_mac: dict[str, int] | None = None,
@@ -594,7 +611,7 @@ def _switch_forwarder(
 
 
 def _adapter_receiver(
-    env: simpy.Environment,
+    env: _Environment,
     inbound: simpy.Store,
     mac: str,
     counters: _AdapterCounters,
@@ -613,47 +630,52 @@ def _adapter_receiver(
 
 
 def _throughput_sampler(
-    env: simpy.Environment,
+    env: _Environment,
     counters: _AdapterCounters,
-    interval_us: float,
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
     last_bytes = 0
-    while True:
-        yield env.timeout(interval_us)
+    last_t = 0
+    for tick in _ticks(env, period):
+        yield tick
         delta = counters.bytes_received - last_bytes
         last_bytes = counters.bytes_received
-        mbps = (delta * 8) / (interval_us / 1e6) / 1e6
-        samples.append((env.now / 1_000, mbps))
+        window_ns = env.now - last_t  # instants are rounded: can differ by 1 ns
+        last_t = env.now
+        mbps = delta * 8 * tb.NS_PER_US / window_ns  # bits per µs is Mb/s
+        samples.append((tb.ns_to_ms(env.now), mbps))
 
 
 def _queue_depth_sampler(
-    env: simpy.Environment,
+    env: _Environment,
     out_channels: dict[int, _LinkChannel],
-    interval_us: float,
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
-    while True:
-        yield env.timeout(interval_us)
+    for tick in _ticks(env, period):
+        yield tick
         depth = sum(len(ch.queue.items) for ch in out_channels.values())
-        samples.append((env.now / 1_000, float(depth)))
+        samples.append((tb.ns_to_ms(env.now), float(depth)))
 
 
 def _utilization_sampler(
-    env: simpy.Environment,
+    env: _Environment,
     channels: list[_LinkChannel],
-    interval_us: float,
+    period: tb.Exact,
     samples: Samples,
 ) -> Generator:
-    last_bits = [0] * len(channels)
-    while True:
-        yield env.timeout(interval_us)
-        current_bits = [ch.bits_sent for ch in channels]
-        delta = sum(current_bits) - sum(last_bits)
-        last_bits = current_bits
-        capacity = sum(ch.speed_bps * (interval_us / 1e6) for ch in channels)
-        util = (delta / capacity * 100) if capacity > 0 else 0.0
-        samples.append((env.now / 1_000, util))
+    speed = sum(tb.exact(ch.speed_mbps) for ch in channels)  # Mb/s, exact
+    last_bits = 0
+    last_t = 0
+    for tick in _ticks(env, period):
+        yield tick
+        bits = sum(ch.bits_sent for ch in channels)
+        window_ns = env.now - last_t
+        # bits / (speed · 10⁶ bit/s · window_ns · 10⁻⁹ s) · 100 %
+        util = tb.quotient((bits - last_bits) * 100_000, speed * window_ns)
+        last_bits, last_t = bits, env.now
+        samples.append((tb.ns_to_ms(env.now), util))
 
 
 # ---------------------------------------------------------------------------
@@ -708,8 +730,8 @@ def run_simulation(
     t_start = time.perf_counter()
 
     nodes: dict[str, model.NodeSpec] = {n.name: n for n in scenario.nodes}
-    env = simpy.Environment()
-    duration_us = scenario.run.duration_ms * 1_000
+    env = _Environment()
+    duration_ns = tb.ms_to_ns(scenario.run.duration_ms)
     # One generator per traffic statement, seeded from its stable source id.
     stream = {id(t): sid for t, sid in zip(scenario.traffic, source_ids(scenario), strict=True)}
 
@@ -757,11 +779,10 @@ def run_simulation(
         port_b = next_port[b.name]
         next_port[b.name] += 1
 
-        speed_bps = link.speed_mbps * 1_000_000
-        prop_delay_us = (link.length_m / 2e8) * 1_000_000
+        prop_ns = tb.propagation_ns(link.length_m)
         # ch_ab is a's egress queue, ch_ba is b's — each follows its owner's QoS.
-        ch_ab = _LinkChannel(env, speed_bps, prop_delay_us, port_b, inbound[b.name], _strict(a))
-        ch_ba = _LinkChannel(env, speed_bps, prop_delay_us, port_a, inbound[a.name], _strict(b))
+        ch_ab = _LinkChannel(env, link.speed_mbps, prop_ns, port_b, inbound[b.name], _strict(a))
+        ch_ba = _LinkChannel(env, link.speed_mbps, prop_ns, port_a, inbound[a.name], _strict(b))
 
         out_channels[a.name][port_a] = ch_ab
         out_channels[b.name][port_b] = ch_ba
@@ -804,10 +825,10 @@ def run_simulation(
                 if ch is None or device_ch is None:
                     continue  # one side not wired — no cyclic exchange possible
                 assert isinstance(device, model.ProfinetDeviceNode)
-                cycle_us = pn.cycle_ms * 1_000
-                delay_us = pn.delay_ms * 1_000
-                pn_consumers[name].expect(ar_id, cycle_us, pn.hold)  # inputs
-                pn_consumers[device.name].expect(ar_id, cycle_us, pn.hold)  # outputs
+                cycle_ns = tb.ms_to_ns(pn.cycle_ms)
+                delay_ns = tb.ms_to_ns(pn.delay_ms)
+                pn_consumers[name].expect(ar_id, cycle_ns, pn.hold)  # inputs
+                pn_consumers[device.name].expect(ar_id, cycle_ns, pn.hold)  # outputs
                 env.process(
                     _pn_provider(
                         env,
@@ -815,10 +836,10 @@ def run_simulation(
                         device.mac,
                         ar_id,
                         pn_frame_size(pn.outputs),
-                        cycle_us,
+                        cycle_ns,
                         ch,
                         PN_RT_PRIORITY,
-                        delay_us,
+                        delay_ns,
                     )
                 )
                 env.process(
@@ -828,10 +849,10 @@ def run_simulation(
                         node.mac,
                         ar_id,
                         pn_frame_size(pn.inputs),
-                        cycle_us,
+                        cycle_ns,
                         device_ch,
                         PN_RT_PRIORITY,
-                        delay_us,
+                        delay_ns,
                     )
                 )
             if ch:
@@ -848,7 +869,7 @@ def run_simulation(
                                 spec.pattern,
                                 ch,
                                 rng(spec),
-                                delay_us=spec.delay_ms * 1_000,
+                                delay_ns=tb.ms_to_ns(spec.delay_ms),
                                 batch=spec.batch,
                                 priority=spec.priority,
                             )
@@ -866,7 +887,7 @@ def run_simulation(
                                 mqtt_publish_frame_size(spec.topic, spec.payload, spec.qos),
                                 spec.qos,
                                 ch,
-                                delay_us=spec.delay_ms * 1_000,
+                                delay_ns=tb.ms_to_ns(spec.delay_ms),
                             )
                         )
                 for spec in specs:
@@ -883,7 +904,7 @@ def run_simulation(
                                 MODBUS_REQUEST_BYTES,
                                 spec.rate,
                                 ch,
-                                delay_us=spec.delay_ms * 1_000,
+                                delay_ns=tb.ms_to_ns(spec.delay_ms),
                             )
                         )
         elif isinstance(node, model.MqttBrokerNode):
@@ -914,7 +935,7 @@ def run_simulation(
 
     for obs in scenario.observations:
         target = _lookup(nodes, obs.target, f"observe {obs.metric} on {obs.target}")
-        interval_us = obs.every_ms * 1_000
+        period = tb.period_ns(obs.every_ms)  # exact; each sample instant is rounded
         key = f"{obs.metric}:{target.name}"
         if key not in all_samples:
             all_samples[key] = []
@@ -922,52 +943,49 @@ def run_simulation(
         adapter = isinstance(target, model.AdapterNode)
 
         if obs.metric == "throughput" and adapter:
-            env.process(
-                _throughput_sampler(env, adapter_counters[target.name], interval_us, samples)
-            )
+            env.process(_throughput_sampler(env, adapter_counters[target.name], period, samples))
         elif obs.metric == "latency" and adapter:
             sinks = adapter_counters[target.name].latency_sinks
-            env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
+            env.process(_window_sampler(env, sinks, _mean_us, period, samples))
         elif obs.metric == "queue_depth" and isinstance(target, model.SwitchNode):
-            env.process(_queue_depth_sampler(env, out_channels[target.name], interval_us, samples))
+            env.process(_queue_depth_sampler(env, out_channels[target.name], period, samples))
         elif obs.metric == "utilization":
             chs = in_channels.get(target.name, [])
             if chs:
-                env.process(_utilization_sampler(env, chs, interval_us, samples))
+                env.process(_utilization_sampler(env, chs, period, samples))
         elif obs.metric == "bytes_received" and adapter:
-            env.process(_bytes_rx_sampler(env, adapter_counters[target.name], interval_us, samples))
+            env.process(_bytes_rx_sampler(env, adapter_counters[target.name], period, samples))
         elif obs.metric == "bytes_sent" and adapter:
             ch = adapter_out.get(target.name)
             if ch:
-                env.process(_bytes_tx_sampler(env, ch, interval_us, samples))
+                env.process(_bytes_tx_sampler(env, ch, period, samples))
         elif obs.metric == "broker_queue" and isinstance(target, model.MqttBrokerNode):
-            env.process(_broker_queue_sampler(env, inbound[target.name], interval_us, samples))
+            env.process(_broker_queue_sampler(env, inbound[target.name], period, samples))
         elif obs.metric == "modbus_latency" and adapter:
             sinks = adapter_counters[target.name].modbus_rtt_sinks
-            env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
+            env.process(_window_sampler(env, sinks, _mean_us, period, samples))
         elif obs.metric == "pn_latency" and target.name in pn_consumers:
             sinks = pn_consumers[target.name].latency_sinks
-            env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
+            env.process(_window_sampler(env, sinks, _mean_us, period, samples))
         elif obs.metric == "pn_jitter" and target.name in pn_consumers:
             sinks = pn_consumers[target.name].jitter_sinks
-            env.process(_window_sampler(env, sinks, max, interval_us, samples))
+            env.process(_window_sampler(env, sinks, _max_us, period, samples))
         elif obs.metric == "pn_watchdog_expiries" and target.name in pn_consumers:
-            env.process(_pn_expiries_sampler(env, pn_consumers[target.name], interval_us, samples))
+            env.process(_pn_expiries_sampler(env, pn_consumers[target.name], period, samples))
 
     if _n_chunks > 1:
-        chunk_us = duration_us / _n_chunks
         sleep_s = 8.0 / _n_chunks  # target ~8 s total wall time
         for i in range(_n_chunks):
             if _sim_state is not None and _sim_state.get("stop", False):
                 break
             while _sim_state is not None and _sim_state.get("paused", False):
                 time.sleep(0.05)
-            env.run(until=(i + 1) * chunk_us)
+            env.run(until=(i + 1) * duration_ns // _n_chunks)
             if _sim_state is not None:
                 _sim_state["progress"] = (i + 1) / _n_chunks
             time.sleep(sleep_s)
     else:
-        env.run(until=duration_us)
+        env.run(until=duration_ns)
 
     # SimPy draws one id from _eid for every scheduled event: processed events
     # are the ids drawn minus the events still queued.

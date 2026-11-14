@@ -16,6 +16,8 @@ is in Model Semantics §1 and §8.
 
 from __future__ import annotations
 
+import itertools
+from collections.abc import Iterator
 from fractions import Fraction
 
 NS_PER_US = 1_000
@@ -35,8 +37,15 @@ def exact(value: float | int) -> Exact:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        return Fraction(repr(value))  # raises for NaN and infinities
+        return _normal(Fraction(repr(value)))  # raises for NaN and infinities
     raise TypeError(f"expected a number, got {type(value).__name__}")
+
+
+def _normal(value: Exact) -> Exact:
+    """An integral Fraction as an int, so integer fast paths apply."""
+    if isinstance(value, Fraction) and value.denominator == 1:
+        return value.numerator
+    return value
 
 
 def round_ns(value: Exact) -> int:
@@ -51,12 +60,12 @@ def ms_to_ns(ms: float | int) -> int:
 
 def period_ns(ms: float | int) -> Exact:
     """A period given in ms, as an exact number of nanoseconds (not rounded)."""
-    return exact(ms) * NS_PER_MS
+    return _normal(exact(ms) * NS_PER_MS)
 
 
-def interval_ns(rate_per_s: float | int) -> Fraction:
+def interval_ns(rate_per_s: float | int) -> Exact:
     """The exact interval of a source with *rate_per_s* events per second."""
-    return Fraction(NS_PER_S) / exact(rate_per_s)
+    return _normal(Fraction(NS_PER_S) / exact(rate_per_s))
 
 
 def propagation_ns(length_m: float | int) -> int:
@@ -76,7 +85,34 @@ def transmission_ns(size_bytes: int, speed_mbps: float | int) -> int:
 def periodic_ns(start_ns: int, period: Exact, k: int) -> int:
     """The instant of the *k*-th event of a periodic source that starts at
     *start_ns* with an exact *period* (ns): within 0.5 ns of exact, for any k."""
-    return start_ns + round_ns(k * period)
+    if isinstance(period, int):
+        return start_ns + k * period
+    return start_ns + _round_ratio(k * period.numerator, period.denominator)
+
+
+def instants(start_ns: int, period: Exact) -> Iterator[int]:
+    """The instants ``periodic_ns(start_ns, period, k)`` for k = 1, 2, ...
+    in integer arithmetic only, for engines that need one per event."""
+    period = _normal(period)
+    if isinstance(period, int):
+        return itertools.count(start_ns + period, period)
+    return _fractional_instants(start_ns, period.numerator, period.denominator)
+
+
+def _fractional_instants(start_ns: int, num: int, den: int) -> Iterator[int]:
+    total = 0
+    while True:
+        total += num
+        yield start_ns + _round_ratio(total, den)
+
+
+def _round_ratio(num: int, den: int) -> int:
+    """``round(num / den)``, ties to even, for integers with den > 0."""
+    q, r = divmod(num, den)
+    twice = 2 * r
+    if twice > den or (twice == den and q & 1):
+        q += 1
+    return q
 
 
 def draw_ns(value_ns: float) -> int:
@@ -89,6 +125,8 @@ def quotient(numerator: Exact, denominator: Exact) -> float:
     nearest float once."""
     if denominator == 0:
         raise ZeroDivisionError("quotient with a zero denominator")
+    if isinstance(numerator, int) and isinstance(denominator, int):
+        return numerator / denominator  # int / int is correctly rounded
     return float(Fraction(numerator) / Fraction(denominator))
 
 

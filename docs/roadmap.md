@@ -57,7 +57,7 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - `Network.simulate()` and `smolpy run` both go through it.
 - Benchmark results show no regression against Phase 1.
 
-**Status:** steps 1–6 done, 7–8 to do.
+**Status:** steps 1–7 done, 8 to do.
 - `Network.to_scenario()` and `interpret_to_scenario()` produce the IR, and it round-trips through JSON for every example and B1–B4.
 - The SimPy engine runs the IR and reports `SimulationResult.stats`. The benchmark harness reads those statistics.
 - B1–B4 give unchanged output hashes.
@@ -66,7 +66,10 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - Step 5: every traffic statement has its own random stream, seeded from SHA-256 of the run seed and a stable source id. `bursty` now keeps `rate` as its long-run average. Both change the output of seeded runs with random patterns or IMIX sizes, once. B1–B4 are deterministic and give unchanged hashes.
 - **Integer time** (ADR-0007 revision of 2026-11-14, steps 6–8): simulated time becomes integer nanoseconds in every engine, the same clock as ns-3 and Rust, so deterministic results can match exactly across engines.
     - Step 6 (done): the rules are written into [Model Semantics §1](model-semantics.md#1-time-and-units), §8 and §9, and implemented in `smolpy.model.timebase`. Validation now rejects a run over 2⁶³ − 1 ns and an `every` under 1 ns.
-    - Steps 7–8: the SimPy engine moves to integer nanoseconds, and deterministic equivalence becomes exact.
+    - Step 7 (done): the SimPy engine runs on integer nanoseconds.
+        - Events and sample times are unchanged in B1–B4. Values differ only in the last digits, e.g. float noise in `pn_jitter` of 10⁻¹¹ µs became exactly 0.
+        - Run time is unchanged within noise ([Benchmarks](benchmarks.md#integer-nanoseconds-adr-0007-step-7)).
+    - Step 8: deterministic equivalence becomes exact.
 
 ## Phase 3: many independent simulations ([ADR-0009](adr/0009-batch-execution-and-cross-backend-validation.md))
 

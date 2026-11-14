@@ -6,7 +6,7 @@ This is the normative meaning of a [Scenario](scenario-model.md), independent of
 
 ## 1. Time and units
 
-**Simulated time is an integer number of nanoseconds** in every engine ([ADR-0007, revision of 2026-11-14](adr/0007-execution-independent-scenario-model.md#simulated-time-integer-nanoseconds)). That is the same clock as ns-3's default resolution and the Rust engine. The rules are implemented in `smolpy.model.timebase`. *The SimPy engine still uses float µs until ADR-0007 step 7 ([open issue 6](#open-issues)).*
+**Simulated time is an integer number of nanoseconds** in every engine ([ADR-0007, revision of 2026-11-14](adr/0007-execution-independent-scenario-model.md#simulated-time-integer-nanoseconds)). That is the same clock as ns-3's default resolution and the Rust engine. The rules are implemented in `smolpy.model.timebase`, and the SimPy engine uses them for every timeout and timestamp.
 
 The scenario keeps the units users give. Engines convert them as follows:
 
@@ -30,7 +30,7 @@ The scenario keeps the units users give. Engines convert them as follows:
 - **Range.** A run lasts at most 2⁶³ − 1 ns, about 292 years. `every` is at least 1 ns, so no two samples of one observation fall on the same instant. Both are checked by validation.
 - **Metric sample times are reported in ms**, as `t_ns / 10⁶` rounded to a float once.
 
-*Tests: `test_run_covers_half_open_interval`, `test_samples_fall_on_multiples_of_every`; the rules themselves in `tests/test_timebase.py`.*
+*Tests: `test_run_covers_half_open_interval`, `test_samples_fall_on_multiples_of_every`, `test_time_is_integer_nanoseconds`, `test_periodic_sources_do_not_drift`; the rules themselves in `tests/test_timebase.py`.*
 
 ## 2. Frames
 
@@ -198,7 +198,7 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
 - each adapter starts its sources in this order: PROFINET ARs, flows, publishes, polls;
 - metric samplers start after all nodes, in observation order.
 
-**Effect on cross-engine equivalence.** Every engine uses the same integer clock and the same rounding rules ([§1](#1-time-and-units)). So two events coincide in one engine exactly when they coincide in all of them, and the rules above order them the same way. Deterministic scenarios therefore give the same samples in every engine, with no tolerance (ADR-0007, ADR-0009). *Until ADR-0007 step 7, SimPy's float µs can break such a tie differently ([open issue 6](#open-issues)).*
+**Effect on cross-engine equivalence.** Every engine uses the same integer clock and the same rounding rules ([§1](#1-time-and-units)). So two events coincide in one engine exactly when they coincide in all of them, and the rules above order them the same way. Deterministic scenarios therefore give the same samples in every engine, with no tolerance (ADR-0007, ADR-0009).
 
 ## Open issues
 
@@ -211,4 +211,4 @@ Every disagreement between this page and the intended model is listed here, with
 | 3 | Hubs were not a shared medium | They had per-port queues with strict priority, and collisions were approximated as simultaneous arrivals, so `collision_rate` almost never counted any. | resolved: hubs and `collision_rate` removed. A shared segment would come back as a new node kind with half-duplex links and CSMA/CD. |
 | 4 | Wire overhead is not counted | Preamble, SFD, FCS and inter-frame gap (24 B per frame) are not on the wire, so the model's link capacity is higher than real by 24 B per frame: about 2 % for 1 518 B frames and 40 % for 60 B frames. | known simplification |
 | 5 | One random stream for all sources | Adding or reordering one source changed the draws of all others. | resolved in ADR-0007 step 5: one stream per traffic statement |
-| 6 | SimPy does not use integer nanoseconds yet | Time is float µs. Periodic sources add the interval to the clock, and metrics are float sums. Results differ from §1 and §8 in the last digits. | ADR-0007 step 7 |
+| 6 | SimPy did not use integer nanoseconds | Time was float µs. Periodic sources added the interval to the clock, and metrics were float sums. | resolved in ADR-0007 step 7: SimPy runs on integer nanoseconds |

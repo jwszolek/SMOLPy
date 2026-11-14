@@ -240,6 +240,38 @@ The full suite was re-run after all four optimisations, at commit `d3eb8a2`, on 
 - **Memory is now flat in run length** for engine state: 36–47 MB with metrics off, at every size. The 145 MB of B3 at 10 M frames with metrics on is the result itself: 151 observations × ~5 000 samples each, held in `SimulationResult.metrics`.
 - **Runs of 1–3 s are noisy.** B1 at 100 k frames ranges 0.96–2.09 s, probably due to CPU frequency scaling. Compare at 1 M frames and above.
 
+## Integer nanoseconds (ADR-0007 step 7)
+
+The SimPy engine moved from float µs to integer nanoseconds ([Model Semantics §1](model-semantics.md#1-time-and-units)). It was measured A/B against the float engine of the previous commit: 200 k frames, metrics on and off, 3 alternating repetitions per variant, medians.
+
+| Scenario | Metrics | Float µs | Integer ns | Ratio | Events | Output hash |
+|---|---|---|---|---|---|---|
+| B1 | on | 4.27 s | 4.16 s | 0.97 | same | same |
+| B1 | off | 3.79 s | 3.90 s | 1.03 | same | same |
+| B2 | on | 6.83 s | 6.50 s | 0.95 | same | **changed** |
+| B2 | off | 6.60 s | 6.38 s | 0.97 | same | same |
+| B3 | on | 18.64 s | 18.63 s | 1.00 | same | same |
+| B3 | off | 17.66 s | 18.20 s | 1.03 | same | same |
+| B4 | on | 12.72 s | 13.01 s | 1.02 | same | same |
+| B4 | off | 12.40 s | 12.88 s | 1.04 | same | same |
+
+- **No slowdown.** The ratios lie between 0.95 and 1.04, with a geometric mean of 1.00, which is within the noise of runs this short.
+- **Events and sample times are unchanged** in every scenario.
+- **Metric values differ only in the last digits.** The output hash rounds values to 9 significant digits, so it changed in one case only.
+- **The one changed hash is float noise disappearing.** In B2 with metrics on, `pn_jitter:plc` was 3.6·10⁻¹¹ to 9.3·10⁻⁹ µs in some windows. That jitter came from adding a float cycle to a float clock. With integer time it is exactly 0.
+- **New reference hashes, 200 k frames, seed 42.** The previous ones remain valid for the float engine.
+
+| Scenario | Metrics | Events | Output hash | Metrics hash |
+|---|---|---|---|---|
+| B1 | on | 2 600 156 | `f048830c28eeea8e` | `d6e8b361315d7870` |
+| B1 | off | 2 599 996 | `e8a33879a5bbf6b7` | `44136fa355b3678a` |
+| B2 | on | 3 081 985 | `7121957abe6fe8b5` | `77f68c90f91c7d95` |
+| B2 | off | 3 080 689 | `b1777c3ad5ff40af` | `44136fa355b3678a` |
+| B3 | on | 8 076 247 | `6d18affb11375afb` | `2eadb14fc7e594fc` |
+| B3 | off | 8 061 147 | `01f72baf86c5101d` | `44136fa355b3678a` |
+| B4 | on | 4 806 383 | `ebcf601c4d085453` | `15127f118dae037b` |
+| B4 | off | 4 800 373 | `02af5a54a6a9b70d` | `44136fa355b3678a` |
+
 ## Rust decision gate (ADR-0006 §6)
 
 | Target | Optimised SimPy | Result |

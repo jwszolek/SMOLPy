@@ -15,12 +15,12 @@ import resource
 import sys
 import time
 
-import simpy
+from smolpy.sim import engine
 
 _AFTER_RUN: list = []  # callbacks run while the engine's state is still alive
 
 
-class _SnapshotEnvironment(simpy.Environment):
+class _SnapshotEnvironment(engine._Environment):
     """Runs the _AFTER_RUN callbacks at the end of env.run(), while every
     engine structure is still alive. Installed only for the SimPy-specific
     tracemalloc profile; events and run time come from ``result.stats``."""
@@ -59,16 +59,15 @@ def measure(
     scenario: str, frames: int, metrics: bool, seed: int, profile: str | None, out: str | None
 ) -> dict:
     """Run one measurement. For the tracemalloc profile the engine's
-    Environment is replaced (through the ``simpy`` module) for the duration
-    of this call only."""
-    original = simpy.Environment
+    Environment class is replaced for the duration of this call only."""
+    original = engine._Environment
     if profile == "tracemalloc":
-        simpy.Environment = _SnapshotEnvironment  # type: ignore[misc]
+        engine._Environment = _SnapshotEnvironment  # type: ignore[misc]
     _AFTER_RUN.clear()
     try:
         return _measure(scenario, frames, metrics, seed, profile, out)
     finally:
-        simpy.Environment = original  # type: ignore[misc]
+        engine._Environment = original  # type: ignore[misc]
 
 
 def _measure(
