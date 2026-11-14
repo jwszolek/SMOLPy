@@ -35,6 +35,7 @@ nav:
   - Modbus TCP: modbus.md
   - PROFINET RT: profinet.md
   - Simulation Engine: simulation-engine.md
+  - Scenario Model: scenario-model.md
   - Dashboard: dashboard.md
   - Examples: examples.md
   - Benchmarks: benchmarks.md

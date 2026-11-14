@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import networkx as nx
 
 from smolpy.core.adapter import Adapter
@@ -11,6 +13,9 @@ from smolpy.ethernet.switch import MacTableMode, Switch, SwitchMode, SwitchQoS
 from smolpy.modbus.slave import ModbusSlave
 from smolpy.mqtt.broker import MQTTBroker
 from smolpy.profinet.device import ProfinetDevice
+
+if TYPE_CHECKING:
+    from smolpy.model import Scenario
 
 
 class SimulationResult:
@@ -179,6 +184,99 @@ class Network:
         from smolpy.sim.engine import run_simulation
 
         return run_simulation(self, duration_ms=duration, seed=seed)
+
+    # --- scenario IR ---
+
+    def to_scenario(self, duration: float | None = None, seed: int = 42) -> Scenario:
+        """Return the execution-independent description of this network (ADR-0007).
+
+        *duration* (ms) and *seed* form the run configuration, as in
+        :meth:`simulate`; without *duration* the scenario has no run section.
+        """
+        from smolpy import model
+
+        nodes: list[model.NodeSpec] = []
+        traffic: list[model.TrafficSpec] = []
+        for node in self._nodes.values():
+            if isinstance(node, Adapter):
+                nodes.append(model.AdapterNode(node.name, node.ip, node.mac))
+                # Per source, in the order the SimPy engine starts its generators.
+                traffic.extend(
+                    model.ProfinetAR(
+                        node.name,
+                        pn.device.name,
+                        pn.cycle_ms,
+                        pn.input_bytes,
+                        pn.output_bytes,
+                        pn.hold,
+                        pn.delay_ms,
+                    )
+                    for pn in node.profinet_specs
+                )
+                traffic.extend(
+                    model.Flow(
+                        node.name,
+                        t.destination.name,
+                        t.rate,
+                        t.size,
+                        t.pattern,
+                        t.delay_ms,
+                        t.batch,
+                        t.priority,
+                    )
+                    for t in node.traffic_specs
+                )
+                traffic.extend(
+                    model.Publish(
+                        node.name,
+                        m.broker.name,
+                        m.topic,
+                        m.rate_hz,
+                        m.payload_bytes,
+                        m.qos,
+                        m.delay_ms,
+                    )
+                    for m in node.mqtt_specs
+                )
+                traffic.extend(
+                    model.Poll(node.name, p.slave.name, p.register, p.count, p.rate_hz, p.delay_ms)
+                    for p in node.modbus_specs
+                )
+            elif isinstance(node, Switch):
+                nodes.append(
+                    model.SwitchNode(
+                        node.name, node.ports, node.mode, node.qos, node.mac_table_mode
+                    )
+                )
+            elif isinstance(node, Hub):
+                nodes.append(model.HubNode(node.name, node.ports))
+            elif isinstance(node, MQTTBroker):
+                nodes.append(model.MqttBrokerNode(node.name, node.ip, node.mac))
+                traffic.extend(
+                    model.Route(node.name, topic, tuple(a.name for a in subscribers))
+                    for topic, subscribers in node._routes.items()
+                )
+            elif isinstance(node, ModbusSlave):
+                nodes.append(model.ModbusSlaveNode(node.name, node.ip, node.mac, node.unit_id))
+            elif isinstance(node, ProfinetDevice):
+                nodes.append(model.ProfinetDeviceNode(node.name, node.ip, node.mac))
+            else:
+                raise TypeError(f"no scenario representation for {node!r}")
+
+        return model.Scenario(
+            name=self.name,
+            nodes=tuple(nodes),
+            links=tuple(
+                model.Link(lk.endpoint_a.name, lk.endpoint_b.name, lk.speed, lk.length, lk.duplex)
+                for lk in self._links
+            ),
+            traffic=tuple(traffic),
+            observations=tuple(
+                model.Observation(o.metric, o.target.name, o.interval_ms)
+                for o in self._observations
+            ),
+            run=None if duration is None else model.RunConfig(duration, seed),
+        )
 
     # --- internals ---
 

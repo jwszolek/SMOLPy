@@ -202,5 +202,9 @@ class Adapter(Node):
 
 
 def _derive_mac(ip: str) -> str:
-    octets = ip.split(".")[-3:]
-    return f"02:00:{':'.join(f'{int(o):02x}' for o in octets)}"
+    """Locally administered unicast MAC 02:00:<the four IPv4 octets>, e.g.
+    10.0.4.1 -> 02:00:0a:00:04:01: six bytes, unique per IPv4 address."""
+    octets = ip.split(".")
+    if len(octets) != 4 or not all(o.isdigit() and int(o) <= 255 for o in octets):
+        raise ValueError(f"cannot derive a MAC address from {ip!r}: not an IPv4 address")
+    return "02:00:" + ":".join(f"{int(o):02x}" for o in octets)
