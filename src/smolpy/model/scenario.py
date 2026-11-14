@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, Literal
 
@@ -227,6 +228,108 @@ class Scenario:
                 return n
         raise KeyError(name)
 
+    # --- sweep helpers (ADR-0009) ---
+    #
+    # Each returns a modified copy. A selection that matches nothing is an
+    # error, so a misspelt name never gives a sweep in which nothing varies.
+    # The changed values are validated when the scenario runs.
+
+    def with_traffic(
+        self, kind: str, where: Mapping[str, Any] | None = None, **changes: Any
+    ) -> Scenario:
+        """Change *changes* in every traffic statement of *kind* (``"flow"``,
+        ``"publish"``, ``"route"``, ``"poll"`` or ``"profinet_ar"``) whose
+        fields equal *where*, e.g.
+        ``sc.with_traffic("poll", {"slave": "s1"}, rate=20)``.
+
+        Random streams are identified by kind and ends (Model Semantics §6),
+        so changing other fields keeps every source's stream: the scenarios
+        of a sweep share their random draws as far as the model allows.
+        """
+        cls = _TRAFFIC_KINDS.get(kind)
+        if cls is None:
+            raise ValueError(
+                f"unknown traffic kind {kind!r}, expected one of {', '.join(_TRAFFIC_KINDS)}"
+            )
+        where = dict(where or {})
+        fields = {f.name for f in dataclasses.fields(cls)}
+        for what, keys in (("where", where), ("changes", changes)):
+            unknown = sorted(set(keys) - fields)
+            if unknown:
+                raise ValueError(
+                    f"{kind} has no field {unknown[0]!r} (in {what});"
+                    f" fields: {', '.join(sorted(fields))}"
+                )
+        if not changes:
+            raise ValueError("with_traffic needs at least one field to change")
+        matched = 0
+        traffic = []
+        for t in self.traffic:
+            if isinstance(t, cls) and all(getattr(t, k) == v for k, v in where.items()):
+                t = dataclasses.replace(t, **changes)
+                matched += 1
+            traffic.append(t)
+        if not matched:
+            present = [_describe(t) for t in self.traffic if isinstance(t, cls)]
+            raise ValueError(
+                f"no {kind} matches {where!r} in scenario {self.name!r}; "
+                + (f"there are: {', '.join(present)}" if present else f"it has no {kind}")
+            )
+        return dataclasses.replace(self, traffic=tuple(traffic))
+
+    def with_flow_rate(
+        self, rate: float, *, source: str | None = None, destination: str | None = None
+    ) -> Scenario:
+        """Set the rate (frames/s) of every flow from *source* to
+        *destination*; either end left out matches any node."""
+        return self.with_traffic("flow", _where(source=source, destination=destination), rate=rate)
+
+    def with_cycle(
+        self, cycle_ms: int, *, controller: str | None = None, device: str | None = None
+    ) -> Scenario:
+        """Set the cycle time (ms) of every PROFINET AR between *controller*
+        and *device*; either end left out matches any node."""
+        return self.with_traffic(
+            "profinet_ar", _where(controller=controller, device=device), cycle_ms=cycle_ms
+        )
+
+    def with_link_speed(
+        self, speed_mbps: float, *, between: tuple[str, str] | None = None
+    ) -> Scenario:
+        """Set the speed (Mb/s) of the link *between* two nodes, in either
+        order, or of every link."""
+        ends = None if between is None else set(between)
+        links, matched = [], 0
+        for lk in self.links:
+            if ends is None or {lk.a, lk.b} == ends:
+                lk = dataclasses.replace(lk, speed_mbps=speed_mbps)
+                matched += 1
+            links.append(lk)
+        if not matched:
+            if between is None:
+                raise ValueError(f"scenario {self.name!r} has no links")
+            a, b = between
+            raise ValueError(f"no link between {a!r} and {b!r} in scenario {self.name!r}")
+        return dataclasses.replace(self, links=tuple(links))
+
+    def with_run(self, duration_ms: float | None = None, seed: int | None = None) -> Scenario:
+        """Set the run duration (ms) and/or seed; the other value is kept."""
+        if duration_ms is None and seed is None:
+            raise ValueError("with_run needs duration_ms or seed")
+        if self.run is None:
+            if duration_ms is None:
+                raise ValueError(
+                    f"scenario {self.name!r} has no run configuration; pass duration_ms"
+                )
+            run = RunConfig(duration_ms)
+        else:
+            run = self.run
+        if duration_ms is not None:
+            run = dataclasses.replace(run, duration_ms=duration_ms)
+        if seed is not None:
+            run = dataclasses.replace(run, seed=seed)
+        return dataclasses.replace(self, run=run)
+
     # --- serialisation ---
 
     def to_dict(self) -> dict[str, Any]:
@@ -288,6 +391,22 @@ _NODE_KINDS: dict[str, type] = {
     )
 }
 _TRAFFIC_KINDS: dict[str, type] = {c.kind: c for c in (Flow, Publish, Route, Poll, ProfinetAR)}
+
+
+def _where(**ends: str | None) -> dict[str, str]:
+    return {k: v for k, v in ends.items() if v is not None}
+
+
+def _describe(t: TrafficSpec) -> str:
+    if isinstance(t, ProfinetAR):
+        return f"{t.controller} -> {t.device}"
+    if isinstance(t, Route):
+        return f"{t.broker} {t.topic}"
+    if isinstance(t, Publish):
+        return f"{t.source} -> {t.broker} {t.topic}"
+    if isinstance(t, Poll):
+        return f"{t.source} -> {t.slave}"
+    return f"{t.source} -> {t.destination}"
 
 
 def _encode(obj: Any) -> dict[str, Any]:

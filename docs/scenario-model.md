@@ -40,6 +40,16 @@ result.stats        # RunStats(backend="simpy", events=..., wall_s=...)
 
 A scenario read back from JSON gives exactly the same results as the `Network` it came from. The run fails with `ValueError` if the scenario has no `run` section or references an undeclared node.
 
+## Changing a scenario
+
+A `Scenario` is frozen. `dataclasses.replace` and the sweep helpers return changed copies, e.g. for a parameter sweep ([DSL Reference — Sweep helpers](dsl-reference.md#sweep-helpers)):
+
+```python
+fast = scenario.with_link_speed(1_000, between=("sw", "srv"))
+loaded = scenario.with_flow_rate(4_000, source="bulk")
+slow_io = scenario.with_cycle(16, device="io-1").with_run(seed=7)
+```
+
 ## Validation
 
 Every semantic rule lives in one module, `smolpy.model.validate`. Every engine runs `validate(scenario)` before simulating, so an invalid scenario never runs, and nothing is ignored silently. Errors are `ScenarioError`, a `ValueError` that names the element and records where it is in the scenario:

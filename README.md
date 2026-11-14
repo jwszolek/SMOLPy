@@ -267,6 +267,9 @@ results = batch.results()                         # one SimulationResult per run
 summary = batch.summary()                         # per window: mean, std, 95 % CI
 batch.report()                                    # per metric: mean ± CI across runs
 batch.export("runs.csv")                          # every run, with its seed
+
+base = net.to_scenario(duration=10_000)           # a sweep: one scenario per rate
+sweep = run_many([base.with_flow_rate(r, source="bulk") for r in (1_000, 4_000)], runs=10)
 ```
 
 A `.smol` file does the same with `simulate ... runs=30`, or with `smolpy run plant.smol --runs 30 --workers 8 -o runs.csv`.

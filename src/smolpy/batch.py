@@ -141,7 +141,7 @@ class BatchResult:
             results = self.results(i)
             ok = len(results)
             total = sum(1 for r in self.runs if r.scenario == i)
-            title = f"{sc.name}: " if len(self.scenarios) > 1 else ""
+            title = f"scenario {i} ({sc.name}): " if len(self.scenarios) > 1 else ""
             print(f"\n{title}{ok} of {total} runs succeeded, {pct} confidence intervals")
             keys = sorted({key for r in results for key in r.metrics})
             if not keys:
