@@ -57,12 +57,13 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - `Network.simulate()` and `smolpy run` both go through it.
 - Benchmark results show no regression against Phase 1.
 
-**Status:** steps 1–4 done.
+**Status:** steps 1–5 done.
 - `Network.to_scenario()` and `interpret_to_scenario()` produce the IR, and it round-trips through JSON for every example and B1–B4.
 - The SimPy engine runs the IR and reports `SimulationResult.stats`. The benchmark harness reads those statistics.
 - B1–B4 give unchanged output hashes.
 - Step 3: every semantic rule lives in `smolpy.model.validate`, and every run is validated first. Python API mistakes that used to be ignored silently now raise, e.g. a metric on the wrong node type, a second link on an end station, or more links than ports.
 - Step 4: [Model Semantics](model-semantics.md) defines what every scenario element means, independently of the engine. `tests/test_semantics.py` checks it against SimPy. It lists five open issues, e.g. that `bursty` does not keep `rate` as its average.
+- Step 5: every traffic statement has its own random stream, seeded from SHA-256 of the run seed and a stable source id. `bursty` now keeps `rate` as its long-run average. Both change the output of seeded runs with random patterns or IMIX sizes, once. B1–B4 are deterministic and give unchanged hashes.
 
 ## Phase 3: many independent simulations ([ADR-0009](adr/0009-batch-execution-and-cross-backend-validation.md))
 

@@ -8,6 +8,7 @@ import pytest
 
 from smolpy import Network
 from smolpy.model import frames
+from smolpy.model.streams import source_ids, stream_seed
 
 
 def _pair(
@@ -130,13 +131,65 @@ def test_profinet_first_frame_at_delay() -> None:
 
 
 def test_bursty_long_run_rate() -> None:
-    """Open issue 1: bursty averages rate / 1.5."""
     net, a, b = _pair()
     a.sends(b, rate=1_000, size=125, pattern="bursty")
     net.observe("bytes_received", on=b, every=50_000)
     t_ms, mb = net.simulate(duration=100_001).metrics["bytes_received:b"][-1]
     rate = mb * 1e6 / 125 / (t_ms / 1_000)
-    assert rate == pytest.approx(1_000 / 1.5, rel=0.03)
+    assert rate == pytest.approx(1_000, rel=0.03)
+
+
+def test_source_ids() -> None:
+    net = Network("ids")
+    a, b, c = (net.adapter(n, ip=f"10.0.0.{i}") for i, n in enumerate("abc", 1))
+    broker = net.mqtt_broker("broker", ip="10.0.0.9")
+    sw = net.switch("sw", ports=4)
+    for node in (a, b, c, broker):
+        net.link(node, sw, speed=100, length=0)
+    a.sends(b, rate=10)
+    a.publishes(broker, topic="t", rate=1)
+    a.sends(c, rate=10)
+    a.sends(b, rate=10, pattern="poisson")
+    broker.routes("t", to=[b])
+    # k counts statements of one kind between the same two ends, so an id does
+    # not depend on where other statements sit in the scenario
+    assert sorted(source_ids(net.to_scenario(duration=10))) == [
+        "flow:a->b#0",
+        "flow:a->b#1",
+        "flow:a->c#0",
+        "publish:a->broker#0",
+        "route:broker->t#0",
+    ]
+
+
+def test_stream_seed_is_a_sha256_prefix() -> None:
+    import hashlib
+
+    digest = hashlib.sha256(b"42:flow:a->b#0").digest()
+    assert stream_seed(42, "flow:a->b#0") == int.from_bytes(digest[:8], "big")
+    assert stream_seed(42, "flow:a->b#0") == 5297917812165586412  # pinned for every engine
+
+
+def _random_cell(*, with_other: bool, seed: int = 42) -> dict:
+    net = Network("cell")
+    a, b, c, d = (net.adapter(n, ip=f"10.0.0.{i}") for i, n in enumerate("abcd", 1))
+    sw = net.switch("sw", ports=4)
+    for node in (a, b, c, d):
+        net.link(node, sw, speed=100, length=0)
+    if with_other:  # declared first, so it comes before a -> b in the scenario
+        c.sends(d, rate=500, size="imix", pattern="poisson")
+    a.sends(b, rate=500, size="imix", pattern="poisson")
+    net.observe("bytes_received", on=b, every=10)
+    return net.simulate(duration=200, seed=seed).metrics["bytes_received:b"]
+
+
+def test_adding_a_source_does_not_change_the_others() -> None:
+    assert _random_cell(with_other=True) == _random_cell(with_other=False)
+
+
+def test_run_seed_selects_the_draws() -> None:
+    assert _random_cell(with_other=False, seed=1) == _random_cell(with_other=False, seed=1)
+    assert _random_cell(with_other=False, seed=1) != _random_cell(with_other=False, seed=2)
 
 
 # §8 Metrics
