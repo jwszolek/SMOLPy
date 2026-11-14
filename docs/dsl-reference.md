@@ -158,6 +158,10 @@ result.export("out.csv", format="csv")   # explicit format override
 
 **Text mode** (`text=True`) displays a live updating table in the terminal — no display server or GUI toolkit required. Ideal for headless servers, SSH sessions, and CI environments.
 
+## Errors
+
+Mistakes raise `ValueError` at the call that makes them, e.g. `a.sends(b, rate=10, priority=9)` or `net.observe("pn_jitter", on=switch, every=10)`. Rules about the whole network, such as the number of switch ports or a link to a node with traffic, are checked when `simulate()` starts. See [Scenario Model — Validation](scenario-model.md#validation) for the full list.
+
 ## Scenario IR
 
 `net.to_scenario()` returns the network as a `smolpy.model.Scenario`, a declarative description that no engine depends on ([ADR-0007](adr/0007-execution-independent-scenario-model.md)). It can be saved as versioned JSON and archived next to results. See [Scenario Model](scenario-model.md).

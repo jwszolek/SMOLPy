@@ -20,6 +20,7 @@ from smolpy.model.scenario import (
     Scenario,
     SwitchNode,
     TrafficSpec,
+    traffic_owner,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "Scenario",
     "SwitchNode",
     "TrafficSpec",
+    "traffic_owner",
 ]

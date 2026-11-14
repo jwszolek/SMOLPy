@@ -152,7 +152,9 @@ Two error classes, both reported as `file:line: message`:
 | Class | Raised for |
 |---|---|
 | `SMOLSyntaxError` | Malformed source: unknown keyword, missing `=`, unclosed `{`, missing required argument |
-| `SMOLSemanticError` | Well-formed but invalid: undeclared node reference, duplicate node name, wrong node type for a statement (e.g. `poll` targeting a `switch`), invalid metric for a node type, out-of-range parameter (e.g. `control cycle=3`, `priority=9`, `qos=wfq`), missing or duplicate `simulate` statement |
+| `SMOLSemanticError` | Well-formed but invalid: undeclared node reference, duplicate node name, wrong node type for a statement (e.g. `poll` targeting a `switch`), invalid metric for a node type, out-of-range parameter (e.g. `control cycle=3`, `priority=9`, `qos=wfq`), missing or duplicate `simulate` statement, and the topology rules: more links than `ports`, a second link on an end station, a loop, traffic to a node without a link |
+
+`.smol` files and the Python API share the same rules ([Scenario Model — Validation](scenario-model.md#validation)). Errors about the scenario as a whole point to the statement concerned, e.g. the link that exceeds a switch's ports.
 
 The CLI prints these as a clean error panel with no Python traceback.
 

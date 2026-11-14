@@ -190,6 +190,16 @@ class ProfinetAR:
 TrafficSpec = Flow | Publish | Route | Poll | ProfinetAR
 
 
+def traffic_owner(t: TrafficSpec) -> str:
+    """The node that runs a traffic statement: the source, the PROFINET
+    controller, or the broker of a route."""
+    if isinstance(t, ProfinetAR):
+        return t.controller
+    if isinstance(t, Route):
+        return t.broker
+    return t.source
+
+
 # --- observations and run ---
 
 

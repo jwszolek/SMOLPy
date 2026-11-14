@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from smolpy.core.adapter import _derive_mac
 from smolpy.core.node import Node
+from smolpy.model import ProfinetDeviceNode
+from smolpy.model.validate import check_node
 
 
 class ProfinetDevice(Node):
@@ -15,3 +17,7 @@ class ProfinetDevice(Node):
         super().__init__(name)
         self.ip = ip
         self.mac = mac or _derive_mac(ip)
+        check_node(self.to_spec())
+
+    def to_spec(self) -> ProfinetDeviceNode:
+        return ProfinetDeviceNode(self.name, self.ip, self.mac)
