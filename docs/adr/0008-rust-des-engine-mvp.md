@@ -99,7 +99,7 @@ Anything outside this scope is rejected by the capability check with a message s
 
 - **Rust unit tests** in `smol-engine` cover each mechanism: queue discipline, MAC learning, flooding, timing arithmetic.
 - **Cross-engine equivalence** against SimPy uses the harness from ADR-0009:
-    - **Deterministic scenarios** (constant patterns, fixed sizes) must agree with SimPy within a tight tolerance on every metric window. Differences come only from float µs (SimPy) versus integer ns (Rust).
+    - **Deterministic scenarios** (constant patterns, fixed sizes) must agree with SimPy ~~within a tight tolerance on every metric window. Differences come only from float µs (SimPy) versus integer ns (Rust).~~ *Amended by the ADR-0007 revision of 2026-11-14:* exactly, on every metric window. Both engines use integer nanoseconds and the same rounding rules ([ADR-0007](0007-execution-independent-scenario-model.md#simulated-time-integer-nanoseconds)).
     - **Stochastic scenarios** must agree statistically across replications.
 - **Benchmark acceptance:** B1, B3 and B4 of the ADR-0006 suite, run with `--backend rust`, must meet the research targets defined there on the reference machine. B2 follows with protocol parity (Phase 5).
 

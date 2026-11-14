@@ -1,7 +1,7 @@
 # ADR-0007: Execution-Independent Scenario Model (Scenario IR)
 
 **Status:** Accepted  
-**Date:** 2026-11-13 (revised the same day after ADR-0006 was implemented)  
+**Date:** 2026-11-13 (revised the same day after ADR-0006 was implemented; revised 2026-11-14: [simulated time in integer nanoseconds](#simulated-time-integer-nanoseconds))  
 **Amends:** ADR-0004 (backends consume the Scenario IR instead of the `.smol` AST)
 
 ---
@@ -14,6 +14,11 @@ Today the description of a network and its execution are tangled together:
 - **Validation is spread over three places.** Some checks live in the Python API (`Adapter.controls()` cycle values, `sends()` priority range), some in the `.smol` interpreter (metric/node-type compatibility, declaration order), and some nowhere at all (the engine silently ignores an observation on the wrong node type when called from Python).
 - **ADR-0004 attaches backends to the `.smol` AST** and keeps the Python API on SimPy only. This no longer fits. Large industrial networks — the main motivation for the Rust engine (ADR-0008) — are built programmatically in Python, with loops over cells and devices, which `.smol` deliberately cannot express. Those users must be able to choose a backend too.
 - **Semantics exist only as code.** Frame-size formulas, queueing discipline, how a sampler aggregates its window, which sample falls on the simulation boundary — all of it is defined only by the SimPy implementation. A second engine has nothing to be checked against except that code.
+- **Every engine has its own clock.** SimPy counts float µs; the Rust engine (ADR-0008) plans integer ns; ns-3 uses integer ns by default. *(Added by the 2026-11-14 revision.)* With float time:
+    - the same scenario gives slightly different numbers in each engine;
+    - a periodic source that adds its interval to the clock accumulates rounding error over a long run;
+    - two events that coincide in one engine can be a fraction of a nanosecond apart in another, and then happen in the opposite order;
+    - so the cross-engine check needs tolerances, and no tolerance covers a frame that falls into the neighbouring window.
 - **One shared random generator** (`random.Random(seed)` in `run_simulation`) serves every traffic source in creation order. Adding or reordering one flow changes the random draws of all others, which breaks controlled experiments and makes cross-engine comparison impossible.
 
 ### Options considered
@@ -118,13 +123,59 @@ A normative document, `docs/model-semantics.md`, defines what every IR element m
     - `learning` and `topology` tables; for `topology`, breadth-first search through switches and hubs, ties going to the lowest port;
     - end stations accept only frames addressed to their own MAC;
 - **timing:**
-    - **units:** the IR keeps values in the units users give: ms, m, Mb/s, bytes. The contract defines how they convert to simulated time. Each engine uses its own internal representation: SimPy float µs, Rust integer ns. The IR stays readable and independent of any engine.
+    - **units:** the IR keeps values in the units users give: ms, m, Mb/s, bytes. The contract defines how they convert to simulated time. ~~Each engine uses its own internal representation: SimPy float µs, Rust integer ns.~~ *Revised 2026-11-14:* simulated time is integer nanoseconds in every engine, with one rounding rule ([below](#simulated-time-integer-nanoseconds)). The IR stays readable and independent of any engine.
     - propagation constant: 2·10⁸ m/s;
     - when generators first fire;
 - **metric definitions:** what each metric aggregates over a window, and the boundary rule that a sample at exactly `t = duration` is not taken (current SimPy behaviour);
 - **ordering of simultaneous events**, to the extent it is observable.
 
 The SimPy engine remains the **reference implementation**. Where the code and the document disagree, that is a bug in one of them, to be resolved explicitly rather than by whatever the code happens to do.
+
+### Simulated time: integer nanoseconds
+
+*Added by the 2026-11-14 revision.*
+
+**Simulated time is an integer number of nanoseconds in every engine.** This is the representation of the Rust engine (ADR-0008) and the default resolution of ns-3 (`Time` is a 64-bit integer, resolution 1 ns). SimPy accepts integer times unchanged.
+
+**Options considered**
+- **A — keep float µs in SimPy, tolerances in the equivalence check.** No output change, but engines never agree exactly, a periodic source drifts, and ties break differently between engines. No tolerance covers a frame that moves into the neighbouring window ([Model Semantics §9](../model-semantics.md#9-simultaneous-events)).
+- **B — integer nanoseconds.** **Chosen.**
+    - Same clock as Rust and ns-3.
+    - Exact arithmetic and no drift.
+    - Every engine can reproduce SimPy's deterministic results exactly.
+- **C — integer picoseconds.** Exact transmission times at 10 Gb/s and above. However, it does not match ns-3's default resolution, and a signed 64-bit count covers only 106 days. Industrial links of 10 Mb/s to 1 Gb/s are already exact in nanoseconds (see the rounding error below). This remains possible later as a change of resolution in the contract, with no change to the IR.
+
+**Rules** (normative text in [Model Semantics §1](../model-semantics.md#1-time-and-units)):
+- **Exact value, then one rounding.**
+    - Every time quantity is computed exactly from the scenario's values, treated as exact rationals.
+    - It is then rounded once to the nearest nanosecond, with ties to even.
+    - This rounding is `round()` in Python and `round_ties_even` in Rust.
+    - Every engine rounds the same quantities at the same point, so they all produce the same integers.
+- **What is rounded:**
+    - **Durations, delays, cycles and `every`:** `ms × 10⁶`, exact for values with up to six decimals.
+    - **Propagation:** `length × 5 ns/m`.
+    - **Transmission:** `size × 8 000 / speed_mbps` ns. This is exact at 10 Mb/s, 100 Mb/s and 1 Gb/s. At 10 Gb/s it is exact for sizes divisible by 5 B, and otherwise rounded by at most 0.5 ns per frame, e.g. 0.4 % for a 64 B frame. The rounding is part of the model, so every engine shares it.
+    - **Random draws:** each draw is rounded when it becomes a delay. The generators differ between engines anyway, so only the rule is shared.
+- **No drift.**
+    - A periodic source does not add a rounded interval to the clock. Its *k*-th event is at `start + round(k · T)`, with `T` exact: the interval of a constant flow, a poll or a publish, a PROFINET cycle, or a sampling period.
+    - Over any run, a source is never more than 0.5 ns from its exact schedule.
+- **Metrics are exact until the last step.**
+    - Counters and sums are integers: bytes, bits, frames, and nanoseconds of latency and jitter.
+    - A sample's value is the exact quotient, rounded to a float once. For example, mean latency in µs is `sum_ns / (count · 1 000)`, and throughput is `bits · 1 000 / window_ns` Mb/s.
+    - Sample times are reported as `t_ns / 10⁶` ms.
+    - So the value does not depend on the order in which an engine adds things up.
+- **Ties.** Events at the same nanosecond are processed in the order they were scheduled, as now ([Model Semantics §9](../model-semantics.md#9-simultaneous-events)). With the same integer clock, a coincidence in one engine is a coincidence in all of them, and the start-up order of §9 decides it the same way.
+- **Range.** A signed 64-bit count covers 292 years of simulated time. Python integers are unbounded. Engines must reject a duration over 2⁶³ − 1 ns.
+
+**Consequences for equivalence.**
+- **Deterministic scenarios.** Every engine that implements the contract must reproduce SimPy's results **exactly**: the same sample times and the same values, bit for bit. Tolerances are no longer needed. This replaces the 1e-9 rule [below](#random-number-streams) and the tolerance rule of ADR-0009.
+- **Stochastic scenarios** keep the statistical comparison of ADR-0009.
+- **ns-3.** ns-3 shares the clock: the code generator writes integer nanoseconds. Its device and TCP/IP models still compute their own timings, so it remains a high-fidelity backend under ADR-0009's rules, not an exact one.
+
+**What changes for users.**
+- **The IR does not change:** values stay in ms, m, Mb/s and bytes, and the JSON version stays 1.
+- **Results of existing scenarios change once, in the last digits.** For example, a latency of `32.10000000000287` µs becomes `32.1`, because float µs no longer accumulates error. Results with random draws change slightly more, because each draw is now rounded to a nanosecond. B1–B4 get new reference hashes, recorded once.
+- **Performance:** small Python integers are as fast as floats, so no slowdown is expected. The exit criterion is that B1–B4 show no slowdown against the optimised engine (ADR-0006).
 
 ### Random number streams
 
@@ -134,7 +185,7 @@ The SimPy engine remains the **reference implementation**. Where the code and th
 - **Cross-engine equivalence has two levels:**
     - **Deterministic scenarios** (constant rates, periodic protocols, fixed sizes; B1–B4 among them):
         - injected and delivered frame counts match exactly;
-        - every metric sample matches within a relative tolerance of 1e-9. The only expected difference is float µs against integer ns.
+        - ~~every metric sample matches within a relative tolerance of 1e-9. The only expected difference is float µs against integer ns.~~ *Revised 2026-11-14:* every metric sample matches exactly, because every engine uses the same integer clock and computes metrics the same way ([Simulated time](#simulated-time-integer-nanoseconds)).
     - **Stochastic scenarios:** statistical equivalence across replications (ADR-0009). Bit-identical output would need the same generator, the same sampling algorithms and the same tie-breaking in every engine. That is not promised.
 
   Within one engine, a given seed is always fully reproducible.
@@ -157,12 +208,27 @@ First phase:
 4. **Write the semantics contract** (`docs/model-semantics.md`), checked against the SimPy engine as it stands after step 2.
 5. **Introduce per-source random streams.** A deliberate output change for random patterns only.
 
+Integer time (2026-11-14 revision), before the Rust engine:
+
+6. **Write the time rules into the contract.**
+    - Rewrite Model Semantics §1, §8 and §9 for integer nanoseconds.
+    - Add `smolpy.model.timebase`, the shared rounding and conversion functions: durations, propagation, transmission, periodic instants and metric quotients.
+    - Test it: ties to even, no drift over 10⁹ periods, and exact transmission times at 10 Mb/s to 1 Gb/s.
+7. **Move the SimPy engine to integer nanoseconds.**
+    - Every timeout and timestamp becomes an integer.
+    - Periodic sources use absolute instants.
+    - Metrics use integer sums and one division.
+    - Record the new B1–B4 hashes once, check that the B1–B4 benchmarks show no slowdown, and make sure the full test suite passes.
+8. **Make deterministic equivalence exact.**
+    - The equivalence suite (ADR-0009) compares deterministic scenarios without tolerance.
+    - Update the amended passages of ADR-0008 and ADR-0009.
+
 Later, once the Rust engine has proven useful:
 
-6. Make `.smol` lower straight to the IR, and add `smolpy run --backend`.
-7. Move the live and text dashboards behind the `Backend` protocol as an optional capability.
+9. Make `.smol` lower straight to the IR, and add `smolpy run --backend`.
+10. Move the live and text dashboards behind the `Backend` protocol as an optional capability.
 
-Each step ships separately and keeps the public API unchanged, except for the new `backend=` argument and the stricter validation in step 3.
+Each step ships separately and keeps the public API unchanged, except for the new `backend=` argument, the stricter validation in step 3, and the one-time output change in step 7.
 
 ### Amendment to ADR-0004
 
@@ -178,6 +244,7 @@ ADR-0004's "Where backends attach" decision changes from *Option B (the `.smol` 
 - Scenarios become data: they can be saved, compared, generated by other tools, and archived with results.
 - Per-source random streams make controlled experiments possible: changing one source no longer changes the randomness of the others.
 - The SimPy engine loses its dependency on private builder attributes.
+- *(2026-11-14 revision)* One integer clock for SimPy, Rust and ns-3. Deterministic results are exact and reproducible across engines, periodic sources do not drift, and simultaneous events are ordered the same way everywhere.
 
 **Negative / trade-offs**
 - A substantial refactor of the core: builder, interpreter and engine all change, even though the public API stays.
@@ -185,3 +252,4 @@ ADR-0004's "Where backends attach" decision changes from *Option B (the `.smol` 
 - Stricter validation turns some previously silent Python-API mistakes into errors, which is a visible behaviour change.
 - Per-source random streams change the output of existing seeded scenarios that use random patterns, once.
 - The semantics contract must be maintained along with every model change, or it loses its value.
+- *(2026-11-14 revision)* Integer time changes the last digits of existing results once, and B1–B4 get new hashes. Transmission times at 10 Gb/s and above are rounded by up to 0.5 ns per frame. If faster links become important, the contract can move to picoseconds.

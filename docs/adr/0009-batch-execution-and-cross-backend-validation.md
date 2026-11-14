@@ -85,7 +85,7 @@ The suite lives in `tests/equivalence/`. It runs a fixed set of reference scenar
 
 | Scenario class | Comparison |
 |---|---|
-| **Deterministic** (constant patterns, fixed sizes, no randomness) | Per metric window: \|a − b\| ≤ abs_tol + rel_tol·\|b\|. The tolerance only covers time representation (SimPy float µs vs Rust integer ns); default `rel_tol = 1e-6`, `abs_tol` = 1 ns-equivalent in the metric's unit. |
+| **Deterministic** (constant patterns, fixed sizes, no randomness) | ~~Per metric window: \|a − b\| ≤ abs_tol + rel_tol·\|b\|. The tolerance only covers time representation (SimPy float µs vs Rust integer ns); default `rel_tol = 1e-6`, `abs_tol` = 1 ns-equivalent in the metric's unit.~~ *Amended by the ADR-0007 revision of 2026-11-14 ([integer nanoseconds](0007-execution-independent-scenario-model.md#simulated-time-integer-nanoseconds)):* every metric window must match exactly. The tolerance applies until ADR-0007 step 8. |
 | **Stochastic** | 30 replications per backend. For each metric's per-run scalar, the 95 % confidence interval of the difference of means must contain 0, and the relative difference of means must be under 2 %. |
 | **High-fidelity backends** (ns-3) | Low-load scenarios: same rules as stochastic. Loaded scenarios: differences are **reported, not asserted** (ADR-0004). Quantifying them is a research result. |
 
