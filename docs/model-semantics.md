@@ -6,21 +6,31 @@ This is the normative meaning of a [Scenario](scenario-model.md), independent of
 
 ## 1. Time and units
 
+**Simulated time is an integer number of nanoseconds** in every engine ([ADR-0007, revision of 2026-11-14](adr/0007-execution-independent-scenario-model.md#simulated-time-integer-nanoseconds)). That is the same clock as ns-3's default resolution and the Rust engine. The rules are implemented in `smolpy.model.timebase`. *The SimPy engine still uses float µs until ADR-0007 step 7 ([open issue 6](#open-issues)).*
+
 The scenario keeps the units users give. Engines convert them as follows:
 
-| Quantity | Scenario unit | Meaning in simulated time |
+| Quantity | Scenario unit | Simulated time, ns |
 |---|---|---|
-| durations, delays, cycles, `every` | ms | × 1 000 µs |
-| link speed | Mb/s | × 10⁶ bit/s |
-| link length | m | propagation delay = length / (2 · 10⁸ m/s) |
-| traffic rate | frames, messages or polls per second | mean interval = 1 / rate s |
-| sizes, payloads | bytes | × 8 bits on the wire |
+| durations, delays, cycles | ms | `round(ms × 10⁶)` |
+| sampling period `every` | ms | `ms × 10⁶`, exact; each instant is rounded |
+| propagation delay | m | `round(length × 5)`, at 2 · 10⁸ m/s |
+| transmission time | bytes, Mb/s | `round(size × 8 000 / speed)` |
+| interval of a rate | per second | `10⁹ / rate`, exact; each instant is rounded |
+| random draws | — | each draw is rounded when it becomes a delay |
 
+**How rounding works:**
+- **The value of a number.** A scenario number is taken at its shortest decimal value, as written in the scenario JSON. For example, `0.1` ms is exactly 1/10 ms, not the nearest binary float.
+- **Exact, then rounded once.** Every quantity is computed exactly from those values, then rounded once to the nearest nanosecond, with **ties to even**. This is `round()` in Python and `round_ties_even` in Rust.
+- **Transmission times are exact** at 10 Mb/s, 100 Mb/s and 1 Gb/s. At 10 Gb/s they are exact for sizes divisible by 5 B, and otherwise rounded by at most 0.5 ns, e.g. 51.2 ns becomes 51 ns for 64 B. That rounding is part of the model.
+- **No drift.** A periodic source's *k*-th instant is `start + round(k · period)`, with the period exact. It is therefore within 0.5 ns of its exact schedule however long the run. This covers constant flows, publishes, polls, PROFINET cycles and metric samples.
+
+**Other rules:**
 - **Simulated time starts at 0 and the run covers `[0, duration)`.** Nothing scheduled at exactly `t = duration` happens, neither a frame event nor a metric sample.
-- **Each engine chooses its own representation of time.** SimPy uses float µs, and the Rust engine is planned to use integer ns. Results may differ only by that rounding (see [§9](#9-simultaneous-events)).
-- **Metric sample times are reported in ms.**
+- **Range.** A run lasts at most 2⁶³ − 1 ns, about 292 years. `every` is at least 1 ns, so no two samples of one observation fall on the same instant. Both are checked by validation.
+- **Metric sample times are reported in ms**, as `t_ns / 10⁶` rounded to a float once.
 
-*Tests: `test_run_covers_half_open_interval`, `test_samples_fall_on_multiples_of_every`.*
+*Tests: `test_run_covers_half_open_interval`, `test_samples_fall_on_multiples_of_every`; the rules themselves in `tests/test_timebase.py`.*
 
 ## 2. Frames
 
@@ -117,10 +127,10 @@ An end station sends everything over its single link, in the egress queue order 
 
 | Source | Frames |
 |---|---|
-| `Flow`, `constant` | one frame at `delay + T`, `delay + 2T`, … |
-| `Flow`, `poisson` | one frame after each exponential gap with mean `T`, the first gap starting at `delay` |
+| `Flow`, `constant` | one frame at `delay + T`, `delay + 2T`, …, each instant rounded as in [§1](#1-time-and-units) |
+| `Flow`, `poisson` | one frame after each exponential gap with mean `T`, the first gap starting at `delay`. Each gap is rounded to ns. |
 | `Flow`, `batch` | groups at Poisson instants with mean gap `T · E[X]`. Each group is X frames queued at the same instant, X drawn per group from the batch distribution. The long-run rate is `rate`. |
-| `Flow`, `bursty` | repeated ON/OFF cycles: L = max(1, ⌊Pareto(1.5)⌋) frames spaced `T/4` (the first one `T/4` after the cycle starts), then a silence of `T · L · U(0.3, 1.2)`. A cycle lasts `T · L` on average, so the long-run rate is `rate`. |
+| `Flow`, `bursty` | repeated ON/OFF cycles: L = max(1, ⌊Pareto(1.5)⌋) frames spaced `T/4` (the first one `T/4` after the cycle starts), then a silence of `T · L · U(0.3, 1.2)`. A cycle lasts `T · L` on average, so the long-run rate is `rate`. Frame *j* of a cycle is at `round(j · T/4)` after the cycle starts, and the silence is rounded to ns. |
 | `Publish` | one PUBLISH at `delay + T`, `delay + 2T`, … |
 | `Poll` | one request at `delay + T`, `delay + 2T`, … |
 | `ProfinetAR` | the controller sends an output frame, and the device an input frame, at `delay`, `delay + cycle`, `delay + 2·cycle`, … Note that the first frame goes out at `delay`, not one cycle later. |
@@ -162,6 +172,15 @@ An end station sends everything over its single link, in the egress queue order 
 
 A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)` pairs in time order.
 
+**Exact values.** Counters and sums are integers: bytes, bits, frames, and nanoseconds of latency and jitter. A value is their exact quotient, rounded to a float once, so it does not depend on the order in which an engine adds things up. Here `W` is the window length in ns, which can differ by 1 ns between windows because instants are rounded:
+
+- **`throughput`:** `bytes × 8 000 / W` Mb/s.
+- **`latency`, `modbus_latency`, `pn_latency`:** `Σ latency_ns / (count × 1 000)` µs.
+- **`pn_jitter`:** `max jitter_ns / 1 000` µs.
+- **`bytes_sent`, `bytes_received`:** `bytes / 10⁶` MB.
+- **`utilization`:** `bits × 10⁵ / (Σ speed × W)` %, where `speed` is in Mb/s.
+- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`) as they are.
+
 *Tests: `test_metric_definitions`, `test_window_metrics_skip_empty_windows`, `test_modbus_latency_is_round_trip`, `test_mqtt_latency_is_end_to_end`, `test_watchdog_expiries_are_cumulative`.*
 
 ## 9. Simultaneous events
@@ -179,7 +198,7 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
 - each adapter starts its sources in this order: PROFINET ARs, flows, publishes, polls;
 - metric samplers start after all nodes, in observation order.
 
-**Effect on cross-engine equivalence.** An engine with a different time representation can break a tie differently when two events coincide in one representation but not in the other. In deterministic scenarios that only moves a frame across a window boundary. The equivalence check of ADR-0007 allows for this.
+**Effect on cross-engine equivalence.** Every engine uses the same integer clock and the same rounding rules ([§1](#1-time-and-units)). So two events coincide in one engine exactly when they coincide in all of them, and the rules above order them the same way. Deterministic scenarios therefore give the same samples in every engine, with no tolerance (ADR-0007, ADR-0009). *Until ADR-0007 step 7, SimPy's float µs can break such a tie differently ([open issue 6](#open-issues)).*
 
 ## Open issues
 
@@ -192,3 +211,4 @@ Every disagreement between this page and the intended model is listed here, with
 | 3 | Hubs were not a shared medium | They had per-port queues with strict priority, and collisions were approximated as simultaneous arrivals, so `collision_rate` almost never counted any. | resolved: hubs and `collision_rate` removed. A shared segment would come back as a new node kind with half-duplex links and CSMA/CD. |
 | 4 | Wire overhead is not counted | Preamble, SFD, FCS and inter-frame gap (24 B per frame) are not on the wire, so the model's link capacity is higher than real by 24 B per frame: about 2 % for 1 518 B frames and 40 % for 60 B frames. | known simplification |
 | 5 | One random stream for all sources | Adding or reordering one source changed the draws of all others. | resolved in ADR-0007 step 5: one stream per traffic statement |
+| 6 | SimPy does not use integer nanoseconds yet | Time is float µs. Periodic sources add the interval to the clock, and metrics are float sums. Results differ from §1 and §8 in the last digits. | ADR-0007 step 7 |

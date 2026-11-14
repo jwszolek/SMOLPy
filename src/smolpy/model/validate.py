@@ -13,11 +13,13 @@ the scenario, so the ``.smol`` front end can add the source line.
 
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from collections.abc import Mapping
 from typing import Literal
 
+from smolpy.model import timebase
 from smolpy.model.frames import PN_CYCLES_MS, PN_MAX_IO_BYTES
 from smolpy.model.scenario import (
     AdapterNode,
@@ -239,12 +241,18 @@ def check_observation(o: Observation, target: NodeSpec | None = None) -> None:
     if o.metric not in METRIC_TARGETS:
         raise _fail(o, f"unknown or unsupported metric {o.metric!r}")
     _positive(o, "every", o.every_ms)
+    if not math.isfinite(o.every_ms) or timebase.period_ns(o.every_ms) < 1:
+        raise _fail(o, f"every must be at least 1 ns (0.000001 ms) and finite, got {o.every_ms!r}")
     if target is not None:
         _lookup({target.name: target}, o.target, o, METRIC_TARGETS[o.metric])
 
 
 def check_run(run: RunConfig) -> None:
     _positive(run, "duration", run.duration_ms)
+    if not math.isfinite(run.duration_ms) or timebase.ms_to_ns(run.duration_ms) > timebase.MAX_NS:
+        raise _fail(
+            run, f"duration must be at most 2^63 - 1 ns (292 years), got {run.duration_ms!r} ms"
+        )
     if not _integer(run.seed):
         raise _fail(run, f"seed must be an integer, got {run.seed!r}")
 
