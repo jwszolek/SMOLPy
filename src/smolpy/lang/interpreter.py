@@ -6,39 +6,62 @@ from typing import TYPE_CHECKING
 from smolpy.core.adapter import Adapter
 from smolpy.core.network import Network
 from smolpy.core.node import Node
-from smolpy.ethernet.hub import Hub
-from smolpy.ethernet.switch import Switch
 from smolpy.lang import ast as smol_ast
 from smolpy.lang.errors import SMOLSemanticError
 from smolpy.lang.transformer import parse_smol
-from smolpy.modbus.slave import ModbusSlave
+from smolpy.model import Route, Scenario, traffic_owner
+from smolpy.model.validate import ScenarioError, validate
 from smolpy.mqtt.broker import MQTTBroker
-from smolpy.profinet.device import ProfinetDevice
 
 if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
-    from smolpy.model import Scenario
-
-# Mirrors the observe() dispatch chain in sim/engine.py — the actual runtime
-# behaviour, not just the MetricName type (which also lists "frame_loss",
-# an unimplemented metric with no engine.py branch — deliberately absent here
-# so .smol files can't observe it and expect it to do anything).
-_METRIC_NODE_TYPES: dict[str, tuple[type[Node], ...] | None] = {
-    "throughput": (Adapter,),
-    "latency": (Adapter,),
-    "bytes_sent": (Adapter,),
-    "bytes_received": (Adapter,),
-    "modbus_latency": (Adapter,),
-    "queue_depth": (Switch,),
-    "collision_rate": (Hub,),
-    "broker_queue": (MQTTBroker,),
-    "pn_latency": (Adapter, ProfinetDevice),
-    "pn_jitter": (Adapter, ProfinetDevice),
-    "pn_watchdog_expiries": (Adapter, ProfinetDevice),
-    "utilization": None,  # any node type
-}
 
 _SIMULATE_MODES = ("headless", "text", "live")
+
+# Every semantic rule lives in smolpy.model.validate. The interpreter only
+# resolves names, checks the type of the node whose method a statement calls,
+# and maps errors back to source lines.
+
+
+class _Lines:
+    """Source line of every Scenario IR element the file declared."""
+
+    def __init__(self) -> None:
+        self.nodes: list[int] = []
+        self.links: list[int] = []
+        self.observations: list[int] = []
+        self.traffic: dict[tuple[str, ...], int] = {}
+        self._seen: dict[tuple[str, str], int] = {}
+        self.run = 0
+
+    def statement(self, kind: str, owner: str, line: int, topic: str | None = None) -> None:
+        if topic is not None:  # a route is identified by its topic, later ones replace it
+            self.traffic[(kind, owner, topic)] = line
+            return
+        n = self._seen.get((kind, owner), 0)
+        self._seen[(kind, owner)] = n + 1
+        self.traffic[(kind, owner, str(n))] = line
+
+    def of(self, scenario: Scenario, where: tuple[str, int] | None) -> int | None:
+        if where is None:
+            return None
+        section, index = where
+        if section == "run":
+            return self.run
+        if section != "traffic":
+            return getattr(self, section)[index]  # type: ignore[no-any-return]
+        counts: dict[tuple[str, str], int] = {}
+        for i, t in enumerate(scenario.traffic):
+            owner = traffic_owner(t)
+            if isinstance(t, Route):
+                key: tuple[str, ...] = (t.kind, owner, t.topic)
+            else:
+                n = counts.get((t.kind, owner), 0)
+                counts[(t.kind, owner)] = n + 1
+                key = (t.kind, owner, str(n))
+            if i == index:
+                return self.traffic.get(key)
+        return None
 
 
 class _Interpreter:
@@ -51,19 +74,18 @@ class _Interpreter:
         name: str,
         line: int,
         *,
-        expect: type[Node] | tuple[type[Node], ...] | None = None,
+        expect: type[Node] | None = None,
     ) -> Node:
+        """Find a declared node. *expect* is only for the node whose builder
+        method the statement calls; every other type rule is the model's."""
         node = net._nodes.get(name)
         if node is None:
             raise SMOLSemanticError(self.file, line, f"reference to undeclared node '{name}'")
         if expect is not None and not isinstance(node, expect):
-            names = (
-                " or ".join(t.__name__ for t in expect)
-                if isinstance(expect, tuple)
-                else expect.__name__
-            )
+            kind = type(node).__name__
+            article = "an" if kind[0] in "AEIOU" else "a"
             raise SMOLSemanticError(
-                self.file, line, f"'{name}' is a {type(node).__name__}, expected {names}"
+                self.file, line, f"'{name}' is {article} {kind}, expected {expect.__name__}"
             )
         return node
 
@@ -75,9 +97,20 @@ class _Interpreter:
         """Build the network a .smol file describes, without running it."""
         net = Network(decl.name)
         simulate_decl: smol_ast.SimulateDecl | None = None
+        lines = _Lines()
+        node_decls = (
+            smol_ast.AdapterDecl,
+            smol_ast.SwitchDecl,
+            smol_ast.HubDecl,
+            smol_ast.MqttBrokerDecl,
+            smol_ast.ModbusSlaveDecl,
+            smol_ast.ProfinetDeviceDecl,
+        )
 
         for d in decl.declarations:
             try:
+                if isinstance(d, node_decls):
+                    lines.nodes.append(d.line)
                 if isinstance(d, smol_ast.AdapterDecl):
                     net.adapter(d.name, ip=d.ip, mac=d.mac)
                 elif isinstance(d, smol_ast.SwitchDecl):
@@ -100,13 +133,13 @@ class _Interpreter:
                     a = self._resolve(net, d.a, d.line)
                     b = self._resolve(net, d.b, d.line)
                     net.link(a, b, speed=d.speed, length=d.length)
+                    lines.links.append(d.line)
                 elif isinstance(d, smol_ast.FlowDecl):
                     src = self._resolve(net, d.src, d.line, expect=Adapter)
-                    dst = self._resolve(net, d.dst, d.line, expect=Adapter)
+                    dst = self._resolve(net, d.dst, d.line)
                     assert isinstance(src, Adapter)
-                    assert isinstance(dst, Adapter)
                     src.sends(
-                        to=dst,
+                        to=dst,  # type: ignore[arg-type]
                         rate=d.rate,
                         size=d.size,  # type: ignore[arg-type]
                         pattern=d.pattern,  # type: ignore[arg-type]
@@ -114,9 +147,10 @@ class _Interpreter:
                         batch=d.batch,
                         priority=d.priority,
                     )
+                    lines.statement("flow", src.name, d.line)
                 elif isinstance(d, smol_ast.PublishDecl):
                     src = self._resolve(net, d.src, d.line, expect=Adapter)
-                    broker = self._resolve(net, d.broker, d.line, expect=MQTTBroker)
+                    broker = self._resolve(net, d.broker, d.line)
                     assert isinstance(src, Adapter)
                     src.publishes(
                         to=broker,
@@ -126,38 +160,45 @@ class _Interpreter:
                         qos=d.qos,
                         delay_ms=d.delay_ms,
                     )
+                    lines.statement("publish", src.name, d.line)
                 elif isinstance(d, smol_ast.RouteDecl):
                     broker = self._resolve(net, d.broker, d.line, expect=MQTTBroker)
-                    targets = [self._resolve(net, t, d.line, expect=Adapter) for t in d.targets]
+                    targets = [self._resolve(net, t, d.line) for t in d.targets]
                     assert isinstance(broker, MQTTBroker)
                     broker.routes(d.topic, to=targets)
+                    lines.statement("route", broker.name, d.line, topic=d.topic)
                 elif isinstance(d, smol_ast.PollDecl):
                     master = self._resolve(net, d.master, d.line, expect=Adapter)
-                    slave = self._resolve(net, d.slave, d.line, expect=ModbusSlave)
+                    slave = self._resolve(net, d.slave, d.line)
                     assert isinstance(master, Adapter)
                     master.polls(
                         slave, register=d.register, count=d.count, rate=d.rate, delay_ms=d.delay_ms
                     )
+                    lines.statement("poll", master.name, d.line)
                 elif isinstance(d, smol_ast.ControlDecl):
                     controller = self._resolve(net, d.controller, d.line, expect=Adapter)
-                    device = self._resolve(net, d.device, d.line, expect=ProfinetDevice)
+                    device = self._resolve(net, d.device, d.line)
                     assert isinstance(controller, Adapter)
                     controller.controls(
-                        device,
+                        device,  # type: ignore[arg-type]
                         cycle=d.cycle,
                         inputs=d.inputs,
                         outputs=d.outputs,
                         hold=d.hold,
                         delay_ms=d.delay_ms,
                     )
+                    lines.statement("profinet_ar", controller.name, d.line)
                 elif isinstance(d, smol_ast.ObserveDecl):
-                    self._observe(net, d)
+                    target = self._resolve(net, d.target, d.line)
+                    net.observe(d.metric, on=target, every=d.every)  # type: ignore[arg-type]
+                    lines.observations.append(d.line)
                 elif isinstance(d, smol_ast.SimulateDecl):
                     if simulate_decl is not None:
                         raise SMOLSemanticError(
                             self.file, d.line, "only one 'simulate' statement is allowed"
                         )
                     simulate_decl = d
+                    lines.run = d.line
             except ValueError as exc:
                 raise SMOLSemanticError(self.file, d.line, str(exc)) from exc
 
@@ -166,16 +207,15 @@ class _Interpreter:
                 self.file, decl.line, "network block must include a 'simulate' statement"
             )
         self._check_mode(simulate_decl)
-        return net, simulate_decl
 
-    def _observe(self, net: Network, d: smol_ast.ObserveDecl) -> None:
-        if d.metric not in _METRIC_NODE_TYPES:
-            raise SMOLSemanticError(
-                self.file, d.line, f"unknown or unsupported metric '{d.metric}'"
-            )
-        expect = _METRIC_NODE_TYPES[d.metric]
-        target = self._resolve(net, d.target, d.line, expect=expect)
-        net.observe(d.metric, on=target, every=d.every)  # type: ignore[arg-type]
+        # Rules about the scenario as a whole: topology, reachability, duplicates.
+        scenario = net.to_scenario(duration=simulate_decl.duration, seed=simulate_decl.seed)
+        try:
+            validate(scenario)
+        except ScenarioError as exc:
+            line = lines.of(scenario, exc.where) or decl.line
+            raise SMOLSemanticError(self.file, line, str(exc)) from exc
+        return net, simulate_decl
 
     def _check_mode(self, d: smol_ast.SimulateDecl) -> None:
         if d.mode not in _SIMULATE_MODES:

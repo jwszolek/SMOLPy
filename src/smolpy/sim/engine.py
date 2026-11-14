@@ -716,9 +716,17 @@ def run_simulation(
 ) -> SimulationResult:
     """Run *scenario* on SimPy. Duration and seed come from ``scenario.run``."""
     from smolpy.core.network import RunStats, SimulationResult
+    from smolpy.model.validate import ScenarioError, describe, validate
 
     if scenario.run is None:
         raise ValueError(f"scenario {scenario.name!r} has no run configuration")
+    validate(scenario)
+    for i, link in enumerate(scenario.links):
+        if not link.duplex:  # capability of this backend, not a model rule
+            raise ScenarioError(
+                f"{describe(link)}: half-duplex links are not supported by the simpy backend",
+                ("links", i),
+            )
     t_start = time.perf_counter()
 
     nodes: dict[str, model.NodeSpec] = {n.name: n for n in scenario.nodes}
@@ -729,14 +737,7 @@ def run_simulation(
     # Traffic statements, grouped by the node that runs them, in scenario order.
     sourced: dict[str, list[model.TrafficSpec]] = defaultdict(list)
     for t in scenario.traffic:
-        owner = (
-            t.controller
-            if isinstance(t, model.ProfinetAR)
-            else t.broker
-            if isinstance(t, model.Route)
-            else t.source
-        )
-        sourced[owner].append(t)
+        sourced[model.traffic_owner(t)].append(t)
 
     # Every node gets an inbound store where delivered frames arrive
     inbound: dict[str, simpy.Store] = {name: simpy.Store(env) for name in nodes}

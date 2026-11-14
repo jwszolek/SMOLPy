@@ -124,7 +124,7 @@ class TestMQTT:
         sensor = net.adapter("sensor", ip="10.0.1.1")
         net.link(sensor, sw, speed=100, length=5)
         net.link(sw, broker, speed=1_000, length=2)
-        net.link(broker, server, speed=1_000, length=2)
+        net.link(sw, server, speed=1_000, length=2)
         broker.routes("plant/temp", to=[server])
         sensor.publishes(to=broker, topic="plant/temp", rate=1.0, payload=20, qos=1)
         net.observe("broker_queue", on=broker, every=500)

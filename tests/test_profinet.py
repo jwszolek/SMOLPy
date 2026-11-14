@@ -77,7 +77,7 @@ class TestApi:
         net = Network("t")
         plc = net.adapter("plc", ip="10.0.0.1")
         other = net.adapter("other", ip="10.0.0.2")
-        with pytest.raises(ValueError, match="not a ProfinetDevice"):
+        with pytest.raises(ValueError, match="'other' is an Adapter, expected ProfinetDevice"):
             plc.controls(other, cycle=4, inputs=8, outputs=8)
 
     def test_duplicate_ar_rejected(self) -> None:

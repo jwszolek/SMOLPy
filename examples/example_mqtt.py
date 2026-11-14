@@ -12,10 +12,9 @@ the metric charts.
 
 QoS 1 acknowledgement
 ---------------------
-With qos=1, the broker also enqueues a PUBACK frame (58 bytes) back toward
-the publisher.  In this simplified model the PUBACK travels the broker's
-single outbound channel (toward the server), adding a small amount of extra
-traffic on that link.
+With qos=1, the broker also sends a PUBACK frame (58 bytes) back to the
+publisher.  Broker and server both hang off the switch, which forwards each
+PUBACK to the sensor that sent the PUBLISH.
 
 broker_queue metric
 -------------------
@@ -57,7 +56,7 @@ for sensor in sensors:
     net.link(sensor, sw, speed=100, length=10)
 
 net.link(sw, broker, speed=1_000, length=2)
-net.link(broker, server, speed=1_000, length=2)
+net.link(sw, server, speed=1_000, length=2)
 
 broker.routes("plant/temperature", to=[server])
 

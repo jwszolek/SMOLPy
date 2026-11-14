@@ -136,7 +136,8 @@ def test_derived_mac_has_six_bytes(ip: str, mac: str) -> None:
 def test_mac_cannot_be_derived_from_a_non_ipv4_address(ip: str) -> None:
     with pytest.raises(ValueError, match="cannot derive a MAC"):
         Network("n").adapter("a", ip=ip)
-    Network("n").adapter("a", ip=ip, mac="02:00:00:00:00:01")  # explicit MAC still works
+    with pytest.raises(ValueError, match="is not an IPv4 address"):  # an explicit MAC does not help
+        Network("n").adapter("a", ip=ip, mac="02:00:00:00:00:01")
 
 
 def test_json_is_versioned() -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Literal
 
 from smolpy.core.node import Node
+from smolpy.model import SwitchNode
+from smolpy.model.validate import check_node
 
 SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
@@ -31,11 +33,11 @@ class Switch(Node):
         mac_table: MacTableMode = "learning",
     ) -> None:
         super().__init__(name)
-        if qos not in ("strict", "fifo"):
-            raise ValueError(f"invalid qos {qos!r} — expected 'strict' or 'fifo'")
-        if mac_table not in ("learning", "topology"):
-            raise ValueError(f"invalid mac_table {mac_table!r} — expected 'learning' or 'topology'")
         self.ports = ports
         self.mode = mode
         self.qos = qos
         self.mac_table_mode = mac_table
+        check_node(self.to_spec())
+
+    def to_spec(self) -> SwitchNode:
+        return SwitchNode(self.name, self.ports, self.mode, self.qos, self.mac_table_mode)

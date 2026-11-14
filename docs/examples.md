@@ -162,7 +162,8 @@ Ten sensors publish MQTT messages at 1 msg/s to a broker on topic `"plant/temper
 
 ```
 [sensor-1 … 10] ── 100 Mbps / 10 m ──┐
-                                    [sw] ── 1 Gbps / 2 m ── [mqtt-broker] ── 1 Gbps / 2 m ── [server]
+                                    [sw] ── 1 Gbps / 2 m ── [mqtt-broker]
+                                      └──── 1 Gbps / 2 m ── [server]
 ```
 
 | Sensor | Starts at |
@@ -178,7 +179,7 @@ Simulation: **40 s**
 |---|---|
 | `broker_queue:mqtt-broker` | Stays at 0 — 1 Gbps uplink drains the queue instantly |
 | `throughput:server` | Steps up by ~0.77 kb/s every 2 s as each sensor joins; total ≈ 7.7 kb/s at t = 18 s |
-| `latency:server` | Steady and low — propagation + one switch hop, no congestion |
+| `latency:server` | Steady and low — two switch hops (sensor → broker → server), no congestion |
 
 Frame size: 96 B per PUBLISH (`Ethernet+IPv4+TCP=54` + `MQTT overhead=22` + `payload=20`). See [MQTT](mqtt.md) for the general model.
 

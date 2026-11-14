@@ -3,7 +3,7 @@
 A `Scenario` is a complete description of one simulation: nodes, links, traffic, observations and the run configuration. It belongs to no engine. Both front ends produce it, and the engines will consume it ([ADR-0007](adr/0007-execution-independent-scenario-model.md)).
 
 !!! note "Status"
-    Migration step 2 of ADR-0007. `simulate()` lowers the network to a `Scenario`, and the SimPy engine runs that scenario. It no longer reads the `Network` object. Validation, the semantics contract and backend selection come in the next steps.
+    Migration step 3 of ADR-0007. `simulate()` lowers the network to a `Scenario`, which is validated and then run by the SimPy engine. The semantics contract and backend selection come in the next steps.
 
 ## Producing a scenario
 
@@ -39,6 +39,50 @@ result.stats        # RunStats(backend="simpy", events=..., wall_s=...)
 ```
 
 A scenario read back from JSON gives exactly the same results as the `Network` it came from. The run fails with `ValueError` if the scenario has no `run` section or references an undeclared node.
+
+## Validation
+
+Every semantic rule lives in one module, `smolpy.model.validate`. Every engine runs `validate(scenario)` before simulating, so an invalid scenario never runs, and nothing is ignored silently. Errors are `ScenarioError`, a `ValueError` that names the element and records where it is in the scenario:
+
+```
+flow tx -> rx: priority 9 out of range 0-7
+observe pn_jitter on sw: 'sw' is a Switch, expected Adapter or ProfinetDevice
+link c -- sw: 'sw' has only 2 ports, all in use
+```
+
+**Rules about one element** are checked by the Python builder at the call that declares it, e.g. `sends()` or `observe()`:
+
+| Element | Rules |
+|---|---|
+| nodes | IPv4 address; MAC address of six hex bytes; `ports` ≥ 1; switch `mode`, `qos`, `mac_table`; Modbus `unit_id` 0–255 |
+| links | not to itself; `speed` > 0; `length` ≥ 0 |
+| `Flow` | source and destination are adapters; `rate` > 0; `size` ≥ 1 or `imix`; known `pattern`; `priority` 0–7; a batch size exactly when `pattern="batch"` |
+| `Publish` | adapter → MQTT broker; non-empty topic; `rate` > 0; `qos` 0 or 1 (QoS 2 is not modelled) |
+| `Route` | broker → adapters, each subscriber once |
+| `Poll` | adapter → Modbus slave; `register` 0–65535; `count` 1–125; `rate` > 0 |
+| `ProfinetAR` | adapter → PROFINET device; `cycle` 1, 2, 4 … 512 ms; `inputs`/`outputs` 1–1440 B; `hold` 1–255 |
+| observations | an implemented metric (`frame_loss` is not); a node type the metric applies to; `every` > 0 |
+| run | `duration` > 0; integer `seed` |
+
+Delays must be zero or positive.
+
+**Rules about the whole scenario** are checked before the run starts:
+- **Unique names and MACs.** Node names are unique, and so are end-station MAC addresses.
+- **Links:**
+    - every link references declared nodes;
+    - an end station has at most one link;
+    - a switch or hub has no more links than `ports`;
+    - the topology has no loops, because no spanning tree is modelled.
+- **Traffic:**
+    - every node a statement involves has a link;
+    - source and destination are different nodes in the same connected part of the network;
+    - a controller has at most one AR per device;
+    - a broker routes each topic once.
+- **Observations:** every observed node has a link, and no metric is observed twice on the same node.
+
+A node without links and without traffic is allowed.
+
+**Backend capabilities** are checked after validation. The SimPy backend does not model half-duplex links, so it rejects `duplex=False`.
 
 ## Structure
 

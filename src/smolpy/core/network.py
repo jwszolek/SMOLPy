@@ -163,6 +163,10 @@ class Network:
         return node
 
     def link(self, a: Node, b: Node, speed: float, length: float, duplex: bool = True) -> Link:
+        from smolpy import model
+        from smolpy.model.validate import check_link
+
+        check_link(model.Link(a.name, b.name, speed, length, duplex))
         lnk = Link(endpoint_a=a, endpoint_b=b, speed=speed, length=length, duplex=duplex)
         a.links.append(lnk)
         b.links.append(lnk)
@@ -173,6 +177,10 @@ class Network:
     # --- observation builder ---
 
     def observe(self, metric: MetricName, on: Node, every: float) -> None:
+        from smolpy import model
+        from smolpy.model.validate import check_observation
+
+        check_observation(model.Observation(metric, on.name, every), on.to_spec())
         self._observations.append(Observation(metric=metric, target=on, interval_ms=every))
 
     # --- simulation control ---
@@ -215,8 +223,8 @@ class Network:
         nodes: list[model.NodeSpec] = []
         traffic: list[model.TrafficSpec] = []
         for node in self._nodes.values():
+            nodes.append(node.to_spec())
             if isinstance(node, Adapter):
-                nodes.append(model.AdapterNode(node.name, node.ip, node.mac))
                 # Per source, in the order the SimPy engine starts its generators.
                 traffic.extend(
                     model.ProfinetAR(
@@ -259,26 +267,11 @@ class Network:
                     model.Poll(node.name, p.slave.name, p.register, p.count, p.rate_hz, p.delay_ms)
                     for p in node.modbus_specs
                 )
-            elif isinstance(node, Switch):
-                nodes.append(
-                    model.SwitchNode(
-                        node.name, node.ports, node.mode, node.qos, node.mac_table_mode
-                    )
-                )
-            elif isinstance(node, Hub):
-                nodes.append(model.HubNode(node.name, node.ports))
             elif isinstance(node, MQTTBroker):
-                nodes.append(model.MqttBrokerNode(node.name, node.ip, node.mac))
                 traffic.extend(
                     model.Route(node.name, topic, tuple(a.name for a in subscribers))
                     for topic, subscribers in node._routes.items()
                 )
-            elif isinstance(node, ModbusSlave):
-                nodes.append(model.ModbusSlaveNode(node.name, node.ip, node.mac, node.unit_id))
-            elif isinstance(node, ProfinetDevice):
-                nodes.append(model.ProfinetDeviceNode(node.name, node.ip, node.mac))
-            else:
-                raise TypeError(f"no scenario representation for {node!r}")
 
         return model.Scenario(
             name=self.name,
