@@ -176,6 +176,29 @@ batch = run_many(sweep, runs=10, workers=8)
 batch.results(3)                       # the runs of the fourth scenario
 ```
 
+### Statistics across runs
+
+```python
+from smolpy.stats import mean_ci
+
+summary = batch.summary()              # same shape as result.metrics
+for t, ci in summary["latency:plc"]:   # ci: MeanCI(n, mean, std, low, high, level)
+    print(t, ci.mean, ci.half_width)
+
+peaks = batch.scalar("pn_jitter:plc", "max")   # one number per run
+print(mean_ci(peaks))                          # 95 % CI of the mean peak
+
+batch.export("runs.csv")    # scenario, run, seed, time_ms, metric, value, error
+batch.export("runs.json")   # every run with its metrics, or its traceback
+```
+
+- **`summary(scenario=0, level=0.95)`**: for every metric and sample time, the mean across the successful runs, the sample standard deviation and a confidence interval from Student's *t*.
+    - A window metric such as `latency` has no sample for a window without frames, so `n` counts only the runs that have the sample.
+    - With `n = 1` the standard deviation and the interval are NaN.
+- **`scalar(metric, reduce="mean", scenario=0)`**: one value per successful run. `reduce` is `"mean"`, `"min"`, `"max"`, `"last"`, `"sum"` or a function of the run's values. A run without samples gives NaN.
+- **`export(path, format=None)`**: CSV or JSON, from the extension unless `format` is given. A failed run is one CSV row with only its `error`.
+- **`smolpy.stats`** (`mean_ci`, `t_quantile`) is plain Python, with no numpy or scipy.
+
 | Parameter | Default | Meaning |
 |---|---|---|
 | `source` | — | a `Network`, a `Scenario`, or a list of scenarios |

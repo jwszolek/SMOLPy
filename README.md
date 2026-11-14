@@ -264,6 +264,8 @@ from smolpy import run_many
 batch = run_many(net, runs=30, duration=10_000)   # seeds 42 … 71, on all CPU cores
 batch.raise_on_failure()
 results = batch.results()                         # one SimulationResult per run
+summary = batch.summary()                         # per window: mean, std, 95 % CI
+batch.export("runs.csv")                          # every run, with its seed
 ```
 
 Replications and parameter sweeps run in parallel worker processes; see the [DSL Reference](https://jwszolek.github.io/SMOLPy/dsl-reference/#many-runs).

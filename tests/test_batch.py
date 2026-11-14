@@ -186,3 +186,129 @@ def test_a_dead_worker_is_recorded_and_replaced() -> None:
         assert stats.events > 0 and metrics["bytes_received:b"]
     finally:
         worker.close()
+
+
+# --- step 2: summary, scalar, export ---
+
+
+def _sparse_net() -> Network:
+    """Few frames, short windows: some latency windows are empty in some runs."""
+    net = Network("sparse")
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    sw = net.switch("sw", ports=2)
+    net.link(a, sw, speed=100, length=10)
+    net.link(b, sw, speed=100, length=10)
+    a.sends(b, rate=100, size="imix", pattern="poisson")
+    net.observe("latency", on=b, every=10)
+    net.observe("bytes_received", on=b, every=10)
+    return net
+
+
+def test_summary_is_the_mean_ci_of_every_window() -> None:
+    from smolpy.stats import mean_ci
+
+    batch = run_many(_net(), runs=5, duration=100, workers=1)
+    summary = batch.summary()
+    assert list(summary) == ["bytes_received:b"]
+    runs = [r.metrics["bytes_received:b"] for r in batch.results()]
+    assert [t for t, _ in summary["bytes_received:b"]] == [t for t, _ in runs[0]]
+    for w, (t, ci) in enumerate(summary["bytes_received:b"]):
+        assert ci == mean_ci([run[w][1] for run in runs])
+        assert ci.n == 5
+
+
+def test_summary_counts_the_runs_that_have_a_window() -> None:
+    batch = run_many(_sparse_net(), runs=6, duration=300, workers=1)
+    latency = batch.summary()["latency:b"]
+    per_run = [{t for t, _ in r.metrics["latency:b"]} for r in batch.results()]
+    for t, ci in latency:
+        assert ci.n == sum(t in times for times in per_run)
+    assert min(ci.n for _, ci in latency) < 6  # some windows are empty in some runs
+
+
+def test_summary_of_another_scenario_and_level() -> None:
+    base = _net().to_scenario(duration=100)
+    other = dataclasses.replace(base, traffic=(dataclasses.replace(base.traffic[0], rate=50),))
+    batch = run_many([base, other], runs=3, workers=1)
+    assert batch.summary(1) != batch.summary(0)
+    t, ci = batch.summary(1, level=0.9)["bytes_received:b"][-1]
+    assert ci.level == 0.9
+    with pytest.raises(IndexError, match="scenario 2 out of range: the batch has 2"):
+        batch.summary(2)
+
+
+def test_scalar() -> None:
+    batch = run_many(_net(), runs=3, duration=100, workers=1)
+    series = [[v for _, v in r.metrics["bytes_received:b"]] for r in batch.results()]
+    assert batch.scalar("bytes_received:b", "last") == [s[-1] for s in series]
+    assert batch.scalar("bytes_received:b", "max") == [max(s) for s in series]
+    assert batch.scalar("bytes_received:b", "min") == [min(s) for s in series]
+    assert batch.scalar("bytes_received:b") == pytest.approx([sum(s) / len(s) for s in series])
+    assert batch.scalar("bytes_received:b", lambda vs: len(vs)) == [9.0, 9.0, 9.0]
+
+
+def test_scalar_of_a_run_without_samples_is_nan() -> None:
+    import math
+
+    net = Network("late")
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    sw = net.switch("sw", ports=2)
+    net.link(a, sw, speed=100, length=10)
+    net.link(b, sw, speed=100, length=10)
+    a.sends(b, rate=10)  # first frame at 100 ms, after the run
+    net.observe("latency", on=b, every=10)
+    batch = run_many(net, runs=2, duration=50, workers=1)
+
+    def never(values: list[float]) -> float:
+        raise AssertionError("called without samples")
+
+    assert all(math.isnan(v) for v in batch.scalar("latency:b", never))
+    assert len(batch.scalar("latency:b")) == 2
+
+
+def test_scalar_rejects() -> None:
+    batch = run_many(_net(), runs=1, duration=100, workers=1)
+    with pytest.raises(KeyError, match="no metric 'latency:b' in the runs; observed: bytes_"):
+        batch.scalar("latency:b")
+    with pytest.raises(ValueError, match="unknown reduce 'median', expected one of mean"):
+        batch.scalar("bytes_received:b", "median")
+
+
+def test_export_csv_and_json(tmp_path, monkeypatch) -> None:
+    import csv
+    import json
+
+    from smolpy.sim import engine
+
+    real = engine.run_simulation
+
+    def flaky(scenario, **kwargs):
+        if scenario.run.seed == 43:
+            raise RuntimeError("boom")
+        return real(scenario, **kwargs)
+
+    monkeypatch.setattr(engine, "run_simulation", flaky)
+    batch = run_many(_net(), runs=2, duration=30, workers=1)
+
+    batch.export(tmp_path / "runs.csv")
+    rows = list(csv.DictReader(open(tmp_path / "runs.csv", encoding="utf-8")))
+    ok = [r for r in rows if r["run"] == "0"]
+    expected = batch.runs[0].result.metrics["bytes_received:b"]  # type: ignore[union-attr]
+    assert [(float(r["time_ms"]), float(r["value"])) for r in ok] == expected
+    assert {r["seed"] for r in ok} == {"42"} and {r["metric"] for r in ok} == {"bytes_received:b"}
+    (failed,) = [r for r in rows if r["run"] == "1"]
+    assert failed["seed"] == "43" and failed["error"] == "RuntimeError: boom"
+    assert failed["time_ms"] == failed["metric"] == failed["value"] == ""
+
+    batch.export(str(tmp_path / "runs.out"), format="json")
+    data = json.loads((tmp_path / "runs.out").read_text(encoding="utf-8"))
+    assert data["scenarios"] == ["cell"]
+    first, second = data["runs"]
+    assert (first["seed"], first["error"]) == (42, None)
+    assert first["metrics"]["bytes_received:b"] == [list(s) for s in expected]
+    assert second["metrics"] is None and "RuntimeError: boom" in second["error"]
+
+    with pytest.raises(ValueError, match="unknown format 'xlsx', expected 'csv' or 'json'"):
+        batch.export(tmp_path / "runs.xlsx")
