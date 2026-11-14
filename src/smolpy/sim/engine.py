@@ -11,9 +11,19 @@ from typing import TYPE_CHECKING
 
 import simpy
 
+from smolpy import model
+from smolpy.model.frames import (
+    MODBUS_REQUEST_BYTES,
+    MQTT_PUBACK_BYTES,
+    PN_RT_PRIORITY,
+    modbus_response_frame_size,
+    mqtt_publish_frame_size,
+    pn_frame_size,
+)
+
 if TYPE_CHECKING:
     from smolpy.core.batch import BatchSpec
-    from smolpy.core.network import Network, SimulationResult
+    from smolpy.core.network import SimulationResult
 
 _MAX_RETRIES = 16
 _SLOT_TIME_US = 51.2  # 10 Mbps Ethernet slot time (µs)
@@ -324,7 +334,7 @@ def _modbus_slave_responder(
             continue  # flooded frame for another station: the NIC drops it
         if frame.modbus_unit_id != unit_id:
             continue  # not a Modbus frame, or addressed to a different slave
-        response_size = 62 + 2 * frame.modbus_register_count
+        response_size = modbus_response_frame_size(frame.modbus_register_count)
         out_channel.enqueue(
             _Frame(
                 src_mac=slave_mac,
@@ -342,14 +352,10 @@ def _mqtt_broker_forwarder(
     env: simpy.Environment,
     inbound: simpy.Store,
     broker_mac: str,
-    routes: dict[str, list],  # topic → [Adapter, ...]
+    topic_subs: dict[str, list[str]],  # topic → [subscriber_mac, ...]
     out_channel: _LinkChannel,  # broker's outbound channel to nearest switch
 ) -> Generator:
     """MQTT broker: receives PUBLISH, fans out to subscribers, ACKs QoS 1."""
-    # Pre-build topic → [subscriber_mac, ...]
-    topic_subs: dict[str, list[str]] = {
-        topic: [a.mac for a in adapters] for topic, adapters in routes.items()
-    }
     while True:
         frame: _Frame = yield inbound.get()
         if frame.dst_mac != broker_mac:
@@ -366,13 +372,13 @@ def _mqtt_broker_forwarder(
                     mqtt_topic=frame.mqtt_topic,
                 )
             )
-        # QoS 1 → PUBACK (4-byte MQTT header + Ethernet/IP/TCP = 58 bytes total)
+        # QoS 1 → PUBACK (4-byte MQTT header + Ethernet/IP/TCP)
         if frame.mqtt_qos >= 1:
             out_channel.enqueue(
                 _Frame(
                     src_mac=broker_mac,
                     dst_mac=frame.src_mac,
-                    size_bytes=58,
+                    size_bytes=MQTT_PUBACK_BYTES,
                     created_at_us=env.now,
                 )
             )
@@ -534,16 +540,13 @@ def _replicate(frame: _Frame, out_channels: dict[int, _LinkChannel]) -> None:
 
 
 def _topology_mac_table(
-    network: Network, switch: str, neighbours: dict[str, list[tuple[int, str]]]
+    nodes: dict[str, model.NodeSpec], switch: str, neighbours: dict[str, list[tuple[int, str]]]
 ) -> dict[str, int]:
     """Port towards every reachable end station, by breadth-first search.
 
     Switches and hubs are traversed, end stations are not. The first port to
     reach a station wins: shortest path, ties to the lowest port index.
     """
-    from smolpy.ethernet.hub import Hub
-    from smolpy.ethernet.switch import Switch
-
     table: dict[str, int] = {}
     seen = {switch}
     frontier = sorted(neighbours[switch])
@@ -552,14 +555,14 @@ def _topology_mac_table(
     while frontier:
         nxt: list[tuple[int, str]] = []
         for port, name in frontier:
-            node = network._nodes[name]
-            if isinstance(node, (Switch, Hub)):
+            node = nodes[name]
+            if isinstance(node, (model.SwitchNode, model.HubNode)):
                 for _, peer in neighbours[name]:
                     if peer not in seen:
                         seen.add(peer)
                         nxt.append((port, peer))
             else:
-                table.setdefault(node.mac, port)  # type: ignore[attr-defined]
+                table.setdefault(node.mac, port)
         frontier = nxt
     return table
 
@@ -689,50 +692,73 @@ def _utilization_sampler(
 # ---------------------------------------------------------------------------
 
 
+_ENDPOINTS = (
+    model.AdapterNode,
+    model.MqttBrokerNode,
+    model.ModbusSlaveNode,
+    model.ProfinetDeviceNode,
+)
+
+
+def _lookup(nodes: dict[str, model.NodeSpec], name: str, what: str) -> model.NodeSpec:
+    try:
+        return nodes[name]
+    except KeyError:
+        raise ValueError(f"{what}: reference to undeclared node {name!r}") from None
+
+
 def run_simulation(
-    network: Network,
-    duration_ms: float,
+    scenario: model.Scenario,
     *,
-    seed: int = 42,
     _all_samples: dict[str, Samples] | None = None,
     _sim_state: dict | None = None,
     _n_chunks: int = 1,
 ) -> SimulationResult:
-    from smolpy.core.adapter import PN_RT_PRIORITY, Adapter
-    from smolpy.core.network import SimulationResult
-    from smolpy.ethernet.hub import Hub
-    from smolpy.ethernet.switch import Switch
-    from smolpy.modbus.slave import ModbusSlave
-    from smolpy.mqtt.broker import MQTTBroker
-    from smolpy.profinet.device import ProfinetDevice
+    """Run *scenario* on SimPy. Duration and seed come from ``scenario.run``."""
+    from smolpy.core.network import RunStats, SimulationResult
 
-    endpoint_types = (Adapter, MQTTBroker, ModbusSlave, ProfinetDevice)
+    if scenario.run is None:
+        raise ValueError(f"scenario {scenario.name!r} has no run configuration")
+    t_start = time.perf_counter()
 
+    nodes: dict[str, model.NodeSpec] = {n.name: n for n in scenario.nodes}
     env = simpy.Environment()
-    duration_us = duration_ms * 1_000
-    rng = random.Random(seed)
+    duration_us = scenario.run.duration_ms * 1_000
+    rng = random.Random(scenario.run.seed)
+
+    # Traffic statements, grouped by the node that runs them, in scenario order.
+    sourced: dict[str, list[model.TrafficSpec]] = defaultdict(list)
+    for t in scenario.traffic:
+        owner = (
+            t.controller
+            if isinstance(t, model.ProfinetAR)
+            else t.broker
+            if isinstance(t, model.Route)
+            else t.source
+        )
+        sourced[owner].append(t)
 
     # Every node gets an inbound store where delivered frames arrive
-    inbound: dict[str, simpy.Store] = {name: simpy.Store(env) for name in network._nodes}
+    inbound: dict[str, simpy.Store] = {name: simpy.Store(env) for name in nodes}
 
     adapter_counters: dict[str, _AdapterCounters] = {
         name: _AdapterCounters()
-        for name, node in network._nodes.items()
-        if isinstance(node, Adapter)
+        for name, node in nodes.items()
+        if isinstance(node, model.AdapterNode)
     }
 
     hub_collisions: dict[str, list[int]] = {
-        name: [0] for name, node in network._nodes.items() if isinstance(node, Hub)
+        name: [0] for name, node in nodes.items() if isinstance(node, model.HubNode)
     }
 
     pn_consumers: dict[str, _PnConsumer] = {
         name: _PnConsumer(env)
-        for name, node in network._nodes.items()
-        if isinstance(node, (Adapter, ProfinetDevice))
+        for name, node in nodes.items()
+        if isinstance(node, (model.AdapterNode, model.ProfinetDeviceNode))
     }
 
-    def _strict(node: object) -> bool:
-        return not (isinstance(node, Switch) and node.qos == "fifo")
+    def _strict(node: model.NodeSpec) -> bool:
+        return not (isinstance(node, model.SwitchNode) and node.qos == "fifo")
 
     # Build directed link channels from topology
     next_port: dict[str, int] = defaultdict(int)
@@ -742,20 +768,19 @@ def run_simulation(
     static_macs: dict[str, dict[str, int]] = defaultdict(dict)  # switch_name → {mac: port}
     neighbours: dict[str, list[tuple[int, str]]] = defaultdict(list)  # name → [(port, peer)]
 
-    for link in network._links:
-        a, b = link.endpoint_a, link.endpoint_b
+    for link in scenario.links:
+        a = _lookup(nodes, link.a, f"link {link.a} -- {link.b}")
+        b = _lookup(nodes, link.b, f"link {link.a} -- {link.b}")
         port_a = next_port[a.name]
         next_port[a.name] += 1
         port_b = next_port[b.name]
         next_port[b.name] += 1
 
+        speed_bps = link.speed_mbps * 1_000_000
+        prop_delay_us = (link.length_m / 2e8) * 1_000_000
         # ch_ab is a's egress queue, ch_ba is b's — each follows its owner's QoS.
-        ch_ab = _LinkChannel(
-            env, link.speed_bps, link.propagation_delay_us, port_b, inbound[b.name], _strict(a)
-        )
-        ch_ba = _LinkChannel(
-            env, link.speed_bps, link.propagation_delay_us, port_a, inbound[a.name], _strict(b)
-        )
+        ch_ab = _LinkChannel(env, speed_bps, prop_delay_us, port_b, inbound[b.name], _strict(a))
+        ch_ba = _LinkChannel(env, speed_bps, prop_delay_us, port_a, inbound[a.name], _strict(b))
 
         out_channels[a.name][port_a] = ch_ab
         out_channels[b.name][port_b] = ch_ba
@@ -764,46 +789,51 @@ def run_simulation(
         neighbours[a.name].append((port_a, b.name))
         neighbours[b.name].append((port_b, a.name))
 
-        if isinstance(a, endpoint_types):
+        if isinstance(a, _ENDPOINTS):
             adapter_out[a.name] = ch_ab
-            if isinstance(b, Switch):
+            if isinstance(b, model.SwitchNode):
                 static_macs[b.name][a.mac] = port_b
-        if isinstance(b, endpoint_types):
+        if isinstance(b, _ENDPOINTS):
             adapter_out[b.name] = ch_ba
-            if isinstance(a, Switch):
+            if isinstance(a, model.SwitchNode):
                 static_macs[a.name][b.mac] = port_a
 
-    for name, node in network._nodes.items():
-        if isinstance(node, Switch) and node.mac_table_mode == "topology":
-            for mac, port in _topology_mac_table(network, name, neighbours).items():
+    for name, node in nodes.items():
+        if isinstance(node, model.SwitchNode) and node.mac_table == "topology":
+            for mac, port in _topology_mac_table(nodes, name, neighbours).items():
                 static_macs[name].setdefault(mac, port)
 
     # Start one process per node
     ar_ids = itertools.count()
-    for name, node in network._nodes.items():
-        if isinstance(node, Adapter):
+    for name, node in nodes.items():
+        if isinstance(node, model.AdapterNode):
             env.process(
                 _adapter_receiver(
                     env, inbound[name], node.mac, adapter_counters[name], pn_consumers[name]
                 )
             )
             ch = adapter_out.get(name)
-            for pn in node.profinet_specs:
+            specs = sourced.get(name, [])
+            for pn in specs:
+                if not isinstance(pn, model.ProfinetAR):
+                    continue
                 ar_id = next(ar_ids)
-                device_ch = adapter_out.get(pn.device.name)
+                device = _lookup(nodes, pn.device, f"PROFINET AR {name} -> {pn.device}")
+                device_ch = adapter_out.get(device.name)
                 if ch is None or device_ch is None:
                     continue  # one side not wired — no cyclic exchange possible
+                assert isinstance(device, model.ProfinetDeviceNode)
                 cycle_us = pn.cycle_ms * 1_000
                 delay_us = pn.delay_ms * 1_000
                 pn_consumers[name].expect(ar_id, cycle_us, pn.hold)  # inputs
-                pn_consumers[pn.device.name].expect(ar_id, cycle_us, pn.hold)  # outputs
+                pn_consumers[device.name].expect(ar_id, cycle_us, pn.hold)  # outputs
                 env.process(
                     _pn_provider(
                         env,
                         node.mac,
-                        pn.device.mac,
+                        device.mac,
                         ar_id,
-                        pn.output_frame_size,
+                        pn_frame_size(pn.outputs),
                         cycle_us,
                         ch,
                         PN_RT_PRIORITY,
@@ -813,10 +843,10 @@ def run_simulation(
                 env.process(
                     _pn_provider(
                         env,
-                        pn.device.mac,
+                        device.mac,
                         node.mac,
                         ar_id,
-                        pn.input_frame_size,
+                        pn_frame_size(pn.inputs),
                         cycle_us,
                         device_ch,
                         PN_RT_PRIORITY,
@@ -824,73 +854,79 @@ def run_simulation(
                     )
                 )
             if ch:
-                for spec in node.traffic_specs:
-                    env.process(
-                        _traffic_gen(
-                            env,
-                            node.mac,
-                            spec.destination.mac,
-                            spec.rate,
-                            spec.size,
-                            spec.pattern,
-                            ch,
-                            rng,
-                            delay_us=spec.delay_ms * 1_000,
-                            batch=spec.batch,
-                            priority=spec.priority,
+                for spec in specs:
+                    if isinstance(spec, model.Flow):
+                        dst = _lookup(nodes, spec.destination, f"flow {name} -> {spec.destination}")
+                        env.process(
+                            _traffic_gen(
+                                env,
+                                node.mac,
+                                dst.mac,  # type: ignore[union-attr]
+                                spec.rate,
+                                spec.size,
+                                spec.pattern,
+                                ch,
+                                rng,
+                                delay_us=spec.delay_ms * 1_000,
+                                batch=spec.batch,
+                                priority=spec.priority,
+                            )
                         )
-                    )
-                for spec in node.mqtt_specs:
-                    env.process(
-                        _mqtt_traffic_gen(
-                            env,
-                            node.mac,
-                            spec.broker.mac,
-                            spec.topic,
-                            spec.rate_hz,
-                            spec.frame_size,
-                            spec.qos,
-                            ch,
-                            delay_us=spec.delay_ms * 1_000,
+                for spec in specs:
+                    if isinstance(spec, model.Publish):
+                        broker = _lookup(nodes, spec.broker, f"publish {name} -> {spec.broker}")
+                        env.process(
+                            _mqtt_traffic_gen(
+                                env,
+                                node.mac,
+                                broker.mac,  # type: ignore[union-attr]
+                                spec.topic,
+                                spec.rate,
+                                mqtt_publish_frame_size(spec.topic, spec.payload, spec.qos),
+                                spec.qos,
+                                ch,
+                                delay_us=spec.delay_ms * 1_000,
+                            )
                         )
-                    )
-                for spec in node.modbus_specs:
-                    env.process(
-                        _modbus_poll_gen(
-                            env,
-                            node.mac,
-                            spec.slave.mac,
-                            spec.slave.unit_id,
-                            spec.count,
-                            spec.request_frame_size,
-                            spec.rate_hz,
-                            ch,
-                            delay_us=spec.delay_ms * 1_000,
+                for spec in specs:
+                    if isinstance(spec, model.Poll):
+                        slave = _lookup(nodes, spec.slave, f"poll {name} -> {spec.slave}")
+                        assert isinstance(slave, model.ModbusSlaveNode)
+                        env.process(
+                            _modbus_poll_gen(
+                                env,
+                                node.mac,
+                                slave.mac,
+                                slave.unit_id,
+                                spec.count,
+                                MODBUS_REQUEST_BYTES,
+                                spec.rate,
+                                ch,
+                                delay_us=spec.delay_ms * 1_000,
+                            )
                         )
-                    )
-        elif isinstance(node, MQTTBroker):
+        elif isinstance(node, model.MqttBrokerNode):
             ch = adapter_out.get(name)
             if ch:
-                env.process(
-                    _mqtt_broker_forwarder(
-                        env,
-                        inbound[name],
-                        node.mac,
-                        node._routes,
-                        ch,
-                    )
-                )
-        elif isinstance(node, ModbusSlave):
+                topic_subs: dict[str, list[str]] = {}
+                for route in sourced.get(name, []):
+                    if isinstance(route, model.Route):
+                        topic_subs[route.topic] = [
+                            _lookup(nodes, s, f"route {name} {route.topic}").mac  # type: ignore[union-attr]
+                            for s in route.subscribers
+                        ]
+                env.process(_mqtt_broker_forwarder(env, inbound[name], node.mac, topic_subs, ch))
+        elif isinstance(node, model.ModbusSlaveNode):
             ch = adapter_out.get(name)
             if ch:
                 env.process(_modbus_slave_responder(env, inbound[name], node.mac, node.unit_id, ch))
-        elif isinstance(node, ProfinetDevice):
+        elif isinstance(node, model.ProfinetDeviceNode):
             env.process(_pn_device_receiver(env, inbound[name], node.mac, pn_consumers[name]))
-        elif isinstance(node, Switch):
+        elif isinstance(node, model.SwitchNode):
             env.process(
                 _switch_forwarder(env, inbound[name], out_channels[name], static_macs.get(name))
             )
-        elif isinstance(node, Hub):
+        elif isinstance(node, model.HubNode):
             env.process(
                 _hub_broadcaster(env, inbound[name], out_channels[name], hub_collisions[name])
             )
@@ -899,24 +935,25 @@ def run_simulation(
     # Reuse an externally supplied dict (live mode) or create a fresh one.
     all_samples: dict[str, Samples] = _all_samples if _all_samples is not None else {}
 
-    for obs in network._observations:
-        target = obs.target
-        interval_us = obs.interval_ms * 1_000
+    for obs in scenario.observations:
+        target = _lookup(nodes, obs.target, f"observe {obs.metric} on {obs.target}")
+        interval_us = obs.every_ms * 1_000
         key = f"{obs.metric}:{target.name}"
         if key not in all_samples:
             all_samples[key] = []
         samples = all_samples[key]
+        adapter = isinstance(target, model.AdapterNode)
 
-        if obs.metric == "throughput" and isinstance(target, Adapter):
+        if obs.metric == "throughput" and adapter:
             env.process(
                 _throughput_sampler(env, adapter_counters[target.name], interval_us, samples)
             )
-        elif obs.metric == "latency" and isinstance(target, Adapter):
+        elif obs.metric == "latency" and adapter:
             sinks = adapter_counters[target.name].latency_sinks
             env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
-        elif obs.metric == "queue_depth" and isinstance(target, Switch):
+        elif obs.metric == "queue_depth" and isinstance(target, model.SwitchNode):
             env.process(_queue_depth_sampler(env, out_channels[target.name], interval_us, samples))
-        elif obs.metric == "collision_rate" and isinstance(target, Hub):
+        elif obs.metric == "collision_rate" and isinstance(target, model.HubNode):
             env.process(
                 _collision_rate_sampler(env, hub_collisions[target.name], interval_us, samples)
             )
@@ -924,15 +961,15 @@ def run_simulation(
             chs = in_channels.get(target.name, [])
             if chs:
                 env.process(_utilization_sampler(env, chs, interval_us, samples))
-        elif obs.metric == "bytes_received" and isinstance(target, Adapter):
+        elif obs.metric == "bytes_received" and adapter:
             env.process(_bytes_rx_sampler(env, adapter_counters[target.name], interval_us, samples))
-        elif obs.metric == "bytes_sent" and isinstance(target, Adapter):
+        elif obs.metric == "bytes_sent" and adapter:
             ch = adapter_out.get(target.name)
             if ch:
                 env.process(_bytes_tx_sampler(env, ch, interval_us, samples))
-        elif obs.metric == "broker_queue" and isinstance(target, MQTTBroker):
+        elif obs.metric == "broker_queue" and isinstance(target, model.MqttBrokerNode):
             env.process(_broker_queue_sampler(env, inbound[target.name], interval_us, samples))
-        elif obs.metric == "modbus_latency" and isinstance(target, Adapter):
+        elif obs.metric == "modbus_latency" and adapter:
             sinks = adapter_counters[target.name].modbus_rtt_sinks
             env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
         elif obs.metric == "pn_latency" and target.name in pn_consumers:
@@ -959,7 +996,12 @@ def run_simulation(
     else:
         env.run(until=duration_us)
 
+    # SimPy draws one id from _eid for every scheduled event: processed events
+    # are the ids drawn minus the events still queued.
+    events = next(env._eid) - len(env._queue)
+    stats = RunStats(backend="simpy", events=events, wall_s=time.perf_counter() - t_start)
+
     if _sim_state is not None:
         _sim_state["done"] = True
 
-    return SimulationResult(metrics=all_samples, network=network)
+    return SimulationResult(metrics=all_samples, scenario=scenario, stats=stats)

@@ -32,6 +32,7 @@ Every measurement runs in a **fresh subprocess**, so that its peak RSS belongs t
 
 Results are written as JSON to `benchmarks/results/`, one record per run. Each record includes:
 - the machine, Python, SimPy and SMOLPy versions, and the git commit;
+- the backend, the number of events and the run time, as reported by the engine itself in `SimulationResult.stats` (ADR-0007). The run time covers the engine run only. Building the network and its Scenario IR is reported separately as `build_s`;
 - an **output hash** of the event count and all metric samples. It confirms that a run computed exactly the same thing as the runs it is compared against.
 
 ## Scenarios

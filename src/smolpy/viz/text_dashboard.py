@@ -14,7 +14,8 @@ from rich.table import Table
 from rich.text import Text
 
 if TYPE_CHECKING:
-    from smolpy.core.network import Network, SimulationResult
+    from smolpy.core.network import SimulationResult
+    from smolpy.model import Scenario
 
 _N_CHUNKS = 200
 
@@ -49,7 +50,7 @@ def _bar(fraction: float, width: int = 30) -> Text:
 
 
 def _build_display(
-    network: Network,
+    scenario: Scenario,
     all_samples: dict[str, list],
     sim_state: dict,
     duration_ms: float,
@@ -90,26 +91,27 @@ def _build_display(
     body = Text.assemble(progress_line, "\n\n")
     return Panel(
         Columns([body, tbl], equal=False),
-        title=f"[bold cyan]SMOLPy[/] — [white]{network.name}[/]",
+        title=f"[bold cyan]SMOLPy[/] — [white]{scenario.name}[/]",
         border_style="cyan" if not done else "green",
         padding=(1, 2),
     )
 
 
-def show_text(network: Network, duration_ms: float, seed: int = 42) -> SimulationResult:
+def show_text(scenario: Scenario) -> SimulationResult:
     """Run simulation in background thread; display live metric table in terminal."""
+    from smolpy.core.network import SimulationResult
     from smolpy.sim.engine import run_simulation
 
+    assert scenario.run is not None
+    duration_ms = scenario.run.duration_ms
     all_samples: dict[str, list] = {
-        f"{obs.metric}:{obs.target.name}": [] for obs in network._observations
+        f"{obs.metric}:{obs.target}": [] for obs in scenario.observations
     }
     sim_state: dict = {"progress": 0.0, "done": False, "result": None}
 
     def _run() -> None:
         result = run_simulation(
-            network,
-            duration_ms,
-            seed=seed,
+            scenario,
             _all_samples=all_samples,  # type: ignore[arg-type]
             _sim_state=sim_state,
             _n_chunks=_N_CHUNKS,
@@ -123,16 +125,14 @@ def show_text(network: Network, duration_ms: float, seed: int = 42) -> Simulatio
     console = Console()
     with Live(console=console, refresh_per_second=4, screen=False) as live:
         while not sim_state.get("done", False):
-            live.update(_build_display(network, all_samples, sim_state, duration_ms, t0))
+            live.update(_build_display(scenario, all_samples, sim_state, duration_ms, t0))
             time.sleep(0.25)
         # One final render with done state
-        live.update(_build_display(network, all_samples, sim_state, duration_ms, t0))
+        live.update(_build_display(scenario, all_samples, sim_state, duration_ms, t0))
 
     thread.join(timeout=60)
 
     result = sim_state.get("result")
     if result is None:
-        from smolpy.dsl.network import SimulationResult
-
-        result = SimulationResult(metrics=all_samples, network=network)  # type: ignore[arg-type]
+        result = SimulationResult(metrics=all_samples, scenario=scenario)
     return result

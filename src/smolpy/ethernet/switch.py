@@ -39,4 +39,3 @@ class Switch(Node):
         self.mode = mode
         self.qos = qos
         self.mac_table_mode = mac_table
-        self.mac_table: dict[str, int] = {}  # mac -> port index

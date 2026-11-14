@@ -3,7 +3,7 @@
 A `Scenario` is a complete description of one simulation: nodes, links, traffic, observations and the run configuration. It belongs to no engine. Both front ends produce it, and the engines will consume it ([ADR-0007](adr/0007-execution-independent-scenario-model.md)).
 
 !!! note "Status"
-    Migration step 1 of ADR-0007. The IR can be produced and serialised, but `simulate()` still runs the SimPy engine on the `Network` object directly. Validation, the semantics contract and backend selection come in the next steps.
+    Migration step 2 of ADR-0007. `simulate()` lowers the network to a `Scenario`, and the SimPy engine runs that scenario. It no longer reads the `Network` object. Validation, the semantics contract and backend selection come in the next steps.
 
 ## Producing a scenario
 
@@ -27,6 +27,18 @@ scenario = interpret_to_scenario(Path("examples/example_profinet.smol"))
 ```
 
 Without `duration`, `to_scenario()` describes the network only, and `scenario.run` is `None`.
+
+## Running a scenario
+
+```python
+from smolpy.sim.engine import run_simulation
+
+result = run_simulation(Scenario.from_json(text))   # duration and seed from scenario.run
+result.scenario     # the scenario that was run
+result.stats        # RunStats(backend="simpy", events=..., wall_s=...)
+```
+
+A scenario read back from JSON gives exactly the same results as the `Network` it came from. The run fails with `ValueError` if the scenario has no `run` section or references an undeclared node.
 
 ## Structure
 

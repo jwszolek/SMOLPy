@@ -17,21 +17,13 @@ import time
 
 import simpy
 
-_ENVS: list[simpy.Environment] = []
 _AFTER_RUN: list = []  # callbacks run while the engine's state is still alive
 
 
-class _TrackedEnvironment(simpy.Environment):
-    """Registers itself so its event counter can be read after the run.
-
-    SimPy draws one id from ``_eid`` for every scheduled event, so the number
-    of processed events is ``next(_eid)`` minus whatever is still queued —
-    exact, and with no per-event overhead.
-    """
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        _ENVS.append(self)
+class _SnapshotEnvironment(simpy.Environment):
+    """Runs the _AFTER_RUN callbacks at the end of env.run(), while every
+    engine structure is still alive. Installed only for the SimPy-specific
+    tracemalloc profile; events and run time come from ``result.stats``."""
 
     def run(self, until=None):  # type: ignore[no-untyped-def]
         result = super().run(until)
@@ -43,10 +35,6 @@ class _TrackedEnvironment(simpy.Environment):
 def _peak_rss_kb() -> int:
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return rss // 1024 if sys.platform == "darwin" else rss  # macOS reports bytes
-
-
-def _events_processed() -> int:
-    return sum(next(env._eid) - len(env._queue) for env in _ENVS)
 
 
 def _hash(obj: object) -> str:
@@ -70,12 +58,12 @@ def _metrics_hash(metrics: dict[str, list[tuple[float, float]]]) -> str:
 def measure(
     scenario: str, frames: int, metrics: bool, seed: int, profile: str | None, out: str | None
 ) -> dict:
-    """Run one measurement. The engine creates its Environment through the
-    ``simpy`` module, so the tracking subclass is installed only for the
-    duration of this call."""
+    """Run one measurement. For the tracemalloc profile the engine's
+    Environment is replaced (through the ``simpy`` module) for the duration
+    of this call only."""
     original = simpy.Environment
-    simpy.Environment = _TrackedEnvironment  # type: ignore[misc]
-    _ENVS.clear()
+    if profile == "tracemalloc":
+        simpy.Environment = _SnapshotEnvironment  # type: ignore[misc]
     _AFTER_RUN.clear()
     try:
         return _measure(scenario, frames, metrics, seed, profile, out)
@@ -87,24 +75,25 @@ def _measure(
     scenario: str, frames: int, metrics: bool, seed: int, profile: str | None, out: str | None
 ) -> dict:
     from benchmarks.scenarios import SCENARIOS
+    from smolpy.sim.engine import run_simulation
 
     rss_import_kb = _peak_rss_kb()
 
+    # Building the model: the Network and its Scenario IR.
     t0 = time.perf_counter()
     built = SCENARIOS[scenario](frames, metrics)
+    ir = built.network.to_scenario(duration=built.duration_ms, seed=seed)
     build_s = time.perf_counter() - t0
     rss_after_build_kb = _peak_rss_kb()
 
-    run = lambda: built.network.simulate(duration=built.duration_ms, seed=seed)  # noqa: E731
+    run = lambda: run_simulation(ir)  # noqa: E731
 
     if profile == "cprofile":
         import cProfile
         import pstats
 
         profiler = cProfile.Profile()
-        t0 = time.perf_counter()
         result = profiler.runcall(run)
-        run_s = time.perf_counter() - t0
         with open(out, "w") as fh:  # type: ignore[arg-type]
             stats = pstats.Stats(profiler, stream=fh).strip_dirs()
             fh.write("=== sorted by own time (tottime) ===\n")
@@ -130,15 +119,13 @@ def _measure(
 
         _AFTER_RUN.append(snapshot)
         tracemalloc.start()
-        t0 = time.perf_counter()
         result = run()
-        run_s = time.perf_counter() - t0
     else:
-        t0 = time.perf_counter()
         result = run()
-        run_s = time.perf_counter() - t0
 
-    events = _events_processed()
+    # The backend reports its own run: events processed and wall-clock time
+    # of the run itself, without model building (ADR-0007).
+    events, run_s = result.stats.events, result.stats.wall_s
     return {
         "scenario": scenario,
         "frames_target": frames,
@@ -148,7 +135,8 @@ def _measure(
         "status": "ok",
         "sim_duration_ms": built.duration_ms,
         "frames_expected": built.frames_expected,
-        "nodes": len(built.network._nodes),
+        "backend": result.stats.backend,
+        "nodes": len(ir.nodes),
         "events": events,
         "build_s": build_s,
         "run_s": run_s,
