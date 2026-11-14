@@ -3,7 +3,7 @@
 A `Scenario` is a complete description of one simulation: nodes, links, traffic, observations and the run configuration. It belongs to no engine. Both front ends produce it, and the engines will consume it ([ADR-0007](adr/0007-execution-independent-scenario-model.md)).
 
 !!! note "Status"
-    Migration step 3 of ADR-0007. `simulate()` lowers the network to a `Scenario`, which is validated and then run by the SimPy engine. The semantics contract and backend selection come in the next steps.
+    Migration step 4 of ADR-0007. `simulate()` lowers the network to a `Scenario`, which is validated and then run by the SimPy engine. What every element means is defined in [Model Semantics](model-semantics.md). Per-source random streams and backend selection come in the next steps.
 
 ## Producing a scenario
 
