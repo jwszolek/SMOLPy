@@ -256,6 +256,18 @@ result.export("out.csv", format="csv")   # explicit format override
 
 **Text mode** (`text=True`) displays a live updating table in the terminal — no display server or GUI toolkit required.  Ideal for headless servers, SSH sessions, and CI environments.
 
+### Many runs
+
+```python
+from smolpy import run_many
+
+batch = run_many(net, runs=30, duration=10_000)   # seeds 42 … 71, on all CPU cores
+batch.raise_on_failure()
+results = batch.results()                         # one SimulationResult per run
+```
+
+Replications and parameter sweeps run in parallel worker processes; see the [DSL Reference](https://jwszolek.github.io/SMOLPy/dsl-reference/#many-runs).
+
 ### Quick demo
 
 ```bash

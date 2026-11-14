@@ -1,6 +1,6 @@
 # ADR-0009: Batch Execution and Cross-Backend Validation
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-11-13  
 **Depends on:** ADR-0007 (Scenario IR). Used by ADR-0008 (Rust) and ADR-0004 (ns-3).
 
@@ -73,7 +73,7 @@ smolpy run plant.smol --runs 30 --workers 8 --backend rust -o runs.csv
 
 | Backend | Parallelism |
 |---|---|
-| SimPy | `concurrent.futures.ProcessPoolExecutor`, one process per worker. Each task gets the Scenario as IR JSON, so no builder objects are pickled. |
+| SimPy | One `python -m smolpy._worker` process per worker, fed over a pipe by one thread each. Each worker gets the Scenario as IR JSON once, so no builder objects are pickled. Not `ProcessPoolExecutor`: with `spawn` and `forkserver` it re-imports the user's script in every worker, which breaks scripts without an `if __name__ == "__main__"` guard. |
 | Rust | One process; runs are executed on a Rust thread pool (rayon) with the GIL released for the whole batch. |
 | ns-3 | One subprocess per run, limited by `workers`. |
 
@@ -109,6 +109,16 @@ The suite lives in `tests/equivalence/`. It runs a fixed set of reference scenar
 Peak RSS for SimPy batches is reported per worker process and in total. Comparing one SimPy process to one Rust process with *k* threads would be misleading.
 
 Results go to `docs/benchmarks.md`, next to the ADR-0006 baseline.
+
+### Implementation steps
+
+1. `run_many` and `BatchResult` with SimPy worker processes. Failed runs are recorded, invalid scenarios raise first.
+2. `summary()`, `scalar()` and `export()`, with a Student's *t* quantile in plain Python (no new dependency).
+3. `.smol` `runs=` and the CLI options `--runs`, `--workers`, `-o`.
+4. Sweep helpers on `Scenario`, such as `with_flow_rate`.
+5. The equivalence harness in `tests/equivalence/`, SimPy against itself.
+
+The performance comparison (`benchmarks compare`) waits for a second backend.
 
 ---
 

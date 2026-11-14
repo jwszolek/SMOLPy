@@ -156,6 +156,39 @@ result.export("out.csv", format="csv")   # explicit format override
 
 **Text mode** (`text=True`) displays a live updating table in the terminal — no display server or GUI toolkit required. Ideal for headless servers, SSH sessions, and CI environments.
 
+## Many runs
+
+`run_many` runs replications and parameter sweeps in parallel worker processes ([ADR-0009](adr/0009-batch-execution-and-cross-backend-validation.md)).
+
+```python
+from smolpy import run_many
+
+# Replications: the same network with seeds 42, 43, ... 71
+batch = run_many(net, runs=30, duration=10_000)
+batch.raise_on_failure()               # raise if any run failed
+for result in batch.results():         # one SimulationResult per successful run
+    print(result.scenario.run.seed, result.metrics["latency:plc"][-1])
+
+# Sweep: a list of scenarios, each run with the same seeds
+base = net.to_scenario(duration=10_000)
+sweep = [dataclasses.replace(base, traffic=...) for ...]
+batch = run_many(sweep, runs=10, workers=8)
+batch.results(3)                       # the runs of the fourth scenario
+```
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `source` | — | a `Network`, a `Scenario`, or a list of scenarios |
+| `runs` | `1` | runs per scenario |
+| `seeds` | `base, base + 1, …` | one seed per run; *base* is the scenario's seed (42 for a `Network`) |
+| `duration` | the scenario's | run length in ms; required for a `Network` |
+| `workers` | one per CPU | worker processes; `1` runs everything in the calling process |
+| `backend` | `"simpy"` | the only backend so far |
+
+- **No `__main__` guard needed.** Each worker is a fresh `python -m smolpy._worker` process that receives the scenario as IR JSON, so your script is never imported again.
+- **Invalid scenarios raise before anything runs.** A run that fails while running (an exception, or a worker process that dies) does not stop the batch: it is kept in `batch.runs` with its seed and traceback, and listed by `batch.failures`.
+- **Results are the same as single runs.** Run *k* of a batch gives exactly what `simulate(seed=...)` gives with that run's seed, whatever the number of workers.
+
 ## Errors
 
 Mistakes raise `ValueError` at the call that makes them, e.g. `a.sends(b, rate=10, priority=9)` or `net.observe("pn_jitter", on=switch, every=10)`. Rules about the whole network, such as the number of switch ports or a link to a node with traffic, are checked when `simulate()` starts. See [Scenario Model — Validation](scenario-model.md#validation) for the full list.

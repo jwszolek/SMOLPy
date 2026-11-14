@@ -78,6 +78,9 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - Batch throughput scales with cores.
 - The equivalence harness is in place, ready for a second backend.
 
+**Status:** step 1 of 5 done.
+- Step 1: `run_many()` runs replications and sweeps on SimPy worker processes and returns a `BatchResult`. With 8 workers, 8 runs of B1 at 200 k frames take 6.5 s instead of 32.9 s, with identical results.
+
 ## Phase 4: Rust DES engine, MVP ([ADR-0008](adr/0008-rust-des-engine-mvp.md))
 
 - Native engine for the core model: links, switches with priorities, Ethernet flows, core metrics.
