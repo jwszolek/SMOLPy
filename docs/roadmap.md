@@ -78,11 +78,20 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - Batch throughput scales with cores.
 - The equivalence harness is in place, ready for a second backend.
 
-**Status:** steps 1–4 of 5 done.
+**Status:** done (steps 1–5).
 - Step 1: `run_many()` runs replications and sweeps on SimPy worker processes and returns a `BatchResult`. With 8 workers, 8 runs of B1 at 200 k frames take 6.5 s instead of 32.9 s, with identical results.
 - Step 2: `BatchResult.summary()` gives the mean, standard deviation and Student's *t* confidence interval for every metric window. `scalar()` gives one number per run, and `export()` writes CSV or JSON. The *t* quantile is plain Python and matches scipy to 1e-11.
 - Step 3: `.smol` gains `simulate ... runs=`, and `smolpy run` gains `--runs`, `--workers` and `-o` for batches. A batch prints `BatchResult.report()` (mean ± CI across runs, then failed runs) and exits with status 1 if a run failed. An unknown `simulate` argument is now an error instead of being ignored.
 - Step 4: `Scenario.with_flow_rate()`, `with_cycle()`, `with_link_speed()`, `with_run()` and the general `with_traffic()` build the scenarios of a sweep. A selection that matches nothing is an error. The points of a sweep share their random streams.
+- Step 5: the equivalence suite in `tests/equivalence/` compares every installed backend against SimPy. With SimPy alone it compares SimPy against itself in about 5 s.
+    - **Scenarios.** Three deterministic scenarios are compared window by window. Two stochastic ones are compared with 30 replications per backend, using Welch's interval (`smolpy.stats.diff_ci`) and a 2 % limit. Together they cover every node kind, traffic kind and metric.
+    - **Self-checks.** Tests check that the harness detects a 2 ns latency change, a 3 % load change and a slower link.
+    - **False failures.** With independent seeds, two correct backends fail a stochastic scenario by chance about once in 10 seed blocks, since each scenario has 3–4 metrics at a 95 % level. The fixed seeds make CI stable, but a failure of a second backend near the limit needs a second seed block before it counts as a difference.
+- **Exit criteria:**
+    - `runs=` and `run_many()` are available.
+    - Batch throughput scales with cores: 8 workers are 5× faster.
+    - The equivalence suite is ready for a second backend.
+    - `benchmarks compare` waits for that backend, as ADR-0009 says.
 
 ## Phase 4: Rust DES engine, MVP ([ADR-0008](adr/0008-rust-des-engine-mvp.md))
 

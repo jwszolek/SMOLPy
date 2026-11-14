@@ -121,3 +121,44 @@ def _betainc(a: float, b: float, x: float, y: float) -> float:
 
 def _log_beta(a: float, b: float) -> float:
     return math.lgamma(a) + math.lgamma(b) - math.lgamma(a + b)
+
+
+@dataclass(frozen=True)
+class DiffCI:
+    """Difference of two means, ``mean(a) - mean(b)``, with Welch's
+    confidence interval at *level* and its degrees of freedom *df*."""
+
+    diff: float
+    low: float
+    high: float
+    df: float
+    level: float = 0.95
+
+    def contains(self, value: float = 0.0) -> bool:
+        return self.low <= value <= self.high
+
+
+def diff_ci(a: Sequence[float], b: Sequence[float], level: float = 0.95) -> DiffCI:
+    """Welch's confidence interval for ``mean(a) - mean(b)``: no assumption
+    that the two samples have the same variance.
+
+    Both samples need at least two values. When both have zero variance the
+    interval is the single point *diff* and *df* is NaN. NaN values make the
+    result NaN, as in :func:`mean_ci`.
+    """
+    if len(a) < 2 or len(b) < 2:
+        raise ValueError(
+            f"diff_ci needs at least two values in each sample, got {len(a)} and {len(b)}"
+        )
+    ca, cb = mean_ci(a, level), mean_ci(b, level)
+    diff = ca.mean - cb.mean
+    va, vb = ca.std**2 / ca.n, cb.std**2 / cb.n  # squared standard errors
+    se2 = va + vb
+    if se2 == 0:
+        return DiffCI(diff, diff, diff, math.nan, level)
+    df = se2**2 / (va**2 / (ca.n - 1) + vb**2 / (cb.n - 1))
+    if math.isnan(df):
+        nan = math.nan
+        return DiffCI(diff, nan, nan, nan, level)
+    half = t_quantile((1 + level) / 2, df) * math.sqrt(se2)
+    return DiffCI(diff, diff - half, diff + half, df, level)

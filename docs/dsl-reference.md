@@ -221,7 +221,7 @@ batch.export("runs.json")   # every run with its metrics, or its traceback
     - With `n = 1` the standard deviation and the interval are NaN.
 - **`scalar(metric, reduce="mean", scenario=0)`**: one value per successful run. `reduce` is `"mean"`, `"min"`, `"max"`, `"last"`, `"sum"` or a function of the run's values. A run without samples gives NaN.
 - **`export(path, format=None)`**: CSV or JSON, from the extension unless `format` is given. A failed run is one CSV row with only its `error`.
-- **`smolpy.stats`** (`mean_ci`, `t_quantile`) is plain Python, with no numpy or scipy.
+- **`smolpy.stats`** (`mean_ci`, `diff_ci` for Welch's interval of a difference of two means, `t_quantile`) is plain Python, with no numpy or scipy.
 
 | Parameter | Default | Meaning |
 |---|---|---|
