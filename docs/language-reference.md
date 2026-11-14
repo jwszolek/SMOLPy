@@ -136,7 +136,7 @@ simulate duration=<ms> [mode=headless|text|live] [seed=<int>]
 
 `mode` defaults to `headless` (no dashboard, fastest). `text` shows a live terminal table; `live` opens the Dear PyGui desktop window. The `--text` CLI flag always overrides `mode` (same as `--text` does for Python scripts).
 
-`seed` sets the random seed of the traffic generators (Poisson and bursty patterns, `imix` frame sizes). It defaults to `42`, so a run without `seed` is reproducible; vary it to repeat an experiment with independent random draws.
+`seed` sets the random seed of the traffic generators (Poisson, bursty and batch patterns, `imix` frame sizes). It defaults to `42`, so a run without `seed` is reproducible; vary it to repeat an experiment with independent random draws. Each `flow` gets its own random stream derived from `seed`, so adding or removing one flow does not change the draws of the others (see [Model Semantics](model-semantics.md#6-traffic-sources)).
 
 ## Errors
 

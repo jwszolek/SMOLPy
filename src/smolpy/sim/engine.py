@@ -20,6 +20,7 @@ from smolpy.model.frames import (
     mqtt_publish_frame_size,
     pn_frame_size,
 )
+from smolpy.model.streams import source_ids, stream_seed
 
 if TYPE_CHECKING:
     from smolpy.core.batch import BatchSpec
@@ -232,7 +233,8 @@ def _traffic_gen(
                 )
     while True:
         if pattern == "bursty":
-            # ON: Pareto-distributed burst at 4× rate; OFF: proportional silence
+            # ON: Pareto-distributed burst at 4x rate; OFF: proportional silence
+            # with mean 0.75 T per frame, so a cycle averages T per frame.
             burst_len = max(1, int(rng.paretovariate(1.5)))
             for _ in range(burst_len):
                 yield env.timeout(interval_us / 4)
@@ -245,7 +247,7 @@ def _traffic_gen(
                         priority=priority,
                     )
                 )
-            yield env.timeout(interval_us * burst_len * rng.uniform(0.5, 2.0))
+            yield env.timeout(interval_us * burst_len * rng.uniform(0.3, 1.2))
         else:
             if pattern == "constant":
                 yield env.timeout(interval_us)
@@ -699,7 +701,13 @@ def run_simulation(
     nodes: dict[str, model.NodeSpec] = {n.name: n for n in scenario.nodes}
     env = simpy.Environment()
     duration_us = scenario.run.duration_ms * 1_000
-    rng = random.Random(scenario.run.seed)
+    # One generator per traffic statement, seeded from its stable source id.
+    stream = {id(t): sid for t, sid in zip(scenario.traffic, source_ids(scenario), strict=True)}
+
+    run_seed = scenario.run.seed
+
+    def rng(t: model.TrafficSpec) -> random.Random:
+        return random.Random(stream_seed(run_seed, stream[id(t)]))
 
     # Traffic statements, grouped by the node that runs them, in scenario order.
     sourced: dict[str, list[model.TrafficSpec]] = defaultdict(list)
@@ -830,7 +838,7 @@ def run_simulation(
                                 spec.size,
                                 spec.pattern,
                                 ch,
-                                rng,
+                                rng(spec),
                                 delay_us=spec.delay_ms * 1_000,
                                 batch=spec.batch,
                                 priority=spec.priority,

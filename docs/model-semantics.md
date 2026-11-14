@@ -110,19 +110,22 @@ An end station sends everything over its single link, in the egress queue order 
 
 - **Start time.** Every source starts at `t = delay_ms`.
 - **Interval.** `T = 1 / rate` is the mean interval.
-- **Random draws.** Random patterns and IMIX sizes draw from one generator seeded with `run.seed`, in the order the simulation needs the numbers (see [Open issues](#open-issues)).
+- **Random draws.** Each traffic statement has its own random stream. Random patterns and IMIX sizes of a flow draw only from the flow's stream, in the order the flow needs the numbers. Adding, removing or reordering another statement does not change them.
+    - **Source id:** `"<kind>:<from>-><to>#<k>"`, where `<from>` is the node that runs the statement, `<to>` the node it is aimed at (a route's topic), and `k` the number of earlier statements of the same kind between the same two ends. Example: the second flow from `plc` to `host` is `flow:plc->host#1`.
+    - **Stream seed:** the first 8 bytes of SHA-256 of `"<run.seed>:<source id>"` (UTF-8), read as a big-endian unsigned integer. For seed 42 and `flow:a->b#0` it is `5297917812165586412`.
+    - **Generator:** each engine seeds its own generator from the stream seed. SimPy uses `random.Random`. Engines are not required to produce the same draws, only the same distributions (ADR-0007, cross-engine equivalence).
 
 | Source | Frames |
 |---|---|
 | `Flow`, `constant` | one frame at `delay + T`, `delay + 2T`, … |
 | `Flow`, `poisson` | one frame after each exponential gap with mean `T`, the first gap starting at `delay` |
 | `Flow`, `batch` | groups at Poisson instants with mean gap `T · E[X]`. Each group is X frames queued at the same instant, X drawn per group from the batch distribution. The long-run rate is `rate`. |
-| `Flow`, `bursty` | repeated ON/OFF cycles: L = max(1, ⌊Pareto(1.5)⌋) frames spaced `T/4` (the first one `T/4` after the cycle starts), then a silence of `T · L · U(0.5, 2)`. The long-run rate is `rate / 1.5`, see [Open issues](#open-issues). |
+| `Flow`, `bursty` | repeated ON/OFF cycles: L = max(1, ⌊Pareto(1.5)⌋) frames spaced `T/4` (the first one `T/4` after the cycle starts), then a silence of `T · L · U(0.3, 1.2)`. A cycle lasts `T · L` on average, so the long-run rate is `rate`. |
 | `Publish` | one PUBLISH at `delay + T`, `delay + 2T`, … |
 | `Poll` | one request at `delay + T`, `delay + 2T`, … |
 | `ProfinetAR` | the controller sends an output frame, and the device an input frame, at `delay`, `delay + cycle`, `delay + 2·cycle`, … Note that the first frame goes out at `delay`, not one cycle later. |
 
-*Tests: `test_constant_flow_first_frame_after_one_interval`, `test_profinet_first_frame_at_delay`, `test_bursty_long_run_rate`.*
+*Tests: `test_constant_flow_first_frame_after_one_interval`, `test_profinet_first_frame_at_delay`, `test_bursty_long_run_rate`, `test_source_ids`, `test_stream_seed_is_a_sha256_prefix`, `test_adding_a_source_does_not_change_the_others`, `test_run_seed_selects_the_draws`.*
 
 ## 7. PROFINET consumer
 
@@ -184,8 +187,8 @@ Every disagreement between this page and the intended model is listed here, with
 
 | # | Issue | Current behaviour (reference engine) | Status |
 |---|---|---|---|
-| 1 | `bursty` does not keep `rate` as its long-run average | Mean ON/OFF cycle per frame is `1.5 T`, so the long-run rate is `rate / 1.5`. All other patterns keep `rate`. | to be fixed in ADR-0007 step 5 |
+| 1 | `bursty` does not keep `rate` as its long-run average | The mean ON/OFF cycle per frame was `1.5 T`, so the long-run rate was `rate / 1.5`. | resolved in ADR-0007 step 5: the silence is `T · L · U(0.3, 1.2)` |
 | 2 | `mode="cut-through"` is not modelled | Accepted and ignored. Every switch is store-and-forward. | accepted: ignored until needed |
 | 3 | Hubs were not a shared medium | They had per-port queues with strict priority, and collisions were approximated as simultaneous arrivals, so `collision_rate` almost never counted any. | resolved: hubs and `collision_rate` removed. A shared segment would come back as a new node kind with half-duplex links and CSMA/CD. |
 | 4 | Wire overhead is not counted | Preamble, SFD, FCS and inter-frame gap (24 B per frame) are not on the wire, so the model's link capacity is higher than real by 24 B per frame: about 2 % for 1 518 B frames and 40 % for 60 B frames. | known simplification |
-| 5 | One random stream for all sources | Adding or reordering one source changes the draws of all others. | to be fixed in ADR-0007 step 5 |
+| 5 | One random stream for all sources | Adding or reordering one source changed the draws of all others. | resolved in ADR-0007 step 5: one stream per traffic statement |

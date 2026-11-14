@@ -128,7 +128,7 @@ The SimPy engine remains the **reference implementation**. Where the code and th
 
 ### Random number streams
 
-- Each traffic source gets its **own random stream**, derived from `(run seed, stable source id)`. The source id is the source node name, the destination and the statement's index in that source's traffic list.
+- Each traffic source gets its **own random stream**, derived from `(run seed, stable source id)`. The source id is the statement's kind, the source node name, the destination and the statement's index among the statements of that kind between the same two ends (`flow:plc->host#1`; exact form in the [Model Semantics](../model-semantics.md#6-traffic-sources)). Counting only those keeps the id stable when other statements are added to the same source.
 - Adding, removing or reordering one source no longer changes the draws of the others.
 - The **seed derivation** is specified in the semantics contract and is the same for every engine: the stream seed is the first 8 bytes of SHA-256 of `"<run seed>:<source id>"`. Each engine seeds **its own** generator from it — SimPy uses `random.Random`; Rust uses a native generator (e.g. PCG64). No new Python dependency is needed.
 - **Cross-engine equivalence has two levels:**
