@@ -174,7 +174,10 @@ base = net.to_scenario(duration=10_000)
 sweep = [dataclasses.replace(base, traffic=...) for ...]
 batch = run_many(sweep, runs=10, workers=8)
 batch.results(3)                       # the runs of the fourth scenario
+batch.report()                         # per metric: mean ± CI across runs, then failures
 ```
+
+A `.smol` file runs many times with `simulate ... runs=30` or `smolpy run plant.smol --runs 30 --workers 8 -o runs.csv`. See [SMOL Language Reference — simulate](language-reference.md#simulate-run-the-simulation).
 
 ### Statistics across runs
 

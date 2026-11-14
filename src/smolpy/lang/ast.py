@@ -122,6 +122,7 @@ class SimulateDecl:
     mode: str
     line: int
     seed: int = 42
+    runs: int = 1
 
 
 Decl = (

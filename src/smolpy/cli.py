@@ -6,12 +6,16 @@ import runpy
 import sys
 import time
 import traceback
+from typing import TYPE_CHECKING, NoReturn
 
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 from rich.theme import Theme
+
+if TYPE_CHECKING:
+    from smolpy.model import Scenario
 
 _THEME = Theme(
     {
@@ -43,7 +47,20 @@ def _print_banner() -> None:
     console.print()
 
 
-def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[str]) -> None:
+def _error(message: str) -> NoReturn:
+    console.print()
+    console.print(Panel(message, title="[error]Error[/]", border_style="red", padding=(1, 2)))
+    sys.exit(1)
+
+
+def _cmd_run(
+    script: str,
+    output: str | None,
+    text_mode: bool,
+    extra_args: list[str],
+    runs: int | None = None,
+    workers: int | None = None,
+) -> None:
     _print_banner()
     console.print(f"  [info]Script[/]   [dim]{script}[/]")
     console.print()
@@ -54,6 +71,24 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
         os.environ["SMOLPY_TEXT_MODE"] = "1"
 
     is_smol = pathlib.Path(script).suffix == ".smol"
+    if not is_smol and (runs is not None or workers is not None):
+        _error("--runs and --workers apply to .smol files; in a Python script use run_many()")
+
+    if is_smol:
+        from smolpy.lang import SMOLSemanticError, SMOLSyntaxError, load_smol
+
+        try:
+            smol = load_smol(pathlib.Path(script))
+        except (SMOLSyntaxError, SMOLSemanticError) as exc:
+            _error(str(exc))
+        n_runs = runs if runs is not None else smol.runs
+        if n_runs > 1:
+            if text_mode:
+                _error(f"--text shows a single run; it cannot be used with {n_runs} runs")
+            if smol.mode != "headless":
+                _error(f"{n_runs} runs need mode=headless; the file sets mode={smol.mode}")
+            _run_batch(smol.scenario, n_runs, workers, output)
+            return
 
     start = time.perf_counter()
     result = None
@@ -75,16 +110,7 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
                     result = interpret_and_run(pathlib.Path(script))
                 except (SMOLSyntaxError, SMOLSemanticError) as exc:
                     progress.stop()
-                    console.print()
-                    console.print(
-                        Panel(
-                            str(exc),
-                            title="[error]Error[/]",
-                            border_style="red",
-                            padding=(1, 2),
-                        )
-                    )
-                    sys.exit(1)
+                    _error(str(exc))
             else:
                 sys.argv = [script] + extra_args
                 namespace = runpy.run_path(script, run_name="__main__")
@@ -92,18 +118,48 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
             progress.update(task, description="Simulation complete")
         except Exception:
             progress.stop()
-            console.print()
-            console.print(
-                Panel(
-                    traceback.format_exc(),
-                    title="[error]Error[/]",
-                    border_style="red",
-                    padding=(1, 2),
-                )
-            )
-            sys.exit(1)
+            _error(traceback.format_exc())
 
-    elapsed = time.perf_counter() - start
+    _finished(time.perf_counter() - start)
+
+    if output and result is not None:
+        result.export(output)
+        console.print(f"  Results exported → {output}")
+        console.print()
+
+
+def _run_batch(scenario: Scenario, runs: int, workers: int | None, output: str | None) -> None:
+    """Run *scenario* *runs* times (ADR-0009), print the summary across runs,
+    export every run, and exit with status 1 if any run failed."""
+    from smolpy.batch import run_many
+
+    start = time.perf_counter()
+    with Progress(
+        SpinnerColumn(spinner_name="dots", style="cyan"),
+        TextColumn("[bold white]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task(f"Running {runs} simulations…", total=None)
+        try:
+            batch = run_many(scenario, runs, workers=workers)
+        except Exception:
+            progress.stop()
+            _error(traceback.format_exc())
+        progress.update(task, description=f"{runs} simulations complete")
+
+    _finished(time.perf_counter() - start)
+    batch.report()
+    if output:
+        batch.export(output)
+        console.print(f"  Runs exported → {output}")
+        console.print()
+    if batch.failures:
+        sys.exit(1)
+
+
+def _finished(elapsed: float) -> None:
     console.print()
     console.print(
         Panel(
@@ -113,11 +169,6 @@ def _cmd_run(script: str, output: str | None, text_mode: bool, extra_args: list[
         )
     )
     console.print()
-
-    if output and result is not None:
-        result.export(output)
-        console.print(f"  Results exported → {output}")
-        console.print()
 
 
 def _cmd_demo() -> None:
@@ -148,6 +199,47 @@ def _cmd_demo() -> None:
     result.report()
 
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {text!r}")
+    return value
+
+
+def _add_run_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        metavar="FILE",
+        help="Write metric time-series to FILE (.csv or .json); every run of a batch",
+    )
+    parser.add_argument(
+        "--text",
+        "-t",
+        action="store_true",
+        default=False,
+        help="Force text-mode dashboard even if the script uses live=True",
+    )
+    parser.add_argument(
+        "--runs",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="Run a .smol file N times with seeds seed, seed+1, ... (overrides runs=)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="Worker processes for --runs (default: one per CPU)",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="smolpy",
@@ -161,20 +253,7 @@ def main() -> None:
         description="Load and run a Python script or .smol file that uses the SMOLPy DSL.",
     )
     run_cmd.add_argument("script", help="Path to the .py script or .smol file to run")
-    run_cmd.add_argument(
-        "--output",
-        "-o",
-        default=None,
-        metavar="FILE",
-        help="Write metric time-series to FILE (.csv or .json)",
-    )
-    run_cmd.add_argument(
-        "--text",
-        "-t",
-        action="store_true",
-        default=False,
-        help="Force text-mode dashboard even if the script uses live=True",
-    )
+    _add_run_options(run_cmd)
     run_cmd.add_argument(
         "args",
         nargs=argparse.REMAINDER,
@@ -190,9 +269,23 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "run":
-        # REMAINDER captures flags that appear after the script name, so check both
-        text = args.text or "--text" in args.args or "-t" in args.args
-        extra = [a for a in args.args if a not in ("--text", "-t")]
-        _cmd_run(args.script, args.output, text, extra)
+        # REMAINDER captures the options written after the script name.
+        if pathlib.Path(args.script).suffix == ".smol":
+            # A .smol file takes no arguments of its own: every one is an option.
+            after = argparse.ArgumentParser(prog=f"smolpy run {args.script}")
+            _add_run_options(after)
+            late = after.parse_args(args.args)
+            _cmd_run(
+                args.script,
+                late.output or args.output,
+                args.text or late.text,
+                [],
+                late.runs if late.runs is not None else args.runs,
+                late.workers if late.workers is not None else args.workers,
+            )
+        else:
+            text = args.text or "--text" in args.args or "-t" in args.args
+            extra = [a for a in args.args if a not in ("--text", "-t")]
+            _cmd_run(args.script, args.output, text, extra, args.runs, args.workers)
     elif args.command == "demo":
         _cmd_demo()

@@ -265,8 +265,11 @@ batch = run_many(net, runs=30, duration=10_000)   # seeds 42 … 71, on all CPU 
 batch.raise_on_failure()
 results = batch.results()                         # one SimulationResult per run
 summary = batch.summary()                         # per window: mean, std, 95 % CI
+batch.report()                                    # per metric: mean ± CI across runs
 batch.export("runs.csv")                          # every run, with its seed
 ```
+
+A `.smol` file does the same with `simulate ... runs=30`, or with `smolpy run plant.smol --runs 30 --workers 8 -o runs.csv`.
 
 Replications and parameter sweeps run in parallel worker processes; see the [DSL Reference](https://jwszolek.github.io/SMOLPy/dsl-reference/#many-runs).
 

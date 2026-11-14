@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
-from smolpy.core.network import Network, RunStats, SimulationResult
+from smolpy.core.network import Network, RunStats, SimulationResult, metric_unit
 from smolpy.model import RunConfig, Scenario
 from smolpy.stats import MeanCI, mean_ci
 
@@ -128,6 +128,49 @@ class BatchResult:
             values = [v for _, v in r.metrics.get(metric, [])]
             out.append(float(fn(values)) if values else math.nan)
         return out
+
+    def report(self, level: float = 0.95) -> None:
+        """Print, per scenario and metric, the mean across runs of each run's
+        mean, with its confidence interval and the lowest and highest run
+        mean; then every failed run with its seed and error.
+
+        ``runs`` is the number of runs with samples of the metric.
+        """
+        pct = f"{level * 100:g}%"
+        for i, sc in enumerate(self.scenarios):
+            results = self.results(i)
+            ok = len(results)
+            total = sum(1 for r in self.runs if r.scenario == i)
+            title = f"{sc.name}: " if len(self.scenarios) > 1 else ""
+            print(f"\n{title}{ok} of {total} runs succeeded, {pct} confidence intervals")
+            keys = sorted({key for r in results for key in r.metrics})
+            if not keys:
+                print("No metrics collected.")
+                continue
+            col = max(len(k) for k in keys) + 2
+            header = (
+                f"{'Metric':<{col}}  {'runs':>5}  {'mean':>10}  {'± CI':>10}"
+                f"      {'min run':>10}  {'max run':>10}"
+            )
+            print(header)
+            print("-" * len(header))
+            for key in keys:
+                means = [v for v in self.scalar(key, "mean", i) if not math.isnan(v)]
+                if not means:
+                    continue
+                ci = mean_ci(means, level)
+                unit = metric_unit(key)
+                half = "n/a" if math.isnan(ci.half_width) else f"{ci.half_width:.3f}"
+                print(
+                    f"{key:<{col}}  {ci.n:>5}  {ci.mean:>10.3f}  {half:>10}{unit:>6}"
+                    f"  {min(means):>10.3f}  {max(means):>10.3f}"
+                )
+        if self.failures:
+            print(f"\n{len(self.failures)} of {len(self.runs)} runs failed:")
+            for r in self.failures:
+                last = (r.error or "").strip().splitlines()[-1:] or [""]
+                print(f"  scenario {r.scenario} run {r.index} (seed {r.seed}): {last[0]}")
+        print()
 
     def export(self, path: str | os.PathLike[str], format: str | None = None) -> None:
         """Write every run to *path*, the format inferred from the extension

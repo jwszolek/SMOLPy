@@ -312,3 +312,37 @@ def test_export_csv_and_json(tmp_path, monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="unknown format 'xlsx', expected 'csv' or 'json'"):
         batch.export(tmp_path / "runs.xlsx")
+
+
+# --- step 3: report ---
+
+
+def test_report(capsys, monkeypatch) -> None:
+    from smolpy.sim import engine
+    from smolpy.stats import mean_ci
+
+    real = engine.run_simulation
+
+    def flaky(scenario, **kwargs):
+        if scenario.run.seed == 44:
+            raise RuntimeError("boom")
+        return real(scenario, **kwargs)
+
+    monkeypatch.setattr(engine, "run_simulation", flaky)
+    batch = run_many(_net(), runs=3, duration=50, workers=1)
+    batch.report()
+    out = capsys.readouterr().out
+    assert "2 of 3 runs succeeded, 95% confidence intervals" in out
+    ci = mean_ci(batch.scalar("bytes_received:b"))
+    (row,) = [line for line in out.splitlines() if line.startswith("bytes_received:b")]
+    assert row.split()[1:4] == ["2", f"{ci.mean:.3f}", f"{ci.half_width:.3f}"]
+    assert "1 of 3 runs failed:" in out
+    assert "scenario 0 run 2 (seed 44): RuntimeError: boom" in out
+
+
+def test_report_of_one_run_has_no_interval(capsys) -> None:
+    run_many(_net(), runs=1, duration=50, workers=1).report(level=0.9)
+    out = capsys.readouterr().out
+    assert "1 of 1 runs succeeded, 90% confidence intervals" in out
+    (row,) = [line for line in out.splitlines() if line.startswith("bytes_received:b")]
+    assert row.split()[3] == "n/a"

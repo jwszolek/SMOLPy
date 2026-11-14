@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import pytest
 
-from smolpy.lang import SMOLSemanticError, SMOLSyntaxError, interpret_and_run
+from smolpy.lang import (
+    SMOLSemanticError,
+    SMOLSyntaxError,
+    interpret_and_run,
+    interpret_to_scenario,
+    load_smol,
+)
 from smolpy.lang.ast import (
     AdapterDecl,
     FlowDecl,
@@ -164,6 +170,39 @@ class TestSimulateSeed:
         default = self._metrics(tmp_path, "")
         assert default == self._metrics(tmp_path, " seed=42")
         assert default != self._metrics(tmp_path, " seed=1")
+
+
+class TestSimulateRuns:
+    """``runs=`` (ADR-0009, step 3); the runs themselves are tested in test_cli."""
+
+    _TEMPLATE = TestSimulateSeed._TEMPLATE
+
+    def test_runs_is_parsed_and_defaults_to_1(self) -> None:
+        assert parse_smol(self._TEMPLATE % " runs=30", "t.smol").declarations[-1].runs == 30
+        assert parse_smol(self._TEMPLATE % "", "t.smol").declarations[-1].runs == 1
+
+    @pytest.mark.parametrize("value", ["0", "2.5", "many"])
+    def test_runs_must_be_a_positive_integer(self, value: str) -> None:
+        with pytest.raises(SMOLSemanticError, match="t.smol:10: runs must be a positive integer"):
+            parse_smol(self._TEMPLATE % f" runs={value}", "t.smol")
+
+    def test_runs_need_headless_mode(self, tmp_path) -> None:
+        f = tmp_path / "t.smol"
+        f.write_text((self._TEMPLATE % " runs=3").replace("mode=headless", "mode=text"))
+        with pytest.raises(SMOLSemanticError, match="runs=3 needs mode=headless: mode=text"):
+            load_smol(f)
+
+    def test_unknown_simulate_argument_is_rejected(self) -> None:
+        with pytest.raises(SMOLSyntaxError, match="'simulate' has no argument 'run'; expected"):
+            parse_smol(self._TEMPLATE % " run=30", "t.smol")
+
+    def test_load_smol(self, tmp_path) -> None:
+        f = tmp_path / "t.smol"
+        f.write_text(self._TEMPLATE % " seed=7 runs=4")
+        smol = load_smol(f)
+        assert (smol.runs, smol.mode) == (4, "headless")
+        assert smol.scenario.run is not None and smol.scenario.run.seed == 7
+        assert smol.scenario == interpret_to_scenario(f)
 
 
 class TestFlowBatch:

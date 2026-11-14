@@ -23,7 +23,9 @@ from smolpy.lang.ast import (
     SimulateDecl,
     SwitchDecl,
 )
-from smolpy.lang.errors import SMOLSyntaxError
+from smolpy.lang.errors import SMOLSemanticError, SMOLSyntaxError
+
+_SIMULATE_ARGS = ("duration", "mode", "seed", "runs")
 
 _GRAMMAR = resources.files(__package__).joinpath("grammar.lark").read_text(encoding="utf-8")
 
@@ -224,6 +226,19 @@ class _SmolTransformer(Transformer):
 
     def simulate_decl(self, meta: Any, children: list) -> SimulateDecl:
         kw = dict(children)
+        # A misspelt argument would otherwise be dropped, e.g. run=30 giving one run.
+        unknown = sorted(set(kw) - set(_SIMULATE_ARGS))
+        if unknown:
+            raise SMOLSyntaxError(
+                self.file,
+                meta.line,
+                f"'simulate' has no argument '{unknown[0]}'; expected {', '.join(_SIMULATE_ARGS)}",
+            )
+        runs = kw.get("runs", 1)
+        if not isinstance(runs, int) or runs < 1:
+            raise SMOLSemanticError(
+                self.file, meta.line, f"runs must be a positive integer, got {runs!r}"
+            )
         return SimulateDecl(
             duration=float(
                 _require(kw, "duration", file=self.file, line=meta.line, stmt="simulate")
@@ -231,6 +246,7 @@ class _SmolTransformer(Transformer):
             mode=str(kw.get("mode", "headless")),
             line=meta.line,
             seed=int(float(kw.get("seed", 42))),
+            runs=runs,
         )
 
     def statement(self, meta: Any, children: list) -> Decl:
@@ -253,6 +269,6 @@ def parse_smol(text: str, file: str) -> NetworkDecl:
     try:
         return _SmolTransformer(file).transform(tree)
     except VisitError as exc:
-        if isinstance(exc.orig_exc, SMOLSyntaxError):
+        if isinstance(exc.orig_exc, (SMOLSyntaxError, SMOLSemanticError)):
             raise exc.orig_exc from exc
         raise
