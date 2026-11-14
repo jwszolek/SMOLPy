@@ -162,6 +162,7 @@ result.export("out.csv", format="csv")   # explicit format override
 
 ```python
 from smolpy import run_many
+from smolpy.stats import mean_ci
 
 # Replications: the same network with seeds 42, 43, ... 71
 batch = run_many(net, runs=30, duration=10_000)
@@ -171,13 +172,33 @@ for result in batch.results():         # one SimulationResult per successful run
 
 # Sweep: a list of scenarios, each run with the same seeds
 base = net.to_scenario(duration=10_000)
-sweep = [dataclasses.replace(base, traffic=...) for ...]
+rates = [1_000, 2_000, 4_000, 8_000]
+sweep = [base.with_flow_rate(r, source="bulk") for r in rates]
 batch = run_many(sweep, runs=10, workers=8)
 batch.results(3)                       # the runs of the fourth scenario
 batch.report()                         # per metric: mean ± CI across runs, then failures
+for i, rate in enumerate(rates):
+    print(rate, mean_ci(batch.scalar("pn_jitter:plc", "max", scenario=i)))
 ```
 
 A `.smol` file runs many times with `simulate ... runs=30` or `smolpy run plant.smol --runs 30 --workers 8 -o runs.csv`. See [SMOL Language Reference — simulate](language-reference.md#simulate-run-the-simulation).
+
+### Sweep helpers
+
+Each helper returns a changed copy of the scenario, so one base gives every point of a sweep:
+
+| Helper | Changes |
+|---|---|
+| `with_flow_rate(rate, source=, destination=)` | rate of every flow between the given ends; a missing end matches any node |
+| `with_cycle(cycle_ms, controller=, device=)` | cycle time of every PROFINET AR between the given ends |
+| `with_link_speed(speed_mbps, between=(a, b))` | speed of the link between `a` and `b`, in either order, or of every link |
+| `with_run(duration_ms=, seed=)` | run duration and/or seed |
+| `with_traffic(kind, where, **changes)` | any field of the traffic statements of `kind` whose fields equal `where`, e.g. `with_traffic("poll", {"slave": "meter"}, rate=20)` |
+
+- **Nothing matched is an error.** A selection that matches nothing raises `ValueError` and lists what there is, so a misspelt name never gives a sweep in which nothing varies. Unknown kinds and field names raise too.
+- **Values are checked when the batch starts.** `run_many` validates every scenario before running any, so `with_flow_rate(-5)` raises `ScenarioError` before anything runs.
+- **Random draws are shared.** A traffic source's random stream depends only on its kind and its ends ([Model Semantics §6](model-semantics.md#6-traffic-sources)). Every point of a sweep therefore starts from the same draws, which makes the differences between points less noisy.
+- **Several scenarios in a report.** `report()` prints each scenario as `scenario i (name)`. The helpers keep the name, so use `dataclasses.replace(sc, name=...)` to tell the points apart.
 
 ### Statistics across runs
 
