@@ -9,20 +9,24 @@ never imported again, so it needs no ``if __name__ == "__main__"`` guard.
 
 from __future__ import annotations
 
+import csv
 import dataclasses
+import json
+import math
 import os
 import pickle
 import queue
 import subprocess
 import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
 from smolpy.core.network import Network, RunStats, SimulationResult
 from smolpy.model import RunConfig, Scenario
+from smolpy.stats import MeanCI, mean_ci
 
 BACKENDS = ("simpy",)
 
@@ -59,6 +63,10 @@ class BatchResult:
 
     def results(self, scenario: int = 0) -> list[SimulationResult]:
         """The results of the successful runs of one scenario, in run order."""
+        if not 0 <= scenario < len(self.scenarios):
+            raise IndexError(
+                f"scenario {scenario} out of range: the batch has {len(self.scenarios)}"
+            )
         return [r.result for r in self.runs if r.scenario == scenario and r.result is not None]
 
     def raise_on_failure(self) -> None:
@@ -69,6 +77,113 @@ class BatchResult:
                 for r in self.failures
             ]
             raise RuntimeError(f"{len(lines)} of {len(self.runs)} runs failed\n" + "\n".join(lines))
+
+    def summary(
+        self, scenario: int = 0, level: float = 0.95
+    ) -> dict[str, list[tuple[float, MeanCI]]]:
+        """Per metric key and sample time, the mean across the successful runs
+        of *scenario*, with its standard deviation and confidence interval.
+
+        Same shape as ``SimulationResult.metrics``. A window metric has no
+        sample for a window without frames, so ``n`` is the number of runs
+        that do have the sample, which can be fewer than the runs.
+        """
+        by_time: dict[str, dict[float, list[float]]] = {}
+        for result in self.results(scenario):
+            for key, samples in result.metrics.items():
+                windows = by_time.setdefault(key, {})
+                for t, v in samples:
+                    windows.setdefault(t, []).append(v)
+        return {
+            key: [(t, mean_ci(vs, level)) for t, vs in sorted(windows.items())]
+            for key, windows in sorted(by_time.items())
+        }
+
+    def scalar(
+        self,
+        metric: str,
+        reduce: str | Callable[[list[float]], float] = "mean",
+        scenario: int = 0,
+    ) -> list[float]:
+        """One number per successful run of *scenario*: its *metric* samples
+        reduced by ``"mean"``, ``"min"``, ``"max"``, ``"last"``, ``"sum"`` or
+        a function. A run without samples gives NaN (a reducing function is
+        then not called). ``mean_ci(batch.scalar(...))`` gives the interval.
+        """
+        if isinstance(reduce, str):
+            if reduce not in _REDUCERS:
+                raise ValueError(
+                    f"unknown reduce {reduce!r}, expected one of {', '.join(_REDUCERS)}"
+                    " or a function"
+                )
+            fn = _REDUCERS[reduce]
+        else:
+            fn = reduce
+        results = self.results(scenario)
+        known = sorted({key for r in results for key in r.metrics})
+        if results and metric not in known:
+            raise KeyError(f"no metric {metric!r} in the runs; observed: {', '.join(known)}")
+        out = []
+        for r in results:
+            values = [v for _, v in r.metrics.get(metric, [])]
+            out.append(float(fn(values)) if values else math.nan)
+        return out
+
+    def export(self, path: str | os.PathLike[str], format: str | None = None) -> None:
+        """Write every run to *path*, the format inferred from the extension
+        unless *format* is given.
+
+        - ``"csv"``: long format, one row per sample, with columns
+          ``scenario, run, seed, time_ms, metric, value, error``. A failed
+          run is one row with only its ``error`` (the last traceback line).
+        - ``"json"``: ``{"scenarios": [names], "runs": [{scenario, run, seed,
+          error, metrics}]}`` with the full traceback of failed runs.
+        """
+        p = Path(path)
+        fmt = (format or p.suffix.lstrip(".")).lower()
+        if fmt == "csv":
+            with open(p, "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(["scenario", "run", "seed", "time_ms", "metric", "value", "error"])
+                for r in self.runs:
+                    if r.result is None:
+                        last = (r.error or "").strip().splitlines()[-1:] or [""]
+                        w.writerow([r.scenario, r.index, r.seed, "", "", "", last[0]])
+                        continue
+                    for key in sorted(r.result.metrics):
+                        for t, v in r.result.metrics[key]:
+                            w.writerow([r.scenario, r.index, r.seed, repr(t), key, repr(v), ""])
+        elif fmt == "json":
+            payload = {
+                "scenarios": [sc.name for sc in self.scenarios],
+                "runs": [
+                    {
+                        "scenario": r.scenario,
+                        "run": r.index,
+                        "seed": r.seed,
+                        "error": r.error,
+                        "metrics": None if r.result is None else r.result.metrics,
+                    }
+                    for r in self.runs
+                ],
+            }
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=1)
+        else:
+            raise ValueError(f"unknown format {fmt!r}, expected 'csv' or 'json'")
+
+
+def _last(values: list[float]) -> float:
+    return values[-1]
+
+
+_REDUCERS: dict[str, Callable[[list[float]], float]] = {
+    "mean": lambda vs: math.fsum(vs) / len(vs),
+    "min": min,
+    "max": max,
+    "last": _last,
+    "sum": math.fsum,
+}
 
 
 def run_many(
