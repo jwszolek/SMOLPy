@@ -57,6 +57,8 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - `Network.simulate()` and `smolpy run` both go through it.
 - Benchmark results show no regression against Phase 1.
 
+**Status:** step 1 done. `Network.to_scenario()` and `interpret_to_scenario()` produce the IR, and it round-trips through JSON for every example and B1–B4. The engine still reads `Network`.
+
 ## Phase 3: many independent simulations ([ADR-0009](adr/0009-batch-execution-and-cross-backend-validation.md))
 
 - Replications and parameter sweeps run in parallel.

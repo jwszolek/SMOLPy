@@ -17,6 +17,7 @@ from smolpy.profinet.device import ProfinetDevice
 
 if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
+    from smolpy.model import Scenario
 
 # Mirrors the observe() dispatch chain in sim/engine.py — the actual runtime
 # behaviour, not just the MetricName type (which also lists "frame_loss",
@@ -67,6 +68,11 @@ class _Interpreter:
         return node
 
     def build_and_run(self, decl: smol_ast.NetworkDecl) -> SimulationResult:
+        net, simulate_decl = self.build(decl)
+        return self._simulate(net, simulate_decl)
+
+    def build(self, decl: smol_ast.NetworkDecl) -> tuple[Network, smol_ast.SimulateDecl]:
+        """Build the network a .smol file describes, without running it."""
         net = Network(decl.name)
         simulate_decl: smol_ast.SimulateDecl | None = None
 
@@ -159,8 +165,8 @@ class _Interpreter:
             raise SMOLSemanticError(
                 self.file, decl.line, "network block must include a 'simulate' statement"
             )
-
-        return self._simulate(net, simulate_decl)
+        self._check_mode(simulate_decl)
+        return net, simulate_decl
 
     def _observe(self, net: Network, d: smol_ast.ObserveDecl) -> None:
         if d.metric not in _METRIC_NODE_TYPES:
@@ -171,13 +177,15 @@ class _Interpreter:
         target = self._resolve(net, d.target, d.line, expect=expect)
         net.observe(d.metric, on=target, every=d.every)  # type: ignore[arg-type]
 
-    def _simulate(self, net: Network, d: smol_ast.SimulateDecl) -> SimulationResult:
+    def _check_mode(self, d: smol_ast.SimulateDecl) -> None:
         if d.mode not in _SIMULATE_MODES:
             raise SMOLSemanticError(
                 self.file,
                 d.line,
                 f"invalid simulate mode '{d.mode}' — expected one of {_SIMULATE_MODES}",
             )
+
+    def _simulate(self, net: Network, d: smol_ast.SimulateDecl) -> SimulationResult:
         return net.simulate(
             duration=d.duration,
             live=(d.mode == "live"),
@@ -192,3 +200,15 @@ def interpret_and_run(path: Path) -> SimulationResult:
     text = path.read_text(encoding="utf-8")
     network_decl = parse_smol(text, file)
     return _Interpreter(file).build_and_run(network_decl)
+
+
+def interpret_to_scenario(path: Path) -> Scenario:
+    """Parse a .smol file into its Scenario IR (ADR-0007) without running it.
+
+    The run configuration comes from the file's ``simulate`` statement; its
+    display mode is not part of the scenario.
+    """
+    file = str(path)
+    network_decl = parse_smol(path.read_text(encoding="utf-8"), file)
+    net, simulate_decl = _Interpreter(file).build(network_decl)
+    return net.to_scenario(duration=simulate_decl.duration, seed=simulate_decl.seed)

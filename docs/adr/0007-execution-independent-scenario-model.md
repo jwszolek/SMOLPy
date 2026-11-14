@@ -107,6 +107,7 @@ Python API ─┐
     - A new **optional** field does not bump the version.
     - Any change in meaning does bump it.
     - Backends reject versions they do not know.
+    - **Nothing is ignored silently.** Reading rejects unknown fields and kinds as well as unknown versions. A reader fills in defaults for optional fields that are absent, so older documents stay readable. A document that uses a field the reader does not know is rejected, rather than run without it.
 
 ### Semantics contract
 

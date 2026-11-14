@@ -155,3 +155,12 @@ result.export("out.csv", format="csv")   # explicit format override
 ```
 
 **Text mode** (`text=True`) displays a live updating table in the terminal — no display server or GUI toolkit required. Ideal for headless servers, SSH sessions, and CI environments.
+
+## Scenario IR
+
+`net.to_scenario()` returns the network as a `smolpy.model.Scenario`, a declarative description that no engine depends on ([ADR-0007](adr/0007-execution-independent-scenario-model.md)). It can be saved as versioned JSON and archived next to results. See [Scenario Model](scenario-model.md).
+
+```python
+scenario = net.to_scenario(duration=30_000, seed=7)   # run section is optional
+Path("scenario.json").write_text(scenario.to_json())
+```
