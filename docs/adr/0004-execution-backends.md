@@ -104,6 +104,8 @@ smolpy backends                             # list backends and their capabiliti
 
 **Seed.** The `simulate` statement's `seed` maps to ns-3's RNG seed/run configuration, so seeded runs are reproducible on both backends.
 
+**Time.** *Added by the ADR-0007 revision of 2026-11-14.* The generator keeps ns-3's `Time` resolution at 1 ns and writes every time as integer nanoseconds, rounded by the rules of [Model Semantics §1](../model-semantics.md#1-time-and-units): delays, cycles, sampling instants and the end of the run. So ns-3 and the other engines share one clock. Timings that ns-3's own device and TCP/IP models compute are ns-3's, which is why ns-3 is compared under ADR-0009's high-fidelity rules.
+
 **Mapping SMOL → ns-3**
 
 | SMOL | ns-3 |
