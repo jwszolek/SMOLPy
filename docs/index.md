@@ -13,7 +13,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 | **Modbus TCP** | TCP/IP | Request / response polling (Read Holding Registers) | `modbus_latency` | [Modbus TCP](modbus.md) |
 | **PROFINET RT** | Layer 2, 802.1Q priority 6 | Cyclic producer / consumer exchange with watchdog | `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` | [PROFINET RT](profinet.md) |
 
-Infrastructure: MAC-learning switches with 802.1Q strict-priority egress queues (or plain FIFO with `qos="fifo"`) and shared-medium hubs.
+Infrastructure: MAC-learning switches with 802.1Q strict-priority egress queues (or plain FIFO with `qos="fifo"`).
 
 **Not supported (yet):** PROFINET IRT, PROFIBUS, EtherNet/IP, EtherCAT, OPC UA, Modbus RTU (serial), and Modbus write function codes.
 

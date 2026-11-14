@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 class Node(ABC):
-    """Base class for all network nodes (Adapter, Switch, Hub)."""
+    """Base class for all network nodes (Adapter, Switch, ...)."""
 
     def __init__(self, name: str) -> None:
         self.name = name

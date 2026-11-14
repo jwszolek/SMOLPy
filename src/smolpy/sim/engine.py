@@ -43,7 +43,7 @@ class _Frame:
     size_bytes: int
     created_at_us: float
     retries: int = field(default=0)
-    in_port: int = field(default=-1)  # port index at the receiving switch/hub
+    in_port: int = field(default=-1)  # port index at the receiving switch
     mqtt_topic: str | None = field(default=None)
     mqtt_qos: int = field(default=0)
     modbus_unit_id: int | None = field(default=None)
@@ -544,7 +544,7 @@ def _topology_mac_table(
 ) -> dict[str, int]:
     """Port towards every reachable end station, by breadth-first search.
 
-    Switches and hubs are traversed, end stations are not. The first port to
+    Switches are traversed, end stations are not. The first port to
     reach a station wins: shortest path, ties to the lowest port index.
     """
     table: dict[str, int] = {}
@@ -556,7 +556,7 @@ def _topology_mac_table(
         nxt: list[tuple[int, str]] = []
         for port, name in frontier:
             node = nodes[name]
-            if isinstance(node, (model.SwitchNode, model.HubNode)):
+            if isinstance(node, model.SwitchNode):
                 for _, peer in neighbours[name]:
                     if peer not in seen:
                         seen.add(peer)
@@ -591,24 +591,6 @@ def _switch_forwarder(
         # dst_port == in_port → hairpin, drop silently
 
 
-def _hub_broadcaster(
-    env: simpy.Environment,
-    inbound: simpy.Store,
-    out_channels: dict[int, _LinkChannel],
-    collisions: list[int],
-) -> Generator:
-    """Layer-1 hub: broadcast to all ports except source.
-
-    Collision approximation: if a frame is already queued when a new one
-    arrives, count it as a collision. Full CSMA/CD backoff is deferred.
-    """
-    while True:
-        frame: _Frame = yield inbound.get()
-        if inbound.items:
-            collisions[0] += 1
-        _replicate(frame, out_channels)
-
-
 def _adapter_receiver(
     env: simpy.Environment,
     inbound: simpy.Store,
@@ -619,8 +601,8 @@ def _adapter_receiver(
     while True:
         frame: _Frame = yield inbound.get()
         # A NIC accepts only frames addressed to its own MAC. Frames that reach
-        # it because a switch flooded them (unknown destination) or a hub
-        # repeated them are dropped and do not count towards any metric.
+        # it because a switch flooded them (unknown destination) are dropped
+        # and do not count towards any metric.
         if frame.dst_mac != mac:
             continue
         counters.record(frame, env.now)
@@ -653,21 +635,6 @@ def _queue_depth_sampler(
         yield env.timeout(interval_us)
         depth = sum(len(ch.queue.items) for ch in out_channels.values())
         samples.append((env.now / 1_000, float(depth)))
-
-
-def _collision_rate_sampler(
-    env: simpy.Environment,
-    collisions: list[int],
-    interval_us: float,
-    samples: Samples,
-) -> Generator:
-    last = 0
-    while True:
-        yield env.timeout(interval_us)
-        delta = collisions[0] - last
-        last = collisions[0]
-        rate = delta / (interval_us / 1e6)
-        samples.append((env.now / 1_000, rate))
 
 
 def _utilization_sampler(
@@ -746,10 +713,6 @@ def run_simulation(
         name: _AdapterCounters()
         for name, node in nodes.items()
         if isinstance(node, model.AdapterNode)
-    }
-
-    hub_collisions: dict[str, list[int]] = {
-        name: [0] for name, node in nodes.items() if isinstance(node, model.HubNode)
     }
 
     pn_consumers: dict[str, _PnConsumer] = {
@@ -927,10 +890,6 @@ def run_simulation(
             env.process(
                 _switch_forwarder(env, inbound[name], out_channels[name], static_macs.get(name))
             )
-        elif isinstance(node, model.HubNode):
-            env.process(
-                _hub_broadcaster(env, inbound[name], out_channels[name], hub_collisions[name])
-            )
 
     # Start metric samplers
     # Reuse an externally supplied dict (live mode) or create a fresh one.
@@ -954,10 +913,6 @@ def run_simulation(
             env.process(_window_sampler(env, sinks, _mean, interval_us, samples))
         elif obs.metric == "queue_depth" and isinstance(target, model.SwitchNode):
             env.process(_queue_depth_sampler(env, out_channels[target.name], interval_us, samples))
-        elif obs.metric == "collision_rate" and isinstance(target, model.HubNode):
-            env.process(
-                _collision_rate_sampler(env, hub_collisions[target.name], interval_us, samples)
-            )
         elif obs.metric == "utilization":
             chs = in_channels.get(target.name, [])
             if chs:

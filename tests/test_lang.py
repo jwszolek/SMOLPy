@@ -7,7 +7,6 @@ from smolpy.lang import SMOLSemanticError, SMOLSyntaxError, interpret_and_run
 from smolpy.lang.ast import (
     AdapterDecl,
     FlowDecl,
-    HubDecl,
     LinkDecl,
     ModbusSlaveDecl,
     MqttBrokerDecl,
@@ -25,7 +24,6 @@ network "office-net" {
     adapter      host-A   ip=10.0.0.1
     adapter      server   ip=10.0.0.10
     switch       sw1      ports=8  mode=store-and-forward
-    hub          hub1     ports=4
     mqtt_broker  broker1  ip=10.0.2.1
     modbus_slave sensor1  ip=10.0.3.1  unit_id=1
 
@@ -67,7 +65,6 @@ class TestParsing:
             AdapterDecl,
             AdapterDecl,
             SwitchDecl,
-            HubDecl,
             MqttBrokerDecl,
             ModbusSlaveDecl,
             LinkDecl,
@@ -277,6 +274,16 @@ class TestSemanticErrors:
         }
         """
         with pytest.raises(SMOLSemanticError, match="unknown or unsupported metric"):
+            self._run(tmp_path, source)
+
+    def test_hub_is_not_a_statement(self, tmp_path) -> None:
+        source = """
+        network "t" {
+            hub h1 ports=4
+            simulate duration=1000 mode=headless
+        }
+        """
+        with pytest.raises(SMOLSyntaxError):
             self._run(tmp_path, source)
 
     def test_missing_simulate_statement(self, tmp_path) -> None:

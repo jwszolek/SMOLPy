@@ -27,7 +27,6 @@ _N_CHUNKS = 200  # sim steps for live mode (~8 s wall time)
 _NODE_RGB: dict[str, tuple[int, int, int]] = {
     "Adapter": (72, 140, 230),
     "Switch": (60, 200, 120),
-    "Hub": (230, 155, 60),
     "MQTTBroker": (200, 80, 200),
     "ModbusSlave": (230, 90, 90),
     "ProfinetDevice": (40, 180, 190),
@@ -41,7 +40,6 @@ _UNITS = {
     "throughput": "Mb/s",
     "latency": "µs",
     "frame_loss": "%",
-    "collision_rate": "/s",
     "queue_depth": "frames",
     "utilization": "%",
     "bytes_sent": "MB",
@@ -68,7 +66,7 @@ def _compute_layout(
     inner_r = min(w, h) * 0.16
     outer_r = min(w, h) / 2 - margin
 
-    infra = [n for n in graph.nodes() if node_types.get(n) in ("Switch", "Hub")]
+    infra = [n for n in graph.nodes() if node_types.get(n) == "Switch"]
     leaves = [n for n in graph.nodes() if node_types.get(n) == "Adapter"]
     rest = [n for n in graph.nodes() if n not in infra and n not in leaves]
 
@@ -159,7 +157,6 @@ def _draw_topology(
 _KIND_NAMES = {
     "adapter": "Adapter",
     "switch": "Switch",
-    "hub": "Hub",
     "mqtt_broker": "MQTTBroker",
     "modbus_slave": "ModbusSlave",
     "profinet_device": "ProfinetDevice",
@@ -391,7 +388,7 @@ def _run_dashboard(
 
         if active:
             for name, ntype in node_types.items():
-                if ntype in ("Switch", "Hub"):
+                if ntype == "Switch":
                     active.add(name)
 
         for name in node_types:

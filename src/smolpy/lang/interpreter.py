@@ -101,7 +101,6 @@ class _Interpreter:
         node_decls = (
             smol_ast.AdapterDecl,
             smol_ast.SwitchDecl,
-            smol_ast.HubDecl,
             smol_ast.MqttBrokerDecl,
             smol_ast.ModbusSlaveDecl,
             smol_ast.ProfinetDeviceDecl,
@@ -121,8 +120,6 @@ class _Interpreter:
                         qos=d.qos,  # type: ignore[arg-type]
                         mac_table=d.mac_table,  # type: ignore[arg-type]
                     )
-                elif isinstance(d, smol_ast.HubDecl):
-                    net.hub(d.name, ports=d.ports)
                 elif isinstance(d, smol_ast.MqttBrokerDecl):
                     net.mqtt_broker(d.name, ip=d.ip)
                 elif isinstance(d, smol_ast.ModbusSlaveDecl):

@@ -22,13 +22,6 @@ class SwitchDecl:
 
 
 @dataclass
-class HubDecl:
-    name: str
-    ports: int
-    line: int
-
-
-@dataclass
 class MqttBrokerDecl:
     name: str
     ip: str
@@ -134,7 +127,6 @@ class SimulateDecl:
 Decl = (
     AdapterDecl
     | SwitchDecl
-    | HubDecl
     | MqttBrokerDecl
     | ModbusSlaveDecl
     | ProfinetDeviceDecl

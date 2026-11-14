@@ -71,7 +71,7 @@ Delays must be zero or positive.
 - **Links:**
     - every link references declared nodes;
     - an end station has at most one link;
-    - a switch or hub has no more links than `ports`;
+    - a switch has no more links than `ports`;
     - the topology has no loops, because no spanning tree is modelled.
 - **Traffic:**
     - every node a statement involves has a link;
@@ -91,7 +91,7 @@ A node without links and without traffic is allowed.
 | Field | Contents |
 |---|---|
 | `name` | network name |
-| `nodes` | `AdapterNode`, `SwitchNode`, `HubNode`, `MqttBrokerNode`, `ModbusSlaveNode`, `ProfinetDeviceNode` |
+| `nodes` | `AdapterNode`, `SwitchNode`, `MqttBrokerNode`, `ModbusSlaveNode`, `ProfinetDeviceNode` |
 | `links` | `Link(a, b, speed_mbps, length_m, duplex)` |
 | `traffic` | `Flow`, `Publish`, `Route`, `Poll`, `ProfinetAR` |
 | `observations` | `Observation(metric, target, every_ms)` |
@@ -126,7 +126,7 @@ assert same == scenario
 }
 ```
 
-Each node and traffic entry carries a `kind`: `adapter`, `switch`, `hub`, `mqtt_broker`, `modbus_slave`, `profinet_device`, `flow`, `publish`, `route`, `poll` or `profinet_ar`. A batch size is stored as `{"kind": "fixed" | "geom" | "pareto", "param": …}`.
+Each node and traffic entry carries a `kind`: `adapter`, `switch`, `mqtt_broker`, `modbus_slave`, `profinet_device`, `flow`, `publish`, `route`, `poll` or `profinet_ar`. A batch size is stored as `{"kind": "fixed" | "geom" | "pareto", "param": …}`.
 
 **Reading is strict.** `from_json()` raises `ValueError` for:
 - a different `format`;

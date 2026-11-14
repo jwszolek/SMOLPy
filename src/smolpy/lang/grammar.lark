@@ -5,7 +5,6 @@ start: "network" STRING "{" statement* "}"
 
 statement: adapter_decl
          | switch_decl
-         | hub_decl
          | mqtt_broker_decl
          | modbus_slave_decl
          | profinet_device_decl
@@ -20,7 +19,6 @@ statement: adapter_decl
 
 adapter_decl:      "adapter" WORD arg*
 switch_decl:       "switch" WORD arg*
-hub_decl:          "hub" WORD arg*
 mqtt_broker_decl:  "mqtt_broker" WORD arg*
 modbus_slave_decl: "modbus_slave" WORD arg*
 profinet_device_decl: "profinet_device" WORD arg*

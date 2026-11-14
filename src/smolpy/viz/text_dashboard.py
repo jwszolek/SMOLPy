@@ -27,7 +27,6 @@ _UNITS: dict[str, str] = {
     "bytes_received": "MB",
     "queue_depth": "fr",
     "utilization": "%",
-    "collision_rate": "/s",
     "broker_queue": "msgs",
     "modbus_latency": "µs",
     "pn_latency": "µs",

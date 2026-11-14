@@ -10,7 +10,6 @@ Each node is drawn as a coloured circle:
 |---|---|
 | Blue | Adapter (host / server / NIC) |
 | Green | Switch |
-| Orange | Hub |
 | Purple | MQTTBroker |
 | Coral red | ModbusSlave |
 | Teal | ProfinetDevice |
@@ -21,7 +20,7 @@ Node fill changes dynamically during the simulation:
 |---|---|
 | Dim (faded) | Node idle — no traffic yet |
 | Pulsing bright fill | Node actively **transmitting** (`bytes_sent > 0`) |
-| Solid bright fill | Node forwarding traffic (switch / hub) |
+| Solid bright fill | Node forwarding traffic (switch) |
 | Pulsing amber outer ring | Node actively **receiving** data (`bytes_received > 0`) |
 
 Animated particles flow along every link to show live traffic direction.
