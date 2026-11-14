@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from smolpy.stats import mean_ci, t_cdf, t_quantile
+from smolpy.stats import diff_ci, mean_ci, t_cdf, t_quantile
 
 
 # Reference values: scipy.stats.t.ppf.
@@ -77,3 +77,55 @@ def test_mean_ci_rejects() -> None:
         mean_ci([])
     with pytest.raises(ValueError, match="level must be between 0 and 1"):
         mean_ci([1, 2], level=95)
+
+
+# Reference values: scipy.stats.ttest_ind(a, b, equal_var=False).confidence_interval(level).
+@pytest.mark.parametrize(
+    "a, b, level, df, low, high",
+    [
+        (
+            [1, 2, 3, 4, 5],
+            [2, 4, 6, 8, 10, 12],
+            0.95,
+            6.972255729794934,
+            -7.98346869562883,
+            -0.016531304371169675,
+        ),
+        (
+            [10.1, 9.8, 10.4, 10.0],
+            [9.0, 9.5, 9.2],
+            0.99,
+            4.4360762804559055,
+            0.015730754896956856,
+            1.6676025784363766,
+        ),
+        (
+            [0.5, 0.7],
+            [0.1, 0.2, 0.3, 0.9, 1.4],
+            0.9,
+            4.890176404569829,
+            -0.5211192983695166,
+            0.5611192983695164,
+        ),
+    ],
+)
+def test_diff_ci_matches_welch(a, b, level, df, low, high) -> None:
+    ci = diff_ci(a, b, level)
+    assert ci.df == pytest.approx(df, rel=1e-12)
+    assert (ci.low, ci.high) == pytest.approx((low, high), rel=1e-11)
+    assert ci.diff == pytest.approx(sum(a) / len(a) - sum(b) / len(b))
+    assert ci.level == level
+    assert ci.contains(0) == (low <= 0 <= high)
+
+
+def test_diff_ci_of_constant_samples_is_a_point() -> None:
+    same = diff_ci([2.0, 2.0, 2.0], [2.0, 2.0])
+    assert (same.diff, same.low, same.high) == (0.0, 0.0, 0.0) and same.contains(0)
+    assert not diff_ci([3.0, 3.0], [2.0, 2.0]).contains(0)
+
+
+def test_diff_ci_rejects_and_does_not_hide_nan() -> None:
+    with pytest.raises(ValueError, match="at least two values in each sample, got 1 and 3"):
+        diff_ci([1.0], [1.0, 2.0, 3.0])
+    ci = diff_ci([1.0, math.nan], [1.0, 2.0])
+    assert math.isnan(ci.diff) and not ci.contains(0)
