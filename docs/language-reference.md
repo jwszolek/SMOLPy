@@ -6,6 +6,7 @@ The `.smol` format is SMOLPy's external Network Description Language — a stand
 uv run smolpy run topology.smol
 uv run smolpy run topology.smol --text      # force text-mode dashboard
 uv run smolpy run topology.smol -o out.csv  # export metrics after the run
+uv run smolpy run topology.smol --runs 30 --workers 8 -o runs.csv   # 30 runs, mean ± CI
 ```
 
 A `.smol` file is **declarative**: it cannot express loops, conditionals, or parameterised topologies. Scenarios that need those still require the Python API.
@@ -131,12 +132,27 @@ Observing a metric on the wrong node type (or a metric that doesn't exist) is a 
 ### `simulate` — run the simulation
 
 ```
-simulate duration=<ms> [mode=headless|text|live] [seed=<int>]
+simulate duration=<ms> [mode=headless|text|live] [seed=<int>] [runs=<int>]
 ```
 
 `mode` defaults to `headless` (no dashboard, fastest). `text` shows a live terminal table; `live` opens the Dear PyGui desktop window. The `--text` CLI flag always overrides `mode` (same as `--text` does for Python scripts).
 
 `seed` sets the random seed of the traffic generators (Poisson, bursty and batch patterns, `imix` frame sizes). It defaults to `42`, so a run without `seed` is reproducible; vary it to repeat an experiment with independent random draws. Each `flow` gets its own random stream derived from `seed`, so adding or removing one flow does not change the draws of the others (see [Model Semantics](model-semantics.md#6-traffic-sources)).
+
+`runs` (default `1`) repeats the simulation with seeds `seed`, `seed + 1`, … `seed + runs - 1`, in parallel worker processes ([ADR-0009](adr/0009-batch-execution-and-cross-backend-validation.md)):
+
+```
+simulate duration=10000 seed=1 runs=30
+```
+
+- **Report.** With more than one run, `smolpy run` prints a summary instead of one run's result. For every metric it shows the mean across runs of each run's mean, its 95 % confidence interval, and the lowest and highest run mean. Then it lists every failed run with its seed and error.
+- **Mode.** `runs` above 1 needs `mode=headless`: `text` and `live` show a single run.
+- **Options.**
+    - `--runs N` overrides `runs`, and `--runs 1` runs once.
+    - `--workers N` limits the number of worker processes. The default is one per CPU.
+    - `-o FILE` writes every run as CSV or JSON, with `scenario, run, seed, time_ms, metric, value, error` columns (see [DSL Reference — Statistics across runs](dsl-reference.md#statistics-across-runs)).
+- **Exit status.** `smolpy run` exits with status 1 if any run failed, after printing the report and writing `-o`.
+- **No loops.** Parameter sweeps stay in Python (`run_many` with a list of scenarios), since `.smol` has no loops (ADR-0003).
 
 ## Errors
 
@@ -144,8 +160,8 @@ Two error classes, both reported as `file:line: message`:
 
 | Class | Raised for |
 |---|---|
-| `SMOLSyntaxError` | Malformed source: unknown keyword, missing `=`, unclosed `{`, missing required argument |
-| `SMOLSemanticError` | Well-formed but invalid: undeclared node reference, duplicate node name, wrong node type for a statement (e.g. `poll` targeting a `switch`), invalid metric for a node type, out-of-range parameter (e.g. `control cycle=3`, `priority=9`, `qos=wfq`), missing or duplicate `simulate` statement, and the topology rules: more links than `ports`, a second link on an end station, a loop, traffic to a node without a link |
+| `SMOLSyntaxError` | Malformed source: unknown keyword, missing `=`, unclosed `{`, missing required argument, unknown `simulate` argument |
+| `SMOLSemanticError` | Well-formed but invalid: undeclared node reference, duplicate node name, wrong node type for a statement (e.g. `poll` targeting a `switch`), invalid metric for a node type, out-of-range parameter (e.g. `control cycle=3`, `priority=9`, `qos=wfq`), missing or duplicate `simulate` statement, `runs` that is not a positive integer or comes with `mode=text`/`live`, and the topology rules: more links than `ports`, a second link on an end station, a loop, traffic to a node without a link |
 
 `.smol` files and the Python API share the same rules ([Scenario Model — Validation](scenario-model.md#validation)). Errors about the scenario as a whole point to the statement concerned, e.g. the link that exceeds a switch's ports.
 

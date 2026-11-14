@@ -18,6 +18,23 @@ if TYPE_CHECKING:
     from smolpy.model import Scenario
 
 
+_UNITS = {
+    "throughput": "Mb/s",
+    "latency": "µs",
+    "jitter": "µs",
+    "frame_loss": "%",
+    "queue_depth": "fr",
+    "utilization": "%",
+    "bytes_sent": "MB",
+    "bytes_received": "MB",
+}
+
+
+def metric_unit(key: str) -> str:
+    """Display unit of a metric key such as ``"latency:plc"``."""
+    return next((u for m, u in _UNITS.items() if m in key), "")
+
+
 @dataclass(frozen=True)
 class RunStats:
     """What a backend reports about its own run (ADR-0007).
@@ -84,16 +101,6 @@ class SimulationResult:
         if not self.metrics:
             print("No metrics collected. Add net.observe(...) calls before simulating.")
             return
-        _UNITS = {
-            "throughput": "Mb/s",
-            "latency": "µs",
-            "jitter": "µs",
-            "frame_loss": "%",
-            "queue_depth": "fr",
-            "utilization": "%",
-            "bytes_sent": "MB",
-            "bytes_received": "MB",
-        }
         col = max(len(k) for k in self.metrics) + 2
         header = f"{'Metric':<{col}}  {'n':>6}  {'avg':>10}  {'min':>10}  {'max':>10}"
         print(f"\n{header}")
@@ -102,7 +109,7 @@ class SimulationResult:
             vals = [v for _, v in self.metrics[key]]
             if not vals:
                 continue
-            unit = next((u for m, u in _UNITS.items() if m in key), "")
+            unit = metric_unit(key)
             avg = sum(vals) / len(vals)
             print(
                 f"{key:<{col}}  {len(vals):>6}  {avg:>9.3f}{unit:>5}"

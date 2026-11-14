@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -221,6 +222,12 @@ class _Interpreter:
                 d.line,
                 f"invalid simulate mode '{d.mode}' — expected one of {_SIMULATE_MODES}",
             )
+        if d.runs > 1 and d.mode != "headless":
+            raise SMOLSemanticError(
+                self.file,
+                d.line,
+                f"runs={d.runs} needs mode=headless: mode={d.mode} shows a single run",
+            )
 
     def _simulate(self, net: Network, d: smol_ast.SimulateDecl) -> SimulationResult:
         return net.simulate(
@@ -239,13 +246,28 @@ def interpret_and_run(path: Path) -> SimulationResult:
     return _Interpreter(file).build_and_run(network_decl)
 
 
+@dataclass(frozen=True)
+class SmolFile:
+    """A parsed and checked .smol file: its scenario, and the parts of the
+    ``simulate`` statement that are not in the scenario."""
+
+    scenario: Scenario
+    runs: int
+    mode: str
+
+
+def load_smol(path: Path) -> SmolFile:
+    """Parse and check a .smol file without running it."""
+    file = str(path)
+    network_decl = parse_smol(path.read_text(encoding="utf-8"), file)
+    net, d = _Interpreter(file).build(network_decl)
+    return SmolFile(net.to_scenario(duration=d.duration, seed=d.seed), d.runs, d.mode)
+
+
 def interpret_to_scenario(path: Path) -> Scenario:
     """Parse a .smol file into its Scenario IR (ADR-0007) without running it.
 
     The run configuration comes from the file's ``simulate`` statement; its
-    display mode is not part of the scenario.
+    display mode and number of runs are not part of the scenario.
     """
-    file = str(path)
-    network_decl = parse_smol(path.read_text(encoding="utf-8"), file)
-    net, simulate_decl = _Interpreter(file).build(network_decl)
-    return net.to_scenario(duration=simulate_decl.duration, seed=simulate_decl.seed)
+    return load_smol(path).scenario

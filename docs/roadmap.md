@@ -78,9 +78,10 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - Batch throughput scales with cores.
 - The equivalence harness is in place, ready for a second backend.
 
-**Status:** steps 1–2 of 5 done.
+**Status:** steps 1–3 of 5 done.
 - Step 1: `run_many()` runs replications and sweeps on SimPy worker processes and returns a `BatchResult`. With 8 workers, 8 runs of B1 at 200 k frames take 6.5 s instead of 32.9 s, with identical results.
 - Step 2: `BatchResult.summary()` gives the mean, standard deviation and Student's *t* confidence interval for every metric window. `scalar()` gives one number per run, and `export()` writes CSV or JSON. The *t* quantile is plain Python and matches scipy to 1e-11.
+- Step 3: `.smol` gains `simulate ... runs=`, and `smolpy run` gains `--runs`, `--workers` and `-o` for batches. A batch prints `BatchResult.report()` (mean ± CI across runs, then failed runs) and exits with status 1 if a run failed. An unknown `simulate` argument is now an error instead of being ignored.
 
 ## Phase 4: Rust DES engine, MVP ([ADR-0008](adr/0008-rust-des-engine-mvp.md))
 
