@@ -4,6 +4,15 @@ from typing import TYPE_CHECKING, Literal
 
 from smolpy.core.batch import BatchSpec, parse_batch
 from smolpy.core.node import Node
+from smolpy.model.frames import (
+    MODBUS_REQUEST_BYTES,
+    PN_CYCLES_MS,
+    PN_MAX_IO_BYTES,
+    PN_RT_PRIORITY,  # noqa: F401  (re-exported for existing imports)
+    modbus_response_frame_size,
+    mqtt_publish_frame_size,
+    pn_frame_size,
+)
 
 if TYPE_CHECKING:
     from smolpy.profinet.device import ProfinetDevice
@@ -48,13 +57,7 @@ class MQTTSpec:
         self.payload_bytes = payload_bytes
         self.qos = qos
         self.delay_ms = delay_ms
-        # Wire-level frame size:
-        # Ethernet+IPv4+TCP overhead = 54 B
-        # MQTT fixed header = 2 B, topic-length field = 2 B
-        # topic name = len(topic) B, packet-ID (QoS>0) = 2 B
-        ethernet_ip_tcp = 54
-        mqtt_overhead = 2 + 2 + len(topic) + (2 if qos > 0 else 0)
-        self.frame_size: int = ethernet_ip_tcp + mqtt_overhead + payload_bytes
+        self.frame_size: int = mqtt_publish_frame_size(topic, payload_bytes, qos)
 
 
 class ModbusSpec:
@@ -71,24 +74,9 @@ class ModbusSpec:
         self.count = count
         self.rate_hz = rate_hz
         self.delay_ms = delay_ms
-        # Modbus TCP framing:
-        # Request  = Ethernet/IP/TCP (54 B) + MBAP (6 B) + FC (1 B)
-        #            + Start addr (2 B) + Quantity (2 B) = 65 B, constant.
-        # Response = Ethernet/IP/TCP (54 B) + MBAP (6 B) + FC (1 B)
-        #            + Byte count (1 B) + Data (2 B × count).
-        self.request_frame_size: int = 65
-        self.response_frame_size: int = 62 + 2 * count
-
-
-PN_RT_PRIORITY = 6  # 802.1Q PCP carried by PROFINET RT cyclic frames
-_PN_CYCLES_MS = tuple(2**n for n in range(10))  # 1, 2, 4, ... 512 ms
-_PN_MAX_IO_BYTES = 1440
-
-
-def pn_frame_size(io_bytes: int) -> int:
-    # Ethernet header (14) + 802.1Q tag (4) + FrameID (2) + IO data + APDU status (4),
-    # padded to the 60 B Ethernet minimum (FCS not counted, as for Modbus/MQTT).
-    return max(60, 24 + io_bytes)
+        # Frame sizes are part of the model: smolpy.model.frames.
+        self.request_frame_size: int = MODBUS_REQUEST_BYTES
+        self.response_frame_size: int = modbus_response_frame_size(count)
 
 
 class ProfinetSpec:
@@ -103,11 +91,11 @@ class ProfinetSpec:
         hold: int = 3,
         delay_ms: float = 0.0,
     ) -> None:
-        if cycle_ms not in _PN_CYCLES_MS:
-            raise ValueError(f"PROFINET cycle must be one of {list(_PN_CYCLES_MS)} ms")
+        if cycle_ms not in PN_CYCLES_MS:
+            raise ValueError(f"PROFINET cycle must be one of {list(PN_CYCLES_MS)} ms")
         for label, n in (("inputs", input_bytes), ("outputs", output_bytes)):
-            if not 1 <= n <= _PN_MAX_IO_BYTES:
-                raise ValueError(f"PROFINET {label} must be 1-{_PN_MAX_IO_BYTES} bytes")
+            if not 1 <= n <= PN_MAX_IO_BYTES:
+                raise ValueError(f"PROFINET {label} must be 1-{PN_MAX_IO_BYTES} bytes")
         if not 1 <= hold <= 255:
             raise ValueError("PROFINET data hold factor must be 1-255")
         self.device = device

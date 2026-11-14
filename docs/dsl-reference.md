@@ -146,6 +146,8 @@ result = net.simulate(duration=30_000, live=True)   # full Dear PyGui desktop wi
 result = net.simulate(duration=30_000, seed=7)      # seed of the traffic generators (default 42)
 
 result.report()   # print summary table (avg / min / max per metric)
+result.stats      # RunStats(backend="simpy", events=..., wall_s=...)
+result.scenario   # the Scenario IR that was run
 result.plot()     # open static dashboard for a completed result
 
 # Export metric time-series (format inferred from extension)

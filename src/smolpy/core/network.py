@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import networkx as nx
@@ -18,14 +19,29 @@ if TYPE_CHECKING:
     from smolpy.model import Scenario
 
 
+@dataclass(frozen=True)
+class RunStats:
+    """What a backend reports about its own run (ADR-0007).
+
+    *events* is the number of simulation events processed; *wall_s* the
+    wall-clock time of the run, without building the model.
+    """
+
+    backend: str
+    events: int
+    wall_s: float
+
+
 class SimulationResult:
     def __init__(
         self,
         metrics: dict[str, list[tuple[float, float]]],
-        network: Network,
+        scenario: Scenario,
+        stats: RunStats | None = None,
     ) -> None:
         self.metrics = metrics
-        self._network = network
+        self.scenario = scenario
+        self.stats = stats
 
     def export(self, path: str, format: str | None = None) -> None:
         """Write all metric time-series to *path*.
@@ -50,7 +66,7 @@ class SimulationResult:
                         w.writerow([f"{t:.3f}", key, f"{v:.6f}"])
         elif fmt == "json":
             payload = {
-                "network": self._network.name,
+                "network": self.scenario.name,
                 "metrics": {
                     k: [[round(t, 3), round(v, 6)] for t, v in s] for k, s in self.metrics.items()
                 },
@@ -173,17 +189,18 @@ class Network:
 
         if os.environ.get("SMOLPY_TEXT_MODE") == "1":
             live, text = False, True
+        scenario = self.to_scenario(duration=duration, seed=seed)
         if live:
             from smolpy.viz.dashboard import show_live
 
-            return show_live(self, duration, seed=seed)
+            return show_live(scenario)
         if text:
             from smolpy.viz.text_dashboard import show_text
 
-            return show_text(self, duration, seed=seed)
+            return show_text(scenario)
         from smolpy.sim.engine import run_simulation
 
-        return run_simulation(self, duration_ms=duration, seed=seed)
+        return run_simulation(scenario)
 
     # --- scenario IR ---
 

@@ -10,7 +10,8 @@ import dearpygui.dearpygui as dpg
 import networkx as nx
 
 if TYPE_CHECKING:
-    from smolpy.core.network import Network, SimulationResult
+    from smolpy.core.network import SimulationResult
+    from smolpy.model import Scenario
 
 # ── Tunables ──────────────────────────────────────────────────────────────────
 _NODE_R = 26
@@ -154,15 +155,33 @@ def _draw_topology(
 # ── Core dashboard ────────────────────────────────────────────────────────────
 
 
+# Scenario node kind -> builder class name, which keys the colour palette.
+_KIND_NAMES = {
+    "adapter": "Adapter",
+    "switch": "Switch",
+    "hub": "Hub",
+    "mqtt_broker": "MQTTBroker",
+    "modbus_slave": "ModbusSlave",
+    "profinet_device": "ProfinetDevice",
+}
+
+
+def _graph(scenario: Scenario) -> nx.Graph:
+    graph = nx.Graph()
+    graph.add_nodes_from(n.name for n in scenario.nodes)
+    graph.add_edges_from((lk.a, lk.b) for lk in scenario.links)
+    return graph
+
+
 def _run_dashboard(
-    network: Network,
+    scenario: Scenario,
     all_samples: dict[str, list],
     sim_state: dict,
     duration_ms: float,
 ) -> None:
     """Run the Dear PyGui event loop (must be called from the main thread)."""
-    graph = network._graph
-    node_types = {n: type(node).__name__ for n, node in network._nodes.items()}
+    graph = _graph(scenario)
+    node_types = {n.name: _KIND_NAMES[n.kind] for n in scenario.nodes}
     links = list(graph.edges())
 
     # metric_name → {target_name: [(t, v), ...]}
@@ -177,7 +196,7 @@ def _run_dashboard(
     dpg.set_global_font_scale(_FONT_SCALE)
 
     dpg.create_viewport(
-        title=f"PySMOL  ·  {network.name}",
+        title=f"PySMOL  ·  {scenario.name}",
         width=1280,
         height=800,
         min_width=860,
@@ -226,7 +245,8 @@ def _run_dashboard(
     with dpg.window(tag="main", no_title_bar=True, no_move=True, no_resize=True, no_scrollbar=True):
         with dpg.group(horizontal=True):
             dpg.add_text(
-                f"  PySMOL  ·  {network.name}  ·  {duration_ms:,.0f} ms", color=[110, 190, 255, 255]
+                f"  PySMOL  ·  {scenario.name}  ·  {duration_ms:,.0f} ms",
+                color=[110, 190, 255, 255],
             )
             dpg.add_spacer(width=20)
             dpg.add_text(
@@ -374,7 +394,7 @@ def _run_dashboard(
                 if ntype in ("Switch", "Hub"):
                     active.add(name)
 
-        for name in network._nodes:
+        for name in node_types:
             r, g, b = _NODE_RGB.get(node_types.get(name, "Adapter"), _NODE_RGB["Adapter"])
             # Inner fill — pulsing for senders, solid for forwarders, dim when idle
             if name in sending:
@@ -423,32 +443,33 @@ def show(result: SimulationResult) -> None:
         default=0.0,
     )
     _run_dashboard(
-        result._network,
+        result.scenario,
         result.metrics,  # type: ignore[arg-type]
         {"done": True, "progress": 1.0},
         total_ms,
     )
 
 
-def show_live(network: Network, duration_ms: float, seed: int = 42) -> SimulationResult:
+def show_live(scenario: Scenario) -> SimulationResult:
     """Open dashboard immediately; run simulation in background thread.
 
     Returns the completed SimulationResult when the user closes the window
     (or after the simulation finishes, whichever is later).
     """
+    from smolpy.core.network import SimulationResult
     from smolpy.sim.engine import run_simulation
 
+    assert scenario.run is not None
+    duration_ms = scenario.run.duration_ms
     # Pre-populate keys so the GUI can create plot series before data arrives
     all_samples: dict[str, list] = {
-        f"{obs.metric}:{obs.target.name}": [] for obs in network._observations
+        f"{obs.metric}:{obs.target}": [] for obs in scenario.observations
     }
     sim_state: dict = {"progress": 0.0, "done": False, "result": None}
 
     def _run() -> None:
         result = run_simulation(
-            network,
-            duration_ms,
-            seed=seed,
+            scenario,
             _all_samples=all_samples,  # type: ignore[arg-type]
             _sim_state=sim_state,
             _n_chunks=_N_CHUNKS,
@@ -458,13 +479,11 @@ def show_live(network: Network, duration_ms: float, seed: int = 42) -> Simulatio
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
 
-    _run_dashboard(network, all_samples, sim_state, duration_ms)
+    _run_dashboard(scenario, all_samples, sim_state, duration_ms)
 
     thread.join(timeout=60)
 
     result = sim_state.get("result")
     if result is None:
-        from smolpy.dsl.network import SimulationResult
-
-        result = SimulationResult(metrics=all_samples, network=network)  # type: ignore[arg-type]
+        result = SimulationResult(metrics=all_samples, scenario=scenario)
     return result
