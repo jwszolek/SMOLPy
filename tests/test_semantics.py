@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from smolpy import Network
-from smolpy.model import frames
+from smolpy.model import frames, timebase
 from smolpy.model.streams import source_ids, stream_seed
 
 
@@ -51,7 +51,41 @@ def test_samples_fall_on_multiples_of_every() -> None:
     a.sends(b, rate=100)
     net.observe("throughput", on=b, every=0.25)
     times = [t for t, _ in net.simulate(duration=5).metrics["throughput:b"]]
-    assert times == pytest.approx([0.25 * k for k in range(1, 20)])
+    assert times == [0.25 * k for k in range(1, 20)]  # exact: integer ns, no drift
+
+
+def test_time_is_integer_nanoseconds() -> None:
+    # 10 Gb/s: a 64 B frame takes 51.2 ns, which the contract rounds to 51
+    net, a, b = _pair(speed=10_000, length=3)  # prop 15 ns
+    a.sends(b, rate=1_000, size=64)
+    net.observe("latency", on=b, every=10)
+    latency_ns = 2 * timebase.transmission_ns(64, 10_000) + 2 * timebase.propagation_ns(3)
+    assert latency_ns == 2 * 51 + 2 * 15
+    assert set(_values(net.simulate(duration=100), "latency:b")) == {latency_ns / 1_000}
+
+
+def test_periodic_sources_do_not_drift() -> None:
+    # 3 frames/s: the interval is 333 333 333.3... ns. The start is chosen so
+    # that every third frame arrives exactly at a sample instant, where it
+    # counts in the next window (§9). A source that drifted by even 1 ns, e.g.
+    # by adding a rounded interval, would move those frames across the sample.
+    net, a, b = _pair(speed=100, length=0)
+    latency = 2 * timebase.transmission_ns(1_000, 100)  # 160 µs
+    delay_ns = 10**9 - latency
+    a.sends(b, rate=3, size=1_000, delay_ms=delay_ns / 10**6)
+    net.observe("bytes_received", on=b, every=1_000)
+    period = timebase.interval_ns(3)
+    received = _values(net.simulate(duration=1_000_000), "bytes_received:b")
+    assert len(received) == 999  # no sample at t = duration
+    for j, value in enumerate(received, start=1):
+        arrived = sum(
+            1
+            for k in range(1, 3 * j + 1)
+            if timebase.periodic_ns(delay_ns, period, k) + latency < j * 10**9
+        )
+        # frame k arrives at 10⁹ + round(k · T): frame 3(j-1) exactly at sample j
+        assert arrived == max(0, 3 * j - 4)
+        assert value == arrived * 1_000 / 10**6  # MB, as the engine computes it
 
 
 # §2 Frames

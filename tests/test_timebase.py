@@ -16,6 +16,7 @@ def test_scenario_values_are_their_decimal_value() -> None:
     assert tb.exact(0.1) == Fraction(1, 10)  # not the binary 0.1000000000000000055...
     assert tb.exact(1e-7) == Fraction(1, 10**7)
     assert tb.exact(3) == 3 and isinstance(tb.exact(3), int)
+    assert isinstance(tb.exact(100.0), int) and isinstance(tb.interval_ns(50_000.0), int)
     with pytest.raises(TypeError):
         tb.exact(True)
     with pytest.raises(ValueError):
@@ -96,3 +97,13 @@ def test_every_is_at_least_one_nanosecond() -> None:
         check_observation(Observation("throughput", "a", 0.0000005))
     with pytest.raises(ScenarioError, match="every must be at least 1 ns"):
         check_observation(Observation("throughput", "a", math.inf))
+
+
+def test_instants_match_periodic_ns() -> None:
+    import itertools
+
+    for period in (tb.interval_ns(3), tb.interval_ns(7_000), tb.period_ns(0.25), 4_000_000):
+        got = list(itertools.islice(tb.instants(11, period), 10_000))
+        assert got == [tb.periodic_ns(11, period, k) for k in range(1, 10_001)]
+        assert got == [11 + round(k * Fraction(period)) for k in range(1, 10_001)]
+    assert tb.periodic_ns(0, Fraction(5, 2), 1) == 2 and tb.periodic_ns(0, Fraction(5, 2), 3) == 8
