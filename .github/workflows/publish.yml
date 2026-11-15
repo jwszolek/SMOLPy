@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_call:
+    inputs:
+      tag:
+        description: The tag being released (release.yml passes it; a tag push has it as its ref)
+        required: false
+        type: string
 
 jobs:
   build:
@@ -49,3 +54,12 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           attestations: false
+
+  github-release:
+    name: GitHub Release
+    needs: publish  # only once the tag is on PyPI
+    permissions:
+      contents: write
+    uses: ./.github/workflows/github-release.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}

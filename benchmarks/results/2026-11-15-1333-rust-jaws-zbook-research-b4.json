@@ -1,0 +1,45 @@
+{
+ "format": "smolpy-bench",
+ "version": 1,
+ "label": "research-b4",
+ "backend": "rust",
+ "created": "2026-11-15T13:33:56",
+ "environment": {
+  "host": "jaws-zbook",
+  "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+  "cpu": "Intel(R) Core(TM) Ultra 7 255H",
+  "cpu_count": 16,
+  "memory": "31745644 kB",
+  "python": "3.14.4",
+  "simpy": "4.1.2",
+  "smolpy": "0.5.1.dev0+ga618933df.d20260918",
+  "git_commit": "10dbae7",
+  "git_dirty": true
+ },
+ "runs": [
+  {
+   "scenario": "B4",
+   "frames_target": 100000000,
+   "metrics": "off",
+   "seed": 42,
+   "profile": null,
+   "status": "ok",
+   "sim_duration_ms": 500000.0,
+   "frames_expected": 100000000,
+   "backend": "rust",
+   "nodes": 10201,
+   "events": 2499800367,
+   "build_s": 0.10355158298625611,
+   "run_s": 310.259434785,
+   "call_s": 311.20836383098504,
+   "events_per_s": 8057129.249694801,
+   "frames_per_s": 322310.9075451544,
+   "rss_import_kb": 38920,
+   "rss_after_build_kb": 59400,
+   "peak_rss_kb": 173940,
+   "output_hash": "2d68f1e336725d32",
+   "metrics_hash": "44136fa355b3678a",
+   "rep": 1
+  }
+ ]
+}

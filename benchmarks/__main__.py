@@ -1,8 +1,9 @@
 """SMOLPy benchmark suite (ADR-0006).
 
 python -m benchmarks run [--scenario B1 B2 B3] [--frames 100k 1M 10M] [--metrics on off]
+    [--backend simpy|rust]
 python -m benchmarks summarize benchmarks/results/<file>.json
-python -m benchmarks batch --scenario B3 --frames 1M --runs 16 --jobs 8
+python -m benchmarks batch --scenario B3 --frames 1M --runs 16 --jobs 8 [--backend rust]
 python -m benchmarks profile --scenario B1 --frames 1M --tool cprofile|tracemalloc|py-spy
 """
 
@@ -55,6 +56,7 @@ def main() -> None:
     run.add_argument("--seed", type=int, default=42)
     run.add_argument("--label", default="run")
     run.add_argument("--out", type=Path, default=None)
+    run.add_argument("--backend", default="simpy", help="simpy or rust")
 
     summ = sub.add_parser("summarize", help="markdown summary of a results file")
     summ.add_argument("file", type=Path)
@@ -67,6 +69,7 @@ def main() -> None:
     batch.add_argument("--jobs", type=int, default=8)
     batch.add_argument("--timeout", type=float, default=3600, help="per run, seconds")
     batch.add_argument("--seed", type=int, default=42)
+    batch.add_argument("--backend", default="simpy", help="simpy or rust")
 
     prof = sub.add_parser("profile", help="profile one scenario")
     prof.add_argument("--scenario", default="B1")
@@ -77,14 +80,16 @@ def main() -> None:
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
-        out = run_suite(a.scenario, sizes, a.metrics, a.reps, a.timeout, a.seed, a.label, a.out)
+        out = run_suite(
+            a.scenario, sizes, a.metrics, a.reps, a.timeout, a.seed, a.label, a.out, a.backend
+        )
         print(f"\nresults: {out}\n")
         print(summarize(out))
     elif a.cmd == "summarize":
         print(summarize(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
-        r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed)
+        r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)
         print(json.dumps(r, indent=1))
     else:
         _profile(a.scenario, parse_size(a.frames), a.metrics, a.tool)

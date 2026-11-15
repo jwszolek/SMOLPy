@@ -100,7 +100,7 @@ struct Adapter {
 
 struct Switch {
     inbound: u32,
-    out: Vec<(i32, u32)>, // (port, channel), in port order
+    out: Vec<(i32, u32)>, // (port, channel), in port order: out[p].0 == p
     mac_table: HashMap<u32, i32>,
 }
 
@@ -345,7 +345,8 @@ impl Engine {
                         self.release(f);
                     }
                     Some(port) if port != fr.in_port => {
-                        let ch = sw.out.iter().find(|(p, _)| *p == port).unwrap().1;
+                        // ports are numbered 0, 1, ... in link order: out[port] is its channel
+                        let ch = sw.out[port as usize].1;
                         self.enqueue(ch, f);
                     }
                     Some(_) => self.release(f), // hairpin: dropped
@@ -708,7 +709,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             for (_, peer) in &frontier {
                 seen[*peer] = true;
             }
-            let mut table: Vec<(u32, i32)> = Vec::new();
+            let mut table: HashMap<u32, i32> = HashMap::new(); // first port wins
             while !frontier.is_empty() {
                 let mut next = Vec::new();
                 for (port, name) in &frontier {
@@ -722,10 +723,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                             }
                         }
                         Some(mac) => {
-                            let mac = intern(&mac);
-                            if !table.iter().any(|(m, _)| *m == mac) {
-                                table.push((mac, *port));
-                            }
+                            table.entry(intern(&mac)).or_insert(*port);
                         }
                     }
                 }
