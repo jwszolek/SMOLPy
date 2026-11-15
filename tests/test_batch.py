@@ -101,7 +101,7 @@ def test_invalid_scenario_raises_before_any_run() -> None:
         ({"workers": 0}, "workers must be a positive integer, got 0"),
         ({"runs": 2, "seeds": [1]}, "1 seeds given for 2 runs"),
         ({"runs": 1, "seeds": [1.5]}, "seeds must be integers"),
-        ({"backend": "rust"}, "unknown backend 'rust', expected one of simpy"),
+        ({"backend": "ns3"}, "unknown backend 'ns3', expected one of simpy, rust"),
     ],
 )
 def test_bad_arguments(kwargs: dict, message: str) -> None:
@@ -180,9 +180,9 @@ def test_a_dead_worker_is_recorded_and_replaced() -> None:
     try:
         worker._proc.kill()
         worker._proc.wait()
-        outcome = worker.run(0, text, 42)
+        outcome = worker.run(0, text, 42, "simpy")
         assert isinstance(outcome, str) and outcome.startswith("worker process died")
-        metrics, stats = worker.run(0, text, 42)  # a fresh process takes over
+        metrics, stats = worker.run(0, text, 42, "simpy")  # a fresh process takes over
         assert stats.events > 0 and metrics["bytes_received:b"]
     finally:
         worker.close()

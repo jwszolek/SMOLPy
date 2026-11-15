@@ -67,6 +67,39 @@ def priorities() -> Scenario:
     return net.to_scenario(duration=60)
 
 
+def switching() -> Scenario:
+    """Ethernet only, within the Rust MVP: a learning core that floods until
+    it has learnt every station, a converged FIFO access switch, priorities,
+    a hairpin-free mesh of flows that start at different instants, and every
+    instant on a 1 ns grid that coincides with samples."""
+    net = Network("switching")
+    core = net.switch("core", ports=4)  # learning: floods unknown destinations
+    acc = net.switch("acc", ports=4, qos="fifo", mac_table="topology")
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    c = net.adapter("c", ip="10.0.0.3")
+    d = net.adapter("d", ip="10.0.0.4")
+    net.link(a, core, speed=100, length=10)
+    net.link(b, core, speed=1_000, length=3)
+    net.link(core, acc, speed=100, length=50)
+    net.link(c, acc, speed=100, length=10)
+    net.link(d, acc, speed=10, length=1)
+    a.sends(c, rate=4_000, size=1_200, priority=0)  # crosses the core and the access switch
+    b.sends(c, rate=2_000, size=200, priority=6, delay_ms=0.5)
+    c.sends(a, rate=1_000, size=64, delay_ms=1)  # lets the core learn c late
+    d.sends(b, rate=500, size=1_518, priority=3, delay_ms=0.25)
+    b.sends(d, rate=250, size=128)
+    for metric in ("throughput", "latency", "bytes_received"):
+        net.observe(metric, on=c, every=1)
+    net.observe("latency", on=a, every=2)
+    net.observe("bytes_sent", on=b, every=1)
+    net.observe("queue_depth", on=acc, every=0.5)
+    net.observe("queue_depth", on=core, every=0.5)
+    net.observe("utilization", on=acc, every=1)
+    net.observe("utilization", on=d, every=2)
+    return net.to_scenario(duration=40)
+
+
 def protocols() -> Scenario:
     """Modbus polling and MQTT publish/subscribe across a switch, with a
     FIFO switch."""
@@ -132,6 +165,7 @@ def batches() -> Scenario:
 DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "line": line,
     "priorities": priorities,
+    "switching": switching,
     "protocols": protocols,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {

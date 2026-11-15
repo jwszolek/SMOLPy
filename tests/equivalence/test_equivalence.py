@@ -42,10 +42,22 @@ def _reference_batch(name: str) -> BatchResult:
 # --- the suite ---
 
 
+def _supported(scenario, backend: str):
+    """Skip, naming the reason, a scenario the backend cannot run yet."""
+    from smolpy import backends
+    from smolpy.model.validate import ScenarioError
+
+    try:
+        backends.check(scenario, backend)
+    except ScenarioError as exc:
+        pytest.skip(f"outside the {backend} backend's capabilities: {exc}")
+    return scenario
+
+
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("name", DETERMINISTIC)
 def test_deterministic(name: str, backend: str) -> None:
-    candidate = harness.run_once(DETERMINISTIC[name](), backend)
+    candidate = harness.run_once(_supported(DETERMINISTIC[name](), backend), backend)
     mismatches = harness.compare_runs(candidate, _reference_run(name))
     assert not mismatches, "\n".join(map(str, mismatches))
 
@@ -54,7 +66,7 @@ def test_deterministic(name: str, backend: str) -> None:
 @pytest.mark.parametrize("name", STOCHASTIC)
 def test_stochastic(name: str, backend: str) -> None:
     candidate = harness.run_replications(
-        STOCHASTIC[name](), backend, seed_offset=harness.CANDIDATE_SEED_OFFSET
+        _supported(STOCHASTIC[name](), backend), backend, seed_offset=harness.CANDIDATE_SEED_OFFSET
     )
     mismatches = harness.compare_batches(candidate, _reference_batch(name))
     assert not mismatches, "\n".join(map(str, mismatches))

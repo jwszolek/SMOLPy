@@ -192,12 +192,19 @@ class Network:
         live: bool = False,
         text: bool = False,
         seed: int = 42,
+        backend: str = "simpy",
     ) -> SimulationResult:
+        """Run the network for *duration* ms on *backend* (``smolpy.backends``).
+        The live and text dashboards need a backend that supports them."""
         import os
+
+        from smolpy import backends
 
         if os.environ.get("SMOLPY_TEXT_MODE") == "1":
             live, text = False, True
         scenario = self.to_scenario(duration=duration, seed=seed)
+        if live or text:
+            backends.check(scenario, backend, dashboard=True)
         if live:
             from smolpy.viz.dashboard import show_live
 
@@ -206,9 +213,7 @@ class Network:
             from smolpy.viz.text_dashboard import show_text
 
             return show_text(scenario)
-        from smolpy.sim.engine import run_simulation
-
-        return run_simulation(scenario)
+        return backends.run(scenario, backend)
 
     # --- scenario IR ---
 

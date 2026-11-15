@@ -60,6 +60,7 @@ def _cmd_run(
     extra_args: list[str],
     runs: int | None = None,
     workers: int | None = None,
+    backend: str | None = None,
 ) -> None:
     _print_banner()
     console.print(f"  [info]Script[/]   [dim]{script}[/]")
@@ -71,12 +72,21 @@ def _cmd_run(
         os.environ["SMOLPY_TEXT_MODE"] = "1"
 
     is_smol = pathlib.Path(script).suffix == ".smol"
-    if not is_smol and (runs is not None or workers is not None):
-        _error("--runs and --workers apply to .smol files; in a Python script use run_many()")
+    if not is_smol and (runs is not None or workers is not None or backend is not None):
+        _error(
+            "--runs, --workers and --backend apply to .smol files; in a Python script"
+            " pass backend= to simulate() or use run_many()"
+        )
 
     if is_smol:
+        from smolpy import backends
         from smolpy.lang import SMOLSemanticError, SMOLSyntaxError, load_smol
 
+        if backend is not None:
+            try:
+                backends.get(backend)
+            except (ValueError, backends.BackendUnavailable) as exc:
+                _error(str(exc))
         try:
             smol = load_smol(pathlib.Path(script))
         except (SMOLSyntaxError, SMOLSemanticError) as exc:
@@ -87,7 +97,13 @@ def _cmd_run(
                 _error(f"--text shows a single run; it cannot be used with {n_runs} runs")
             if smol.mode != "headless":
                 _error(f"{n_runs} runs need mode=headless; the file sets mode={smol.mode}")
-            _run_batch(smol.scenario, n_runs, workers, output)
+            _run_batch(smol.scenario, n_runs, workers, output, backend or backends.DEFAULT)
+            return
+        if backend is not None and backend != backends.DEFAULT:
+            if text_mode or smol.mode != "headless":
+                mode = "text" if text_mode else smol.mode
+                _error(f"the {backend} backend runs headless; mode={mode} needs --backend simpy")
+            _run_on(smol.scenario, backend, output)
             return
 
     start = time.perf_counter()
@@ -128,9 +144,42 @@ def _cmd_run(
         console.print()
 
 
-def _run_batch(scenario: Scenario, runs: int, workers: int | None, output: str | None) -> None:
+def _run_on(scenario: Scenario, backend: str, output: str | None) -> None:
+    """One headless run of *scenario* on *backend*."""
+    from smolpy import backends
+
+    start = time.perf_counter()
+    with Progress(
+        SpinnerColumn(spinner_name="dots", style="cyan"),
+        TextColumn("[bold white]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task(f"Running simulation on {backend}…", total=None)
+        try:
+            result = backends.run(scenario, backend)
+        except (ValueError, backends.BackendUnavailable) as exc:  # incl. ScenarioError
+            progress.stop()
+            _error(str(exc))
+        except Exception:
+            progress.stop()
+            _error(traceback.format_exc())
+        progress.update(task, description="Simulation complete")
+    _finished(time.perf_counter() - start)
+    result.report()
+    if output:
+        result.export(output)
+        console.print(f"  Results exported → {output}")
+        console.print()
+
+
+def _run_batch(
+    scenario: Scenario, runs: int, workers: int | None, output: str | None, backend: str
+) -> None:
     """Run *scenario* *runs* times (ADR-0009), print the summary across runs,
     export every run, and exit with status 1 if any run failed."""
+    from smolpy import backends
     from smolpy.batch import run_many
 
     start = time.perf_counter()
@@ -143,7 +192,10 @@ def _run_batch(scenario: Scenario, runs: int, workers: int | None, output: str |
     ) as progress:
         task = progress.add_task(f"Running {runs} simulations…", total=None)
         try:
-            batch = run_many(scenario, runs, workers=workers)
+            batch = run_many(scenario, runs, workers=workers, backend=backend)
+        except (ValueError, backends.BackendUnavailable) as exc:  # incl. ScenarioError
+            progress.stop()
+            _error(str(exc))
         except Exception:
             progress.stop()
             _error(traceback.format_exc())
@@ -238,6 +290,12 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         metavar="N",
         help="Worker processes for --runs (default: one per CPU)",
     )
+    parser.add_argument(
+        "--backend",
+        default=None,
+        metavar="NAME",
+        help="Run a .smol file on backend NAME: simpy (default) or rust",
+    )
 
 
 def main() -> None:
@@ -282,10 +340,11 @@ def main() -> None:
                 [],
                 late.runs if late.runs is not None else args.runs,
                 late.workers if late.workers is not None else args.workers,
+                late.backend or args.backend,
             )
         else:
             text = args.text or "--text" in args.args or "-t" in args.args
             extra = [a for a in args.args if a not in ("--text", "-t")]
-            _cmd_run(args.script, args.output, text, extra, args.runs, args.workers)
+            _cmd_run(args.script, args.output, text, extra, args.runs, args.workers, args.backend)
     elif args.command == "demo":
         _cmd_demo()

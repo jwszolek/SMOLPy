@@ -56,25 +56,39 @@ def _metrics_hash(metrics: dict[str, list[tuple[float, float]]]) -> str:
 
 
 def measure(
-    scenario: str, frames: int, metrics: bool, seed: int, profile: str | None, out: str | None
+    scenario: str,
+    frames: int,
+    metrics: bool,
+    seed: int,
+    profile: str | None,
+    out: str | None,
+    backend: str = "simpy",
 ) -> dict:
-    """Run one measurement. For the tracemalloc profile the engine's
-    Environment class is replaced for the duration of this call only."""
+    """Run one measurement on *backend*. For the tracemalloc profile (SimPy
+    only) the engine's Environment class is replaced for this call only."""
+    if profile is not None and backend != "simpy":
+        raise ValueError(f"profiles are SimPy-specific, not for backend {backend!r}")
     original = engine._Environment
     if profile == "tracemalloc":
         engine._Environment = _SnapshotEnvironment  # type: ignore[misc]
     _AFTER_RUN.clear()
     try:
-        return _measure(scenario, frames, metrics, seed, profile, out)
+        return _measure(scenario, frames, metrics, seed, profile, out, backend)
     finally:
         engine._Environment = original  # type: ignore[misc]
 
 
 def _measure(
-    scenario: str, frames: int, metrics: bool, seed: int, profile: str | None, out: str | None
+    scenario: str,
+    frames: int,
+    metrics: bool,
+    seed: int,
+    profile: str | None,
+    out: str | None,
+    backend: str,
 ) -> dict:
     from benchmarks.scenarios import SCENARIOS
-    from smolpy.sim.engine import run_simulation
+    from smolpy import backends
 
     rss_import_kb = _peak_rss_kb()
 
@@ -85,7 +99,9 @@ def _measure(
     build_s = time.perf_counter() - t0
     rss_after_build_kb = _peak_rss_kb()
 
-    run = lambda: run_simulation(ir)  # noqa: E731
+    backends.check(ir, backend)
+    chosen = backends.get(backend)
+    run = lambda: chosen.run(ir)  # noqa: E731
 
     if profile == "cprofile":
         import cProfile
@@ -120,7 +136,9 @@ def _measure(
         tracemalloc.start()
         result = run()
     else:
+        t_call = time.perf_counter()
         result = run()
+        call_s = time.perf_counter() - t_call
 
     # The backend reports its own run: events processed and wall-clock time
     # of the run itself, without model building (ADR-0007).
@@ -139,6 +157,8 @@ def _measure(
         "events": events,
         "build_s": build_s,
         "run_s": run_s,
+        # the whole backend call: for Rust also the IR's JSON and the model build
+        "call_s": call_s if profile is None else None,
         "events_per_s": events / run_s,
         "frames_per_s": built.frames_expected / run_s,
         "rss_import_kb": rss_import_kb,
@@ -157,8 +177,9 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--profile", choices=("cprofile", "tracemalloc"), default=None)
     p.add_argument("--out", default=None, help="profile report path")
+    p.add_argument("--backend", default="simpy")
     a = p.parse_args()
-    record = measure(a.scenario, a.frames, a.metrics == "on", a.seed, a.profile, a.out)
+    record = measure(a.scenario, a.frames, a.metrics == "on", a.seed, a.profile, a.out, a.backend)
     print(json.dumps(record))
 
 

@@ -28,8 +28,6 @@ from smolpy.core.network import Network, RunStats, SimulationResult, metric_unit
 from smolpy.model import RunConfig, Scenario
 from smolpy.stats import MeanCI, mean_ci
 
-BACKENDS = ("simpy",)
-
 Samples = dict[str, list[tuple[float, float]]]
 
 
@@ -248,13 +246,16 @@ def run_many(
       scenario of a sweep sees the same seeds.
     - *workers*: worker processes, by default one per CPU; ``1`` runs
       everything in this process.
+    - *backend*: a name from ``smolpy.backends``; every scenario is checked
+      against its capabilities before anything runs.
 
     An invalid scenario raises before anything runs. A run that fails while
     running is recorded in the result with its seed and traceback, and the
     other runs go on; see :meth:`BatchResult.raise_on_failure`.
     """
-    if backend not in BACKENDS:
-        raise ValueError(f"unknown backend {backend!r}, expected one of {', '.join(BACKENDS)}")
+    from smolpy import backends
+
+    backends.get(backend)  # unknown or not installed: raise before anything else
     _positive("runs", runs)
     if workers is not None:
         _positive("workers", workers)
@@ -267,10 +268,8 @@ def run_many(
 
     scenarios = tuple(_with_run(sc, duration) for sc in _scenarios(source, duration))
 
-    from smolpy.sim.engine import check_runnable
-
     for sc in scenarios:
-        check_runnable(sc)
+        backends.check(sc, backend)
 
     tasks = [
         (i, k, seed)
@@ -283,9 +282,9 @@ def run_many(
     if n_workers == 1:
         from smolpy._worker import run_task
 
-        outcomes = {(i, k): run_task(texts[i], seed) for i, k, seed in tasks}
+        outcomes = {(i, k): run_task(texts[i], seed, backend) for i, k, seed in tasks}
     else:
-        outcomes = _run_in_workers(texts, tasks, n_workers)
+        outcomes = _run_in_workers(texts, tasks, n_workers, backend)
 
     batch_runs = []
     for i, k, seed in tasks:
@@ -351,7 +350,7 @@ Outcome = tuple[Samples, RunStats] | str  # metrics and statistics, or a traceba
 
 
 def _run_in_workers(
-    texts: list[str], tasks: list[tuple[int, int, int]], n_workers: int
+    texts: list[str], tasks: list[tuple[int, int, int]], n_workers: int, backend: str
 ) -> dict[tuple[int, int], Outcome]:
     """Run *tasks* on *n_workers* worker processes, each fed by one thread."""
     pending: queue.SimpleQueue[tuple[int, int, int]] = queue.SimpleQueue()
@@ -372,7 +371,7 @@ def _run_in_workers(
                     i, k, seed = pending.get_nowait()
                 except queue.Empty:
                     return
-                outcomes[i, k] = worker.run(i, texts[i], seed)
+                outcomes[i, k] = worker.run(i, texts[i], seed, backend)
         finally:
             worker.close()
 
@@ -412,11 +411,11 @@ class _Worker:
         assert self._proc.stdin is not None and self._proc.stdout is not None
         return self._proc.stdin, self._proc.stdout
 
-    def run(self, scenario: int, text: str, seed: int) -> Outcome:
+    def run(self, scenario: int, text: str, seed: int, backend: str) -> Outcome:
         tasks, results = self._pipes()
         try:
             known = scenario in self._sent
-            pickle.dump((scenario, None if known else text, seed), tasks)
+            pickle.dump((scenario, None if known else text, seed, backend), tasks)
             tasks.flush()
             self._sent.add(scenario)
             outcome: Outcome = pickle.load(results)
