@@ -164,7 +164,7 @@ result.export("out.csv", format="csv")   # explicit format override
 | Backend | What it is |
 |---|---|
 | `"simpy"` | The reference implementation. It is the default, always installed, and runs the whole model, including the live and text dashboards. |
-| `"rust"` | The native engine of [ADR-0008](adr/0008-rust-des-engine-mvp.md), from the optional package installed with `pip install smolpy[rust]`. It runs headless. |
+| `"rust"` | The native engine of [ADR-0008](adr/0008-rust-des-engine-mvp.md), from the optional package `smolpy-engine-rs` (`pip install smolpy-engine-rs`). It runs headless. |
 
 - **What a backend can run is checked before the run.** Every backend declares what it supports: node kinds, traffic kinds, patterns and metrics. A scenario that uses anything else is rejected with a `ScenarioError` naming the element, for example `poll a -> meter: the rust backend does not support poll (Modbus TCP)`.
 - **A missing backend is an error.** When a backend is not installed, selecting it raises `BackendUnavailable` with the install command.
@@ -173,7 +173,7 @@ result.export("out.csv", format="csv")   # explicit format override
 **The Rust backend so far** runs adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes. It covers the metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth` and `utilization`.
 - **Same results as SimPy.** Deterministic scenarios give SimPy's results bit for bit. Random traffic uses the same streams and distributions with the engine's own generator, so there the results agree statistically.
 - **Not in it yet.** MQTT, Modbus and PROFINET come in Phase 5 of the [roadmap](roadmap.md).
-- **Not on PyPI yet.** Until it is published, build it from the repository with a Rust toolchain:
+- **Install** it with `pip install smolpy-engine-rs`. It is released together with `smolpy`, with the same version, starting with the first release after v1.7.0. Wheels exist for Linux x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64. To build it from the repository instead, with a Rust toolchain:
 
 ```bash
 uvx maturin build --release -m rust/smolpy-engine-rs/Cargo.toml -o dist/

@@ -32,7 +32,7 @@ This ADR applies **only if the ADR-0006 decision gate is met**, i.e. if optimise
 
 **Distribution**
 - **A — one `smolpy` package that includes the native extension.** Everyone needs a platform-specific wheel. Platforms without one would need a Rust toolchain to install SMOLPy at all.
-- **B — separate optional package `smolpy-engine-rs`, installed with `pip install smolpy[rust]`.** **Chosen.**
+- **B — separate optional package `smolpy-engine-rs`, installed with `pip install smolpy[rust]`.** **Chosen.** *(Until the first release of `smolpy-engine-rs` it is installed as `pip install smolpy-engine-rs`. The `smolpy[rust]` extra is added once the package is on PyPI, because `uv.lock` cannot refer to a package that does not exist yet.)*
     - `smolpy` stays pure Python and installs everywhere.
     - Its build and release pipeline stays unchanged.
     - The Rust backend simply reports *not installed* when absent.
@@ -170,7 +170,16 @@ Raw results: `benchmarks/results/2026-11-15-1255-rust-jaws-zbook-stop-criterion.
         - the distributions as Python's `random` module computes them.
     - **Result.** Against SimPy with 30 replications each, means agree within 0.7 % on `random-load` (Poisson, bursty, IMIX) and pass the comparison on the new `groups` scenario (all three batch sizes, IMIX, priorities). Deterministic scenarios stay bit-exact.
 6. **The research targets B3 and B4** with `--backend rust`. *(Done, 2026-11-15: both are met. B4 at 100 M frames runs in 310 s against a 30 min limit, and 1 000 × B3 at 1 M frames in 413 s on 8 cores against 30 min. Details are in [Benchmarks](../benchmarks.md#research-targets-on-the-rust-engine-adr-0008-step-6).)*
-7. **Wheels and CI,** as below. *(CI done early, with step 4: a `rust` job in `ci.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test`. It builds the module with maturin and runs the equivalence suite against SimPy, and it fails if the Rust backend is not installed, so the suite cannot skip it silently. The wheels and their release remain. Since 2026-11-15 every release also gets a GitHub Release, created by `github-release.yml` once the tag is on PyPI, with generated notes and the `smolpy` sdist and wheel. The `smolpy-engine-rs` wheels are to be attached to the same release.)*
+7. **Wheels and CI,** as below. *(CI done early, with step 4: a `rust` job in `ci.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test`. It builds the module with maturin and runs the equivalence suite against SimPy, and it fails if the Rust backend is not installed, so the suite cannot skip it silently. Since 2026-11-15 every release also gets a GitHub Release, created by `github-release.yml` once the tag is on PyPI, with generated notes and the `smolpy` sdist and wheel.)*
+
+    *Done on 2026-11-15, publication pending the first release:*
+    - **`rust-wheels.yml`** builds one abi3 wheel per platform, for every Python from 3.10: Linux x86_64 and aarch64 (manylinux), macOS arm64 and x86_64, and Windows x86_64. It also builds an sdist.
+        - The wheels the runner can execute (Linux x86_64, macOS arm64, Windows) are installed and smoke-tested: a small scenario must be bit-exact with SimPy.
+        - It runs on every pull request that touches `rust/`.
+    - **`publish.yml`** builds the engine with the release's version and publishes it to PyPI next to `smolpy`, then attaches its files to the GitHub Release. `smolpy` does not wait for the engine: if the engine fails to publish, `smolpy` is released all the same, and the release lacks only the engine's files.
+    - **A test run.** Run by hand with `target: testpypi`, `publish.yml` publishes only the engine to TestPyPI, as a dev version after the latest tag.
+    - **Versions.** The engine has `smolpy`'s version, set from the tag in both `pyproject.toml` and `Cargo.toml`. At import, `smolpy` also checks that the module reads the Scenario IR version it writes (`IR_VERSION`). A mismatch makes the backend unavailable, with a message naming both versions.
+    - **Done by hand, once:** a pending trusted publisher for `smolpy-engine-rs` on PyPI (workflow `publish.yml`, environment `pypi`) and on TestPyPI (workflow `publish.yml`, environment `testpypi`).
 
 ### Build and release
 

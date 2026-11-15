@@ -1,5 +1,15 @@
 name: Publish to PyPI
 
+# A release (a pushed tag v*, or release.yml passing its tag) publishes:
+#   - smolpy to PyPI;
+#   - the smolpy-engine-rs wheels and sdist to PyPI, same version (ADR-0008);
+#   - the GitHub Release with every file.
+# smolpy does not wait for the engine: if publishing the engine fails, smolpy
+# is still released and the GitHub Release is created without the engine.
+#
+# Run by hand (target: testpypi), it only publishes the engine to TestPyPI, as
+# a dev version after the latest tag, to test the wheels before a release.
+
 on:
   push:
     tags:
@@ -10,15 +20,62 @@ on:
         description: The tag being released (release.yml passes it; a tag push has it as its ref)
         required: false
         type: string
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Test publication of the smolpy-engine-rs wheels (releases go through Release)
+        required: true
+        type: choice
+        options:
+          - testpypi
+        default: testpypi
 
 jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.v.outputs.release }}
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # to find the latest tag
+
+      # In a called workflow github.event_name is the caller's, so the test
+      # mode is recognised by its input, not by the event.
+      - name: Work out the version
+        id: v
+        env:
+          TEST: ${{ inputs.target == 'testpypi' }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          RUN: ${{ github.run_number }}
+        run: |
+          if [ "$TEST" = "true" ]; then
+            LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
+            IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+            VERSION="${MAJOR}.${MINOR}.$((PATCH + 1)).dev${RUN}"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            VERSION="${TAG#v}"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION (release: $([ "$TEST" = "true" ] && echo no || echo yes))"
+
   build:
-    name: Build distribution
+    name: Build smolpy
+    needs: version
+    if: ${{ needs.version.outputs.release == 'true' }}
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ needs.version.outputs.tag }}
           fetch-depth: 0  # needed for hatch-vcs to read git tags
 
       - name: Install uv
@@ -36,7 +93,7 @@ jobs:
           path: dist/
 
   publish:
-    name: Publish to PyPI
+    name: Publish smolpy to PyPI
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
@@ -55,11 +112,44 @@ jobs:
         with:
           attestations: false
 
+  engine-wheels:
+    name: Build smolpy-engine-rs
+    needs: version
+    uses: ./.github/workflows/rust-wheels.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      ref: ${{ needs.version.outputs.tag }}
+
+  publish-engine:
+    name: Publish smolpy-engine-rs to ${{ needs.version.outputs.release == 'true' && 'PyPI' || 'TestPyPI' }}
+    needs: [version, engine-wheels]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.version.outputs.release == 'true' && 'pypi' || 'testpypi' }}
+    permissions:
+      id-token: write  # required for OIDC trusted publishing
+
+    steps:
+      - name: Download the wheels and sdist
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: ${{ needs.version.outputs.release == 'true' && 'https://upload.pypi.org/legacy/' || 'https://test.pypi.org/legacy/' }}
+          attestations: false
+
   github-release:
     name: GitHub Release
-    needs: publish  # only once the tag is on PyPI
+    needs: [version, publish, publish-engine]
+    # only once smolpy is on PyPI; with the engine's files if it is there too
+    if: ${{ always() && needs.publish.result == 'success' }}
     permissions:
       contents: write
     uses: ./.github/workflows/github-release.yml
     with:
-      tag: ${{ inputs.tag || github.ref_name }}
+      tag: ${{ needs.version.outputs.tag }}
+      engine: ${{ needs.publish-engine.result == 'success' }}

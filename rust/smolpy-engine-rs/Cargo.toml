@@ -3,10 +3,13 @@ name = "smolpy-engine-rs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Python bindings of SMOLPy's native simulation engine (ADR-0008)"
+publish = false  # shipped as the Python package smolpy-engine-rs, not on crates.io
 
 [dependencies]
 pyo3 = { version = "0.30.1", features = ["extension-module", "abi3-py310"] }
-smol-engine = { version = "0.1.0", path = "../smol-engine" }
+smol-engine = { path = "../smol-engine" }  # same workspace; its version follows the release
 
 [lib]
 name = "smolpy_engine_rs"

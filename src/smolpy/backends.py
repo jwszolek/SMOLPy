@@ -8,11 +8,14 @@ silently.
 
 - ``simpy``: the reference implementation, always available.
 - ``rust``: the native engine of ADR-0008, from the optional package
-  ``smolpy-engine-rs`` (``pip install smolpy[rust]``). It declares its own
-  capabilities, so this module never claims more than the engine supports.
+  ``smolpy-engine-rs`` (``pip install smolpy-engine-rs``). It declares its
+  own capabilities, so this module never claims more than the engine
+  supports, and the Scenario IR version it reads, which must be this
+  smolpy's.
 
 The Rust module's contract is::
 
+    smolpy_engine_rs.IR_VERSION: int      # the Scenario IR version it reads
     smolpy_engine_rs.CAPABILITIES: dict   # the fields of Capabilities, as lists
     smolpy_engine_rs.run(scenario_json: str) -> (metrics, events, wall_s)
 
@@ -101,16 +104,26 @@ class RustBackend:
 
     name = "rust"
     module_name = "smolpy_engine_rs"
-    install = "pip install smolpy[rust]"
+    install = "pip install smolpy-engine-rs"
 
     def _module(self) -> ModuleType:
+        from smolpy.model import VERSION
+
         try:
-            return importlib.import_module(self.module_name)
+            module = importlib.import_module(self.module_name)
         except ImportError as exc:
             raise BackendUnavailable(
                 f"the rust backend is not installed: {self.install}"
                 f" (the {self.module_name} module could not be imported: {exc})"
             ) from exc
+        reads = getattr(module, "IR_VERSION", None)
+        if reads != VERSION:
+            raise BackendUnavailable(
+                f"the installed smolpy-engine-rs {getattr(module, '__version__', '?')} reads"
+                f" Scenario IR version {reads}, but this smolpy writes version {VERSION}:"
+                " install the smolpy-engine-rs that matches this smolpy"
+            )
+        return module
 
     def available(self) -> bool:
         try:

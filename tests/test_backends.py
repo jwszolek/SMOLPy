@@ -87,7 +87,7 @@ def test_simulate_on_the_default_backend_is_simpy() -> None:
 def test_rust_reports_that_it_is_not_installed(no_rust) -> None:
     assert "rust" not in backends.installed()
     with pytest.raises(
-        BackendUnavailable, match=r"rust backend is not installed: pip install smolpy\[rust\]"
+        BackendUnavailable, match="rust backend is not installed: pip install smolpy-engine-rs"
     ):
         _net().simulate(duration=50, backend="rust")
     with pytest.raises(BackendUnavailable, match="not installed"):
@@ -206,3 +206,17 @@ def test_cli_backend(tmp_path) -> None:
     script.write_text("print('hi')\n")
     done = _smolpy("--backend", "simpy", str(script))
     assert done.returncode == 1 and "--backend apply to .smol files" in _flat(done)
+
+
+def test_rust_must_read_this_ir_version(monkeypatch) -> None:
+    import types
+
+    fake = types.ModuleType("smolpy_engine_rs")
+    fake.IR_VERSION = 1  # type: ignore[attr-defined]
+    fake.__version__ = "0.0.1"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "smolpy_engine_rs", fake)
+    assert "rust" not in backends.installed()
+    with pytest.raises(
+        BackendUnavailable, match="reads Scenario IR version 1, but this smolpy writes version 2"
+    ):
+        backends.get("rust")

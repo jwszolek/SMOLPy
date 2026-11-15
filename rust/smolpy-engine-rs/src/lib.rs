@@ -2,6 +2,7 @@
 //! `smolpy.backends` (ADR-0008).
 //!
 //! - `CAPABILITIES`: what the engine supports, as `smolpy.backends.Capabilities`.
+//! - `IR_VERSION`: the Scenario IR version it reads.
 //! - `run(scenario_json)`: `(metrics, events, wall_s)`, with the GIL released
 //!   for the whole run.
 //! - `_ms_to_ns`, `_transmission_ns`, `_propagation_ns`, `_instants`, `_ratio`,
@@ -88,7 +89,13 @@ fn smolpy_engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     d.set_item("notes", notes)?;
     d.set_item("half_duplex", false)?;
     m.add("CAPABILITIES", d)?;
-    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    // the package version as PyPI writes it: Cargo's 1.7.1-dev.12 is 1.7.1.dev12
+    m.add(
+        "__version__",
+        env!("CARGO_PKG_VERSION").replace("-dev.", ".dev"),
+    )?;
+    // the Scenario IR version the engine reads; smolpy checks it matches its own
+    m.add("IR_VERSION", smol_engine::scenario::VERSION)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add_function(wrap_pyfunction!(_ms_to_ns, m)?)?;
     m.add_function(wrap_pyfunction!(_transmission_ns, m)?)?;
