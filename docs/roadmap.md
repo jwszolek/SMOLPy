@@ -92,12 +92,23 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - Step 5: the equivalence suite in `tests/equivalence/` compares every installed backend against SimPy. With SimPy alone it compares SimPy against itself in about 5 s.
     - **Scenarios.** Three deterministic scenarios are compared sample by sample, exactly (since ADR-0007 step 8). Two stochastic ones are compared with 30 replications per backend, using Welch's interval (`smolpy.stats.diff_ci`) and a 2 % limit. Together they cover every node kind, traffic kind and metric.
     - **Self-checks.** Tests check that the harness detects a 2 ns latency change, a 3 % load change and a slower link.
-    - **False failures.** With independent seeds, two correct backends fail a stochastic scenario by chance about once in 10 seed blocks, since each scenario has 3–4 metrics at a 95 % level. The fixed seeds make CI stable, but a failure of a second backend near the limit needs a second seed block before it counts as a difference.
+    - **False failures.** With 95 % per metric, two correct backends failed a stochastic scenario by chance about once in 10 seed blocks, since each scenario has 3–4 metrics. Since 2026-11-15 each metric gets the Bonferroni level `1 − 0.05/k`, and it is once in 40, measured over 20 blocks per scenario. A failure near the limit still deserves a second seed block before it counts as a difference.
 - **Exit criteria:**
     - `runs=` and `run_many()` are available.
     - Batch throughput scales with cores: 8 workers are 5× faster.
     - The equivalence suite is ready for a second backend.
     - `benchmarks compare` waits for that backend, as ADR-0009 says.
+
+## Before Phase 4: model revisions
+
+Decided before the Rust engine, so that it implements the final model once:
+
+- **[ADR-0010](adr/0010-ethernet-frames-on-the-wire.md): Ethernet frames on the wire (done).**
+    - Frame sizes run from the destination MAC to the FCS, are at least 64 B, and carry an 802.1Q tag when the priority is above 0.
+    - Every frame also takes a preamble and SFD (8 B) and an inter-frame gap (12 B) on the link, so a link carries what real Ethernet carries: 148 809 frames of 64 B per second at 100 Mb/s, not 195 312.
+    - The IR is version 2.
+- **ADR-0009, amended (done):** Bonferroni levels in the stochastic comparison.
+- **ADR-0004, amended (done):** the ns-3 backend computes SMOLPy's own metric definitions. It does not use FlowMonitor's, and the ADR records how they differ.
 
 ## Phase 4: Rust DES engine, MVP ([ADR-0008](adr/0008-rust-des-engine-mvp.md))
 

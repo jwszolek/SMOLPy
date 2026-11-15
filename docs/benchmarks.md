@@ -272,6 +272,33 @@ The SimPy engine moved from float µs to integer nanoseconds ([Model Semantics �
 | B4 | on | 4 806 383 | `ebcf601c4d085453` | `15127f118dae037b` |
 | B4 | off | 4 800 373 | `02af5a54a6a9b70d` | `44136fa355b3678a` |
 
+## Ethernet frames on the wire (ADR-0010)
+
+Frames now carry their FCS and, with a priority, an 802.1Q tag. Every frame also takes a preamble, SFD and inter-frame gap on the link ([ADR-0010](adr/0010-ethernet-frames-on-the-wire.md)).
+
+**Run time.**
+- **The gap costs no extra event.** It is added to the next frame's transmission timeout.
+- **No slowdown.** B3 at 200 k frames with metrics on, measured A/B against the previous commit with 3 alternating repetitions, has a median of 18.3 s against 18.9 s. The single runs range from 14.8 s to 19.9 s, so that difference is noise.
+- **A first version was 3 % slower.** It read the clock through SimPy's `now` property twice per frame and hop. The loop now reads `_now` directly.
+
+**Results.**
+- **Metrics change**, so every metrics-on hash changes: latencies include the preamble and SFD on every hop, and frames are larger.
+- **Metrics-off hashes of B1 and B2 are unchanged.** They cover only the event count, which is the same.
+- **B3 and B4 process 6 events fewer** (8 076 241 against 8 076 247 for B3). Frames now take longer on the wire, so a few more deliveries fall after the end of the run. B4 builds converged MAC tables, so there is no flooding that could explain it otherwise.
+
+**New reference hashes, 200 k frames, seed 42:**
+
+| Scenario | Metrics | Events | Output hash | Metrics hash |
+|---|---|---|---|---|
+| B1 | on | 2 600 156 | `fa12188e00b30f2f` | `f560f3e269367339` |
+| B1 | off | 2 599 996 | `e8a33879a5bbf6b7` | `44136fa355b3678a` |
+| B2 | on | 3 081 985 | `b7553cb6509ab6c8` | `de8b9a94b6b4c10d` |
+| B2 | off | 3 080 689 | `b1777c3ad5ff40af` | `44136fa355b3678a` |
+| B3 | on | 8 076 241 | `0f71bc321d823748` | `aec5aaa9d9372139` |
+| B3 | off | 8 061 141 | `bc694547192bc981` | `44136fa355b3678a` |
+| B4 | on | 4 806 377 | `65ca251c2c3cd9db` | `06a64eac51c98358` |
+| B4 | off | 4 800 367 | `5eeb1fb6fffa3dac` | `44136fa355b3678a` |
+
 ## Rust decision gate (ADR-0006 §6)
 
 | Target | Optimised SimPy | Result |

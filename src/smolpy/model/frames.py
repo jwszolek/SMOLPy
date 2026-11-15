@@ -1,34 +1,62 @@
-"""Wire frame sizes and fixed protocol constants of the model (ADR-0007).
+"""Ethernet frames on the wire and protocol frame sizes (ADR-0010).
 
 These belong to the model, not to an engine: every backend computes frame
-sizes from the scenario with exactly these formulas. Sizes exclude the
-Ethernet FCS, consistently for every protocol.
+sizes from the scenario with exactly these formulas.
+
+A **frame** is an Ethernet frame from the destination MAC to the FCS
+inclusive, as switches count it: header (14 B), an 802.1Q tag (4 B) when the
+frame has a priority above 0, payload, FCS (4 B); at least 64 B. On the
+wire each frame is preceded by a preamble and SFD (8 B) and followed by an
+inter-frame gap (12 B).
 """
 
 from __future__ import annotations
 
-ETHERNET_IP_TCP_BYTES = 54  # Ethernet (14) + IPv4 (20) + TCP (20)
+ETHERNET_HEADER_BYTES = 14
+FCS_BYTES = 4
+VLAN_TAG_BYTES = 4  # 802.1Q, on frames with a priority above 0
+MIN_FRAME_BYTES = 64
+PREAMBLE_SFD_BYTES = 8
+IFG_BYTES = 12  # inter-frame gap
+WIRE_OVERHEAD_BYTES = PREAMBLE_SFD_BYTES + IFG_BYTES  # 20 B per frame on the wire
+
+IMIX_SIZES = ((64, 0.40), (594, 0.57), (1518, 0.03))  # frame sizes, FCS included
+
+ETHERNET_IP_TCP_BYTES = ETHERNET_HEADER_BYTES + 20 + 20 + FCS_BYTES  # 58: + IPv4 + TCP
 
 PN_RT_PRIORITY = 6  # 802.1Q PCP carried by PROFINET RT cyclic frames
 PN_CYCLES_MS = tuple(2**n for n in range(10))  # 1, 2, 4, ... 512 ms
 PN_MAX_IO_BYTES = 1440
 
-MQTT_PUBACK_BYTES = 58  # Ethernet/IP/TCP + 4 B MQTT PUBACK
+MQTT_PUBACK_BYTES = max(MIN_FRAME_BYTES, ETHERNET_IP_TCP_BYTES + 4)  # 62 B, padded to 64
 
-MODBUS_REQUEST_BYTES = 65  # Ethernet/IP/TCP + MBAP (6) + FC (1) + addr (2) + quantity (2)
+MODBUS_REQUEST_BYTES = ETHERNET_IP_TCP_BYTES + 6 + 1 + 2 + 2  # 69: MBAP, FC, addr, quantity
+
+
+def padded(frame_bytes: int) -> int:
+    """A frame padded to the 64 B Ethernet minimum."""
+    return max(MIN_FRAME_BYTES, frame_bytes)
+
+
+def flow_frame_size(size: int, priority: int) -> int:
+    """A flow frame of *size* bytes (untagged, FCS included), with the 802.1Q
+    tag a priority above 0 needs."""
+    return size + (VLAN_TAG_BYTES if priority > 0 else 0)
 
 
 def mqtt_publish_frame_size(topic: str, payload_bytes: int, qos: int) -> int:
     """MQTT PUBLISH: fixed header (2) + topic length (2) + topic + packet id (QoS > 0)."""
-    return ETHERNET_IP_TCP_BYTES + 2 + 2 + len(topic) + (2 if qos > 0 else 0) + payload_bytes
+    return padded(
+        ETHERNET_IP_TCP_BYTES + 2 + 2 + len(topic) + (2 if qos > 0 else 0) + payload_bytes
+    )
 
 
 def modbus_response_frame_size(count: int) -> int:
     """Read Holding Registers response: MBAP (6) + FC (1) + byte count (1) + 2 B per register."""
-    return ETHERNET_IP_TCP_BYTES + 6 + 1 + 1 + 2 * count
+    return padded(ETHERNET_IP_TCP_BYTES + 6 + 1 + 1 + 2 * count)
 
 
 def pn_frame_size(io_bytes: int) -> int:
-    """PROFINET RT: Ethernet (14) + 802.1Q (4) + FrameID (2) + IO data + APDU status (4),
-    padded to the 60 B Ethernet minimum."""
-    return max(60, 24 + io_bytes)
+    """PROFINET RT: Ethernet (14) + 802.1Q (4) + FrameID (2) + IO data + APDU status (4)
+    + FCS (4), padded to the 64 B minimum."""
+    return padded(ETHERNET_HEADER_BYTES + VLAN_TAG_BYTES + 2 + io_bytes + 4 + FCS_BYTES)

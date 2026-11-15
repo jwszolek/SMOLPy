@@ -51,6 +51,7 @@ nav:
       - ADR-0007 Execution-Independent Scenario Model: adr/0007-execution-independent-scenario-model.md
       - ADR-0008 Rust DES Engine (MVP): adr/0008-rust-des-engine-mvp.md
       - ADR-0009 Batch Execution and Cross-Backend Validation: adr/0009-batch-execution-and-cross-backend-validation.md
+      - ADR-0010 Ethernet Frames on the Wire: adr/0010-ethernet-frames-on-the-wire.md
 
 markdown_extensions:
   - admonition

@@ -58,7 +58,7 @@ plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
 |---|---|---|
 | `to` | Adapter | Destination adapter |
 | `rate` | float | Frames per second |
-| `size` | int \| `"imix"` | Frame size in bytes, or Internet Mix distribution |
+| `size` | int \| `"imix"` | Ethernet frame size in bytes, FCS included, at least 64; or Internet Mix distribution |
 | `pattern` | str | `"constant"`, `"poisson"`, `"bursty"`, or `"batch"` |
 | `delay_ms` | float | Simulation time before this flow starts (default 0) |
 | `batch` | int \| str | Group size for `pattern="batch"`: `k`, `"geom:<mean>"`, or `"pareto:<shape>"` (default 1) |
@@ -111,8 +111,10 @@ With `pattern="batch"`, the group size is fixed (`batch=8`), geometric with a gi
 
 | Value | Description |
 |---|---|
-| integer | Fixed size in bytes (e.g. `512`, `1_518`) |
+| integer | Fixed size in bytes (e.g. `512`, `1_518`), at least 64 |
 | `"imix"` | 40 % × 64 B, 57 % × 594 B, 3 % × 1 518 B |
+
+A size is the Ethernet frame from the destination MAC to the FCS, as switch counters count it. A flow with a `priority` above 0 also carries a 4 B 802.1Q tag. On the link every frame also takes a preamble and SFD (8 B) and an inter-frame gap (12 B), so a link carries what real Ethernet carries ([ADR-0010](adr/0010-ethernet-frames-on-the-wire.md)).
 
 ## Observations
 

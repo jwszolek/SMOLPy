@@ -73,7 +73,7 @@ link <a> -- <b> speed=<mbps> length=<metres>
 flow <src> -> <dst> rate=<fps> [size=<bytes>|imix] [pattern=constant|poisson|bursty|batch] [batch=<k>|geom:<mean>|pareto:<shape>] [delay=<ms>] [priority=<0-7>]
 ```
 
-`size` defaults to `512`, `pattern` to `constant`, `delay` to `0`, `priority` (802.1Q PCP) to `0`. `batch` (default `1`) sets the group size of the `batch` pattern, in which groups of frames arrive together at Poisson instants while `rate` stays the average frames/s.
+`size` is the Ethernet frame in bytes, FCS included, at least `64` ([Model Semantics §2](model-semantics.md#2-frames)). It defaults to `512`, `pattern` to `constant`, `delay` to `0`, `priority` (802.1Q PCP) to `0`. `batch` (default `1`) sets the group size of the `batch` pattern, in which groups of frames arrive together at Poisson instants while `rate` stays the average frames/s.
 
 ### `publish` — MQTT PUBLISH (Adapter → MQTTBroker)
 

@@ -55,12 +55,12 @@ def test_samples_fall_on_multiples_of_every() -> None:
 
 
 def test_time_is_integer_nanoseconds() -> None:
-    # 10 Gb/s: a 64 B frame takes 51.2 ns, which the contract rounds to 51
+    # 10 Gb/s: preamble, SFD and a 64 B frame (72 B) take 57.6 ns, rounded to 58
     net, a, b = _pair(speed=10_000, length=3)  # prop 15 ns
     a.sends(b, rate=1_000, size=64)
     net.observe("latency", on=b, every=10)
-    latency_ns = 2 * timebase.transmission_ns(64, 10_000) + 2 * timebase.propagation_ns(3)
-    assert latency_ns == 2 * 51 + 2 * 15
+    latency_ns = 2 * timebase.transmission_ns(8 + 64, 10_000) + 2 * timebase.propagation_ns(3)
+    assert latency_ns == 2 * 58 + 2 * 15
     assert set(_values(net.simulate(duration=100), "latency:b")) == {latency_ns / 1_000}
 
 
@@ -92,30 +92,48 @@ def test_periodic_sources_do_not_drift() -> None:
 
 
 def test_frame_sizes() -> None:
-    assert frames.mqtt_publish_frame_size("plant/t", 20, qos=0) == 54 + 2 + 2 + 7 + 20
-    assert frames.mqtt_publish_frame_size("plant/t", 20, qos=1) == 54 + 2 + 2 + 7 + 2 + 20
-    assert frames.MQTT_PUBACK_BYTES == 58
-    assert frames.MODBUS_REQUEST_BYTES == 65
-    assert frames.modbus_response_frame_size(10) == 82
-    assert frames.pn_frame_size(10) == 60 and frames.pn_frame_size(100) == 124
+    # 58 B: Ethernet header (14), IPv4 (20), TCP (20), FCS (4)
+    assert frames.ETHERNET_IP_TCP_BYTES == 58
+    assert frames.mqtt_publish_frame_size("plant/t", 20, qos=0) == 58 + 2 + 2 + 7 + 20
+    assert frames.mqtt_publish_frame_size("plant/t", 20, qos=1) == 58 + 2 + 2 + 7 + 2 + 20
+    assert frames.MQTT_PUBACK_BYTES == 64  # 62 B, padded to the minimum
+    assert frames.MODBUS_REQUEST_BYTES == 69
+    assert frames.modbus_response_frame_size(10) == 86
+    assert frames.modbus_response_frame_size(1) == 68
+    # 14 + 4 (802.1Q) + 2 (FrameID) + IO + 4 (APDU status) + 4 (FCS), at least 64
+    assert frames.pn_frame_size(10) == 64 and frames.pn_frame_size(100) == 128
     assert frames.PN_RT_PRIORITY == 6
+    # a flow frame with a priority above 0 carries an 802.1Q tag
+    assert frames.flow_frame_size(100, 0) == 100 and frames.flow_frame_size(100, 3) == 104
+    assert frames.WIRE_OVERHEAD_BYTES == 8 + 12  # preamble and SFD, inter-frame gap
+
+
+def test_priority_frames_carry_a_tag() -> None:
+    net, a, b = _pair(speed=100)
+    a.sends(b, rate=1_000, size=100, priority=3)
+    net.observe("bytes_received", on=b, every=10)
+    net.observe("latency", on=b, every=10)
+    result = net.simulate(duration=15)
+    assert _values(result, "bytes_received:b")[0] == 9 * 104 / 10**6
+    _all_equal(_values(result, "latency:b"), 2 * (8 + 104) * 8 / 100)
 
 
 # §3 Links and egress queues
 
 
 def test_single_hop_latency_is_tx_plus_prop_per_link() -> None:
-    net, a, b = _pair(speed=1_000, length=100)  # tx 125 B = 1 µs, prop 0.5 µs
-    a.sends(b, rate=1_000, size=125)
+    # 8 B preamble and SFD + a 117 B frame = 125 B = 1 µs at 1 Gb/s; prop 0.5 µs
+    net, a, b = _pair(speed=1_000, length=100)
+    a.sends(b, rate=1_000, size=117)
     net.observe("latency", on=b, every=10)
     _all_equal(_values(net.simulate(duration=100), "latency:b"), 3.0)
 
 
 def test_propagation_does_not_hold_the_link() -> None:
-    # A frame every 1.2 µs, 1 µs on the wire, 5 µs in flight: if propagation
-    # held the link the queue would grow without bound and latency with it.
+    # A frame every 1.2 µs, 1 µs on the wire (+ 0.096 µs gap), 5 µs in flight:
+    # if propagation held the link the queue would grow without bound.
     net, a, b = _pair(speed=1_000, length=1_000)
-    a.sends(b, rate=1e6 / 1.2, size=125)
+    a.sends(b, rate=1e6 / 1.2, size=117)
     net.observe("latency", on=b, every=0.1)
     net.observe("queue_depth", on=net._nodes["sw"], every=0.1)
     result = net.simulate(duration=2)
@@ -160,8 +178,8 @@ def test_profinet_first_frame_at_delay() -> None:
     net.observe("bytes_received", on=plc, every=0.5)
     values = _values(net.simulate(duration=3), "bytes_received:plc")
     assert values[:2] == [0, 0]  # t = 0.5, 1.0 ms
-    assert values[2] == pytest.approx(60e-6)  # input frame sent at t = 1 ms
-    assert values[3] == pytest.approx(60e-6)  # next one at t = 2 ms
+    assert values[2] == 64 / 10**6  # input frame (36 B of IO: 64 B) sent at t = 1 ms
+    assert values[3] == 64 / 10**6  # next one at t = 2 ms
 
 
 def test_bursty_long_run_rate() -> None:
@@ -242,8 +260,9 @@ def test_metric_definitions() -> None:
     assert received[-1] == pytest.approx(899 * 125 / 1e6)
     # the frame generated at 900 ms finishes transmission after the sample
     assert _values(result, "bytes_sent:a")[-1] == pytest.approx(899 * 125 / 1e6)
-    # links into b: one 1 000 Mb/s link carrying 1 Mb/s
-    assert _values(result, "utilization:b")[1:] == pytest.approx([0.1] * 8)
+    # links into b: one 1 000 Mb/s link occupied by (125 + 20) B per frame on the
+    # wire: 1.16 Mb/s, while the byte metrics count the 125 B frames only
+    assert _values(result, "utilization:b")[1:] == pytest.approx([0.116] * 8)
 
 
 def test_window_metrics_skip_empty_windows() -> None:
@@ -265,8 +284,9 @@ def test_modbus_latency_is_round_trip() -> None:
     net.link(slave, sw, speed=100, length=0)
     master.polls(slave, register=0, count=1, rate=10)
     net.observe("modbus_latency", on=master, every=100)
-    # request 65 B and response 64 B, each over two 100 Mb/s links
-    expected = 2 * 65 * 8 / 100 + 2 * 64 * 8 / 100
+    # request 69 B and response 68 B (+ 8 B preamble and SFD), each over two 100 Mb/s links
+    request, response = frames.MODBUS_REQUEST_BYTES, frames.modbus_response_frame_size(1)
+    expected = 2 * (8 + request) * 8 / 100 + 2 * (8 + response) * 8 / 100
     values = _values(net.simulate(duration=1_000), "modbus_latency:m")
     _all_equal(values, expected)
 
@@ -283,7 +303,7 @@ def test_mqtt_latency_is_end_to_end() -> None:
     sensor.publishes(broker, topic="t", rate=10, payload=20, qos=0)
     net.observe("latency", on=server, every=100)
     # sensor -> sw -> broker -> sw -> server: four transmissions of the PUBLISH
-    expected = 4 * frames.mqtt_publish_frame_size("t", 20, 0) * 8 / 100
+    expected = 4 * (8 + frames.mqtt_publish_frame_size("t", 20, 0)) * 8 / 100
     values = _values(net.simulate(duration=1_000), "latency:server")
     _all_equal(values, expected)
 

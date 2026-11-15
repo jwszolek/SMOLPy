@@ -142,7 +142,7 @@ def test_mac_cannot_be_derived_from_a_non_ipv4_address(ip: str) -> None:
 def test_json_is_versioned() -> None:
     data = json.loads(Network("empty").to_scenario().to_json())
     assert data["format"] == "smol-ir"
-    assert data["version"] == 1
+    assert data["version"] == 2
 
 
 @pytest.mark.parametrize(
@@ -181,7 +181,8 @@ def test_benchmark_scenario_round_trips(scenario: str) -> None:
     "mutate, message",
     [
         (lambda d: d.update(format="other"), "not a smol-ir document"),
-        (lambda d: d.update(version=2), "unsupported smol-ir version 2"),
+        (lambda d: d.update(version=3), "unsupported smol-ir version 3"),
+        (lambda d: d.update(version=1), "version 1 predates the Ethernet wire model"),
         (lambda d: d.update(extra=1), "unknown field(s) extra"),
         (lambda d: d["nodes"][0].update(kind="router"), "unknown kind 'router'"),
         (lambda d: d["nodes"][2].update(kind="hub"), "unknown kind 'hub'"),

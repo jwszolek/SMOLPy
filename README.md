@@ -165,7 +165,7 @@ plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
 |---|---|---|
 | `to` | Adapter | Destination adapter |
 | `rate` | float | Frames per second |
-| `size` | int \| `"imix"` | Frame size in bytes, or Internet Mix distribution |
+| `size` | int \| `"imix"` | Ethernet frame size in bytes, FCS included, at least 64; or Internet Mix distribution |
 | `pattern` | str | `"constant"`, `"poisson"`, `"bursty"`, or `"batch"` |
 | `delay_ms` | float | Simulation time before this flow starts (default 0) |
 | `priority` | int | 802.1Q priority (PCP) 0–7 (default 0) |
@@ -214,8 +214,10 @@ plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
 
 | Value | Description |
 |---|---|
-| integer | Fixed size in bytes (e.g. `512`, `1_518`) |
+| integer | Fixed size in bytes (e.g. `512`, `1_518`), at least 64 |
 | `"imix"` | 40 % × 64 B, 57 % × 594 B, 3 % × 1 518 B |
+
+Sizes are Ethernet frames, FCS included. On the link each frame also takes a preamble and SFD (8 B) and an inter-frame gap (12 B), so links carry what real Ethernet carries.
 
 ### Observations
 
@@ -321,17 +323,17 @@ SMOLPy models application-layer MQTT traffic on top of the standard Ethernet/IP/
 ### What is modelled
 
 - **Publisher adapters** call `publishes()` to emit periodic MQTT PUBLISH frames at a fixed rate toward an `MQTTBroker` node.
-- **The broker** receives PUBLISH frames and fans out one copy to each registered subscriber per topic (`routes()`).  QoS 0 delivers silently; QoS 1 additionally sends a PUBACK frame (58 bytes) back toward the publisher.
+- **The broker** receives PUBLISH frames and fans out one copy to each registered subscriber per topic (`routes()`).  QoS 0 delivers silently; QoS 1 additionally sends a PUBACK frame (64 bytes, the Ethernet minimum) back toward the publisher.
 - **Subscriber adapters** receive forwarded copies just like normal Ethernet frames; all standard metrics (`throughput`, `latency`, `bytes_received`) apply.
 - **`broker_queue`** samples the broker's inbound store depth — unprocessed PUBLISH frames waiting to be forwarded.  A non-zero and rising queue indicates the broker or its downstream link is becoming a bottleneck.
 
 ### Frame size formula
 
 ```
-frame_size = 54 (Ethernet+IPv4+TCP) + 2 (MQTT fixed header) + 2 (topic-length field) + len(topic) + (2 if qos > 0 else 0) + payload_bytes
+frame_size = 58 (Ethernet+IPv4+TCP+FCS) + 2 (MQTT fixed header) + 2 (topic-length field) + len(topic) + (2 if qos > 0 else 0) + payload_bytes, at least 64
 ```
 
-A typical small sensor message (`topic="plant/temperature"`, `payload=20`, `qos=1`) produces a 96-byte frame, roughly 16× smaller than a maximum-size bulk frame (1 518 B).
+A typical small sensor message (`topic="plant/temperature"`, `payload=20`, `qos=1`) produces a 101-byte frame, roughly 15× smaller than a maximum-size bulk frame (1 518 B).
 
 ### Dashboard
 
@@ -353,8 +355,8 @@ SMOLPy also models Modbus TCP — a request/response protocol, unlike MQTT's fir
 ### Frame size formula
 
 ```
-request_size  = 65 bytes                                  (constant — Ethernet/IP/TCP + MBAP + FC + address + quantity)
-response_size = 62 + 2 × register_count bytes              (grows with the number of registers read)
+request_size  = 69 bytes                                  (constant — Ethernet/IP/TCP/FCS + MBAP + FC + address + quantity)
+response_size = 66 + 2 × register_count bytes              (grows with the number of registers read; at least 64)
 ```
 
 ### Dashboard
@@ -387,7 +389,7 @@ net.observe("pn_watchdog_expiries", on=plc, every=100)
 ### Frame size formula
 
 ```
-frame_size = max(60, 14 (Ethernet) + 4 (802.1Q tag) + 2 (FrameID) + io_bytes + 4 (APDU status))
+frame_size = max(64, 14 (Ethernet) + 4 (802.1Q tag) + 2 (FrameID) + io_bytes + 4 (APDU status) + 4 (FCS))
 ```
 
 ### Not modelled

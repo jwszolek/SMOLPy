@@ -24,7 +24,7 @@ from typing import Any, ClassVar, Literal
 from smolpy.core.batch import BatchSpec
 
 FORMAT = "smol-ir"
-VERSION = 1
+VERSION = 2  # 2: Ethernet frames on the wire (ADR-0010)
 
 SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
@@ -353,6 +353,12 @@ class Scenario:
             raise ValueError("scenario must be a JSON object")
         if data.get("format") != FORMAT:
             raise ValueError(f"not a {FORMAT} document (format={data.get('format')!r})")
+        if data.get("version") == 1:
+            raise ValueError(
+                f"{FORMAT} version 1 predates the Ethernet wire model (ADR-0010): frame sizes"
+                " and link timing mean something else in version 2, so a version 1 scenario"
+                " would give different results. Rebuild it from its Network or .smol file."
+            )
         if data.get("version") != VERSION:
             raise ValueError(
                 f"unsupported {FORMAT} version {data.get('version')!r}, expected {VERSION}"

@@ -16,7 +16,7 @@ import pytest
 from smolpy.batch import BatchResult
 from smolpy.core.network import SimulationResult
 from smolpy.model import Flow
-from smolpy.stats import mean_ci
+from smolpy.stats import diff_ci, mean_ci
 
 from . import harness
 from .scenarios import DETERMINISTIC, STOCHASTIC
@@ -154,3 +154,13 @@ def test_compare_batches_detects_a_two_percent_change() -> None:
     )
     got = {m.metric for m in harness.compare_batches(loaded, _reference_batch("random-load"))}
     assert {"throughput:srv", "bytes_received:srv"} <= got
+
+
+def test_each_metric_gets_a_bonferroni_level() -> None:
+    assert harness.metric_level(0.95, 1) == 0.95
+    assert harness.metric_level(0.95, 4) == pytest.approx(0.9875)
+    batch = _reference_batch("random-load")
+    a, b = batch.scalar("latency:srv")[:15], batch.scalar("latency:srv")[15:]
+    assert diff_ci(a, b, 0.9875).high - diff_ci(a, b, 0.9875).low > (
+        diff_ci(a, b, 0.95).high - diff_ci(a, b, 0.95).low
+    )

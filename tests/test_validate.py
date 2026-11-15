@@ -113,7 +113,8 @@ INVALID = [
         ("traffic", 1),
     ),
     (_with("traffic", 1, rate=0), "rate must be a positive number", ("traffic", 1)),
-    (_with("traffic", 1, size=0), "size must be a positive number of bytes", ("traffic", 1)),
+    (_with("traffic", 1, size=0), "size must be a frame of at least 64 bytes", ("traffic", 1)),
+    (_with("traffic", 1, size=63), "size must be a frame of at least 64 bytes", ("traffic", 1)),
     (_with("traffic", 1, pattern="burst"), "invalid pattern 'burst'", ("traffic", 1)),
     (_with("traffic", 1, pattern="batch"), "needs a batch size", ("traffic", 1)),
     (

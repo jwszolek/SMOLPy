@@ -41,9 +41,10 @@ def _vals(result, key):
 
 class TestApi:
     def test_frame_size_padded_to_ethernet_minimum(self) -> None:
-        assert pn_frame_size(10) == 60
-        assert pn_frame_size(36) == 60
-        assert pn_frame_size(100) == 124
+        assert pn_frame_size(10) == 64
+        assert pn_frame_size(36) == 64  # 14 + 4 + 2 + 36 + 4 + 4: exactly the minimum
+        assert pn_frame_size(35) == 64
+        assert pn_frame_size(100) == 128
 
     def test_controls_adds_spec(self) -> None:
         net = Network("t")
@@ -53,8 +54,8 @@ class TestApi:
         (spec,) = plc.profinet_specs
         assert isinstance(spec.device, ProfinetDevice)
         assert (spec.cycle_ms, spec.hold) == (8, 5)
-        assert spec.input_frame_size == 60
-        assert spec.output_frame_size == 224
+        assert spec.input_frame_size == 64
+        assert spec.output_frame_size == 228
 
     @pytest.mark.parametrize(
         "kwargs",

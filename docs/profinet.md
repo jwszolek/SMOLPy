@@ -42,10 +42,10 @@ All three are observed on the **consuming** node: on a controller they cover inp
 ## Frame size
 
 ```
-frame_size = max(60, 14 (Ethernet) + 4 (802.1Q tag) + 2 (FrameID) + io_bytes + 4 (APDU status))
+frame_size = max(64, 14 (Ethernet) + 4 (802.1Q tag) + 2 (FrameID) + io_bytes + 4 (APDU status) + 4 (FCS))
 ```
 
-`io_bytes` includes the per-submodule IOPS/IOCS status bytes. As elsewhere in SMOLPy, the FCS, preamble and inter-frame gap are not counted.
+`io_bytes` includes the per-submodule IOPS/IOCS status bytes. As for every frame, the size runs from the destination MAC to the FCS. On the link each frame also takes a preamble and SFD (8 B) and an inter-frame gap (12 B); see [Model Semantics §2–3](model-semantics.md#2-frames).
 
 ## Prioritisation on and off
 

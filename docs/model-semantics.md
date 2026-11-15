@@ -15,14 +15,14 @@ The scenario keeps the units users give. Engines convert them as follows:
 | durations, delays, cycles | ms | `round(ms × 10⁶)` |
 | sampling period `every` | ms | `ms × 10⁶`, exact; each instant is rounded |
 | propagation delay | m | `round(length × 5)`, at 2 · 10⁸ m/s |
-| transmission time | bytes, Mb/s | `round(size × 8 000 / speed)` |
+| transmission time of `bytes` | bytes, Mb/s | `round(bytes × 8 000 / speed)`, for preamble, SFD and frame, and for the gap ([§3](#3-links-and-egress-queues)) |
 | interval of a rate | per second | `10⁹ / rate`, exact; each instant is rounded |
 | random draws | — | each draw is rounded when it becomes a delay |
 
 **How rounding works:**
 - **The value of a number.** A scenario number is taken at its shortest decimal value, as written in the scenario JSON. For example, `0.1` ms is exactly 1/10 ms, not the nearest binary float.
 - **Exact, then rounded once.** Every quantity is computed exactly from those values, then rounded once to the nearest nanosecond, with **ties to even**. This is `round()` in Python and `round_ties_even` in Rust.
-- **Transmission times are exact** at 10 Mb/s, 100 Mb/s and 1 Gb/s. At 10 Gb/s they are exact for sizes divisible by 5 B, and otherwise rounded by at most 0.5 ns, e.g. 51.2 ns becomes 51 ns for 64 B. That rounding is part of the model.
+- **Transmission times are exact** at 10 Mb/s, 100 Mb/s and 1 Gb/s. At 10 Gb/s they are exact for sizes divisible by 5 B, and otherwise rounded by at most 0.5 ns, e.g. 57.6 ns becomes 58 ns for a 64 B frame with its preamble and SFD. That rounding is part of the model.
 - **No drift.** A periodic source's *k*-th instant is `start + round(k · period)`, with the period exact. It is therefore within 0.5 ns of its exact schedule however long the run. This covers constant flows, publishes, polls, PROFINET cycles and metric samples.
 
 **Other rules:**
@@ -36,20 +36,27 @@ The scenario keeps the units users give. Engines convert them as follows:
 
 A frame carries its source and destination MAC, its size in bytes, an **origin time**, and a priority (802.1Q PCP 0–7).
 
-**Wire sizes exclude the FCS, the preamble and the inter-frame gap.** Transmission time is `size × 8 / speed`. Real Ethernet adds 24 B per frame on the wire, so the model's link capacity is slightly higher than a real link's (see [Open issues](#open-issues)).
+**A frame's size is the Ethernet frame from the destination MAC to the FCS inclusive** ([ADR-0010](adr/0010-ethernet-frames-on-the-wire.md)), as switch counters count it:
+- header (14 B);
+- an 802.1Q tag (4 B) on every frame with a priority above 0;
+- the payload;
+- the FCS (4 B);
+- at least 64 B.
+
+On the wire it is preceded by a preamble and SFD and followed by an inter-frame gap ([§3](#3-links-and-egress-queues)).
 
 | Frame | Size (B) | Priority |
 |---|---|---|
-| `Flow` | `size`, or IMIX per frame: 64 B with p = 0.40, 594 B with p = 0.57, 1 518 B with p = 0.03 | `priority` |
-| MQTT PUBLISH | 54 + 2 + 2 + len(topic) + (2 if qos > 0) + payload | 0 |
+| `Flow` | `size`, or IMIX per frame: 64 B with p = 0.40, 594 B with p = 0.57, 1 518 B with p = 0.03; + 4 B tag when `priority` > 0 | `priority` |
+| MQTT PUBLISH | max(64, 58 + 2 + 2 + len(topic) + (2 if qos > 0) + payload) | 0 |
 | MQTT PUBLISH forwarded by the broker | same size as the PUBLISH received | 0 |
-| MQTT PUBACK | 58 | 0 |
-| Modbus request (FC 03) | 65 | 0 |
-| Modbus response | 62 + 2 × count | 0 |
-| PROFINET RT cyclic frame | max(60, 24 + io_bytes) | 6 |
+| MQTT PUBACK | 64 (62, padded) | 0 |
+| Modbus request (FC 03) | 69 | 0 |
+| Modbus response | max(64, 66 + 2 × count) | 0 |
+| PROFINET RT cyclic frame | max(64, 28 + io_bytes) | 6 |
 
-- **54 B is the Ethernet, IPv4 and TCP headers** (14 + 20 + 20).
-- **Padding:** only PROFINET frames are padded to the 60 B Ethernet minimum, and only they include an 802.1Q tag. A `Flow` with a `priority` does not grow by 4 B.
+- **58 B is the Ethernet header, IPv4, TCP and FCS** (14 + 20 + 20 + 4). PROFINET's 28 B are the header, tag, FrameID, APDU status and FCS (14 + 4 + 2 + 4 + 4).
+- **`Flow.size` is the untagged frame, FCS included.** It must be at least 64 B. A smaller size is a validation error, not padded. There is no upper limit, so jumbo frames are possible.
 - **Formulas:** all are implemented in `smolpy.model.frames`.
 
 **The origin time** is the instant the data was created:
@@ -65,10 +72,11 @@ A frame carries its source and destination MAC, its size in bytes, an **origin t
 - **A link is full duplex.** Each direction is an independent channel with its own egress queue and transmitter at the sending node. Half-duplex links are valid in the model but not supported by the SimPy backend, which rejects them.
 - **Transmitter:**
     - it takes the next frame from its queue;
-    - it holds the wire for `size × 8 / speed`;
-    - the frame then needs the propagation delay to arrive.
-- **Propagation does not occupy the wire.** The next transmission starts as soon as the previous one's last bit has left.
-- **Arrival time.** A frame that starts transmission at `t` arrives at the far end at `t + tx + prop`.
+    - it sends the preamble and SFD (8 B) and the frame: `tx = tx(8 + size)`;
+    - it then keeps the wire idle for the inter-frame gap (12 B): `gap = tx(12)`. The next frame starts no earlier than the end of the gap.
+    - Both are rounded as in [§1](#1-time-and-units). A link therefore carries at most `speed / ((size + 20) × 8)` frames per second, as real Ethernet does: 148 809 frames of 64 B per second at 100 Mb/s.
+- **Propagation does not occupy the wire.** The next transmission starts as soon as the previous frame's gap has ended.
+- **Arrival time.** A frame whose preamble starts at `t` arrives at the far end, FCS included, at `t + tx + prop`. The gap does not delay it.
 - **Each egress queue has 8 strict priority classes:**
     - a higher class is always served first;
     - frames within a class are served first in, first out;
@@ -76,7 +84,7 @@ A frame carries its source and destination MAC, its size in bytes, an **origin t
 - **`qos="fifo"`** on a switch puts every frame into one class on that switch's egress queues. All other nodes, including end stations, use the 8 classes.
 - **Queues are unbounded,** so no frame is ever dropped for lack of buffer.
 
-*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, existing priority tests in `test_profinet.py`.*
+*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`.*
 
 ## 4. Switches
 
@@ -158,13 +166,13 @@ An end station sends everything over its single link, in the egress queue order 
 
 | Metric | Value at a sample | Unit |
 |---|---|---|
-| `throughput` | bytes the adapter accepted in the window × 8 / window length | Mb/s |
+| `throughput` | frame bytes the adapter accepted in the window × 8 / window length | Mb/s |
 | `latency` | mean of (arrival − origin time) over frames the adapter accepted in the window, of any kind. *Window metric.* | µs |
-| `bytes_received` | total bytes the adapter accepted so far / 10⁶ | MB |
-| `bytes_sent` | total bytes whose transmission on the adapter's link has completed so far / 10⁶ | MB |
+| `bytes_received` | total frame bytes the adapter accepted so far / 10⁶ | MB |
+| `bytes_sent` | total frame bytes whose transmission on the adapter's link has completed so far / 10⁶ | MB |
 | `modbus_latency` | mean of (arrival − origin time) over Modbus responses the adapter accepted in the window: the round-trip time from generating the request. *Window metric.* | µs |
 | `queue_depth` | frames waiting in all egress queues of the switch, not counting frames being transmitted | frames |
-| `utilization` | bits whose transmission completed on the links *into* the node in the window, as a share of those links' combined capacity over the window | % |
+| `utilization` | wire bits, frame + 20 B per frame, of the frames whose transmission completed on the links *into* the node in the window, as a share of those links' combined capacity over the window. A saturated link shows 100 %. | % |
 | `broker_queue` | frames delivered to the broker and not yet processed. The broker has no service time, so this is non-zero only for frames arriving at the sample instant itself. | frames |
 | `pn_latency` | mean PROFINET latency over cyclic frames received in the window. *Window metric.* | µs |
 | `pn_jitter` | maximum jitter over the window. *Window metric.* | µs |
@@ -178,7 +186,9 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
 - **`latency`, `modbus_latency`, `pn_latency`:** `Σ latency_ns / (count × 1 000)` µs.
 - **`pn_jitter`:** `max jitter_ns / 1 000` µs.
 - **`bytes_sent`, `bytes_received`:** `bytes / 10⁶` MB.
-- **`utilization`:** `bits × 10⁵ / (Σ speed × W)` %, where `speed` is in Mb/s.
+- **`utilization`:** `wire_bits × 10⁵ / (Σ speed × W)` %, where `speed` is in Mb/s.
+
+**Frame bytes, not wire bytes.** The byte metrics count frames, header to FCS, without the preamble, SFD and gap, as switch and NIC counters do. So a saturated 100 Mb/s link carrying 64 B frames shows 76.2 Mb/s of `throughput` and 100 % `utilization`.
 - **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`) as they are.
 
 *Tests: `test_metric_definitions`, `test_window_metrics_skip_empty_windows`, `test_modbus_latency_is_round_trip`, `test_mqtt_latency_is_end_to_end`, `test_watchdog_expiries_are_cumulative`.*
@@ -209,6 +219,6 @@ Every disagreement between this page and the intended model is listed here, with
 | 1 | `bursty` does not keep `rate` as its long-run average | The mean ON/OFF cycle per frame was `1.5 T`, so the long-run rate was `rate / 1.5`. | resolved in ADR-0007 step 5: the silence is `T · L · U(0.3, 1.2)` |
 | 2 | `mode="cut-through"` is not modelled | Accepted and ignored. Every switch is store-and-forward. | accepted: ignored until needed |
 | 3 | Hubs were not a shared medium | They had per-port queues with strict priority, and collisions were approximated as simultaneous arrivals, so `collision_rate` almost never counted any. | resolved: hubs and `collision_rate` removed. A shared segment would come back as a new node kind with half-duplex links and CSMA/CD. |
-| 4 | Wire overhead is not counted | Preamble, SFD, FCS and inter-frame gap (24 B per frame) are not on the wire, so the model's link capacity is higher than real by 24 B per frame: about 2 % for 1 518 B frames and 40 % for 60 B frames. | known simplification |
+| 4 | Wire overhead was not counted | Preamble, SFD and inter-frame gap were not on the wire, protocol sizes left the FCS out, frames could be shorter than 64 B, and flows with a priority had no tag. A link carried 31 % more 64 B frames than real Ethernet. | resolved in ADR-0010: frames on the wire as real Ethernet |
 | 5 | One random stream for all sources | Adding or reordering one source changed the draws of all others. | resolved in ADR-0007 step 5: one stream per traffic statement |
 | 6 | SimPy did not use integer nanoseconds | Time was float µs. Periodic sources added the interval to the clock, and metrics were float sums. | resolved in ADR-0007 step 7: SimPy runs on integer nanoseconds |

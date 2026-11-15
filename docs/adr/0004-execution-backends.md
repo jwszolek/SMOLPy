@@ -114,7 +114,7 @@ smolpy backends                             # list backends and their capabiliti
 | `switch` (store-and-forward) | Node with a learning bridge over one device per port |
 | `switch mode=cut-through` | **unsupported** — capability error |
 | `hub` | Shared CSMA channel *(hubs and `collision_rate` were later removed; see [Model Semantics](../model-semantics.md#open-issues), open issue 3)* |
-| `link speed= length=` | Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`) |
+| `link speed= length=` | Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`). *Since ADR-0010:* `InterframeGap` = the time of 20 B at `speed` (preamble, SFD and gap, which CSMA does not model otherwise); CSMA adds the Ethernet header and FCS itself |
 | `flow` | UDP application; payload sized so the on-wire frame matches `size` (constant, Poisson, bursty patterns; `imix` sizes) |
 | `publish` / `route` | MQTT publisher / broker Applications over one persistent TCP connection per client; QoS 1 sends PUBACK |
 | `poll` | Modbus TCP master / slave Applications over one persistent TCP connection per master–slave pair (port 502), MBAP transaction IDs, Read Holding Registers (FC 03) |
@@ -131,6 +131,33 @@ smolpy backends                             # list backends and their capabiliti
 | `utilization` | ✓ | ✓ |
 | `broker_queue` | ✓ | ✓ (application-level queue in the broker app) |
 | `collision_rate` | ✓ | — (shared-medium semantics differ; see below) *(removed)* |
+
+**Metric definitions on ns-3** *(added 2026-11-15)*
+
+**Decision: the ns-3 backend computes SMOLPy's own metric definitions** ([Model Semantics §8](../model-semantics.md#8-metrics)), with the samplers of the SMOL C++ module. ns-3's FlowMonitor is not the source of any metric. The definitions stay what they are because:
+- they are what SMOLPy measures: windows per node, and PROFINET latency, jitter and watchdog;
+- ADR-0009 compares backends metric by metric, which needs the same definition on every backend;
+- adopting FlowMonitor's definitions would lose the window and PROFINET metrics.
+
+| Metric | Measured in ns-3 at |
+|---|---|
+| `throughput`, `bytes_received` | frames addressed to the node, received by its device: frame bytes, header to FCS (`MacRx`) |
+| `bytes_sent` | frames whose transmission on the node's device has completed (`PhyTxEnd`), frame bytes |
+| `latency` | from the origin time, carried in a packet tag set when the data is created, to reception by the device. Queueing at the sender is included, as in SimPy. |
+| `modbus_latency` | the same, with the request's origin tag copied into the response |
+| `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` | the SMOL PROFINET consumer application, with the definitions of Model Semantics §7 |
+| `queue_depth` | frames waiting in the egress queues of the switch's devices, not counting the frame in transmission |
+| `utilization` | frame + 20 B per frame completed on the links into the node, as a share of their capacity (ADR-0010) |
+| `broker_queue` | the queue of the broker application |
+
+- **How FlowMonitor differs.** This is for comparisons with ns-3 literature, and is to be checked against the pinned release. FlowMonitor's statistics:
+    - are per flow (IP 5-tuple), not per node and window;
+    - are cumulative over the run;
+    - are measured at the IP layer: bytes from the IP header, without the Ethernet header and FCS, and delay from IP send to IP receive;
+    - have a jitter that is the sum of |delay_i − delay_(i−1)| over consecutive packets (IPDV), not the deviation from a cycle.
+
+    Numbers from FlowMonitor and from SMOLPy are therefore different quantities, and the generated scenario does not mix them.
+- **Per-flow metrics comparable with FlowMonitor**, such as a flow latency and IPDV (RFC 3393), are a candidate for a later decision. They are not part of this one.
 
 ### Cross-backend consistency tests
 
