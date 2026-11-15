@@ -123,7 +123,7 @@ Decided before the Rust engine, so that it implements the final model once:
 - Research targets from ADR-0006 are met.
 - Wheels are published for Linux, macOS and Windows.
 
-**Status:** ADR-0008 accepted on 2026-11-15 and brought up to date: integer nanoseconds, IR version 2, frames on the wire (ADR-0010), bit-exact deterministic equivalence. Steps 1–5 of 7 are done.
+**Status:** ADR-0008 accepted on 2026-11-15 and brought up to date: integer nanoseconds, IR version 2, frames on the wire (ADR-0010), bit-exact deterministic equivalence. Steps 1–6 of 7 are done.
 - Step 2: `smolpy.backends` is the backend registry. `backend=` is available on `simulate()` and `run_many()`, and `--backend` on `smolpy run`. Each backend's capabilities are checked before the run, and the Rust backend reports clearly when it is not installed.
 - Step 3: `rust/` holds the engine `smol-engine` and the Python module `smolpy-engine-rs`. The engine reproduces SimPy's event graph, so it gives SimPy's results bit for bit, down to the event count. It covers adapters, switches, links, constant flows and six metrics.
 - **Step 4, the stop criterion: go.** B1 at 10 M frames runs in 4.93 s against 200.8 s on SimPy, 40.8× faster where 10× was required, with an identical output hash.
@@ -132,7 +132,18 @@ Decided before the Rust engine, so that it implements the final model once:
 
 - Step 5: random patterns (`poisson`, `bursty`, `batch`) and IMIX in Rust. Each flow has its own generator, seeded from the same stream seed as SimPy. The engines agree statistically on random traffic and bit for bit on deterministic scenarios.
 
-Next is step 6: the research targets B3 and B4 with `--backend rust`.
+- **Step 6, the research targets: both met.**
+    - B4 (10 201 nodes) at 100 M frames runs in 310 s, against a 30 min limit; SimPy took 106 min.
+    - 1 000 × B3 at 1 M frames, on 8 cores, runs in 413 s, against a 30 min limit; SimPy took about 3.2 h.
+    - B3 and B4 are bit-exact with SimPy.
+- Releases: every tag on PyPI also gets a GitHub Release with generated notes and the package files.
+- **Exit criteria:**
+    - B1 10× faster: met, 40.8×.
+    - Equivalence suite: met, bit-exact on deterministic scenarios and statistical on random ones.
+    - Research targets: met.
+    - Wheels on Linux, macOS and Windows: open, step 7.
+
+Next is step 7: the `smolpy-engine-rs` wheels and their release.
 
 ## Phase 5: Rust protocol parity
 

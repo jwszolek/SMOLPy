@@ -70,12 +70,21 @@ def environment() -> dict:
     }
 
 
-def run_one(scenario: str, frames: int, metrics: str, seed: int, timeout_s: float) -> dict:
+def run_one(
+    scenario: str, frames: int, metrics: str, seed: int, timeout_s: float, backend: str = "simpy"
+) -> dict:
     cmd = [
         sys.executable, "-m", "benchmarks.worker",
         "--scenario", scenario, "--frames", str(frames), "--metrics", metrics, "--seed", str(seed),
+        "--backend", backend,
     ]  # fmt: skip
-    base = {"scenario": scenario, "frames_target": frames, "metrics": metrics, "seed": seed}
+    base = {
+        "scenario": scenario,
+        "frames_target": frames,
+        "metrics": metrics,
+        "seed": seed,
+        "backend": backend,
+    }
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout_s, cwd=Path(__file__).parent.parent
@@ -96,16 +105,17 @@ def run_suite(
     seed: int,
     label: str,
     out: Path | None,
+    backend: str = "simpy",
 ) -> Path:
     env = environment()
     stamp = dt.datetime.now().strftime("%Y-%m-%d-%H%M")
-    out = out or RESULTS_DIR / f"{stamp}-simpy-{env['host']}-{label}.json"
+    out = out or RESULTS_DIR / f"{stamp}-{backend}-{env['host']}-{label}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     doc = {
         "format": "smolpy-bench",
         "version": 1,
         "label": label,
-        "backend": "simpy",
+        "backend": backend,
         "created": dt.datetime.now().isoformat(timespec="seconds"),
         "environment": env,
         "runs": [],
@@ -115,7 +125,7 @@ def run_suite(
             for m in metrics:
                 n = reps or default_reps(frames)
                 for rep in range(1, n + 1):
-                    record = run_one(scenario, frames, m, seed, timeout_s)
+                    record = run_one(scenario, frames, m, seed, timeout_s, backend)
                     record["rep"] = rep
                     doc["runs"].append(record)
                     out.write_text(json.dumps(doc, indent=1))  # keep partial progress
@@ -173,22 +183,33 @@ def summarize(path: Path) -> str:
 
 
 def run_batch(
-    scenario: str, frames: int, metrics: str, runs: int, jobs: int, timeout_s: float, seed: int
+    scenario: str,
+    frames: int,
+    metrics: str,
+    runs: int,
+    jobs: int,
+    timeout_s: float,
+    seed: int,
+    backend: str = "simpy",
 ) -> dict:
     """Run *runs* independent measurements, *jobs* at a time, and time the whole batch.
 
-    A stand-in for the ADR-0009 batch runner, to measure batch throughput of the
-    SimPy engine: every run is its own process, as SimPy runs cannot share one.
+    Every run is its own process, with the same seed, as for the ADR-0006
+    research target. This is the same method on every backend, so their batch
+    throughput is comparable on the same core budget (ADR-0009).
     """
     t0 = time.perf_counter()
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         records = list(
-            pool.map(lambda _: run_one(scenario, frames, metrics, seed, timeout_s), range(runs))
+            pool.map(
+                lambda _: run_one(scenario, frames, metrics, seed, timeout_s, backend), range(runs)
+            )
         )
     wall_s = time.perf_counter() - t0
     ok = [r for r in records if r["status"] == "ok"]
     return {
         "scenario": scenario,
+        "backend": backend,
         "frames_target": frames,
         "metrics": metrics,
         "runs": runs,

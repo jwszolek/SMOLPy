@@ -329,3 +329,20 @@ Measured at commit `80a493f`. Raw results are in `benchmarks/results/2026-11-13-
 - **Parallel runs barely slow each other:** ~8 % per run at 8 at a time. Batch throughput is limited by the cost of one run.
 
 Optimised SimPy misses both research targets, so **the gate is open for ADR-0008**. Work there starts after ADR-0007 and is subject to its stop criterion: B1 at least 10× faster than optimised SimPy.
+
+### Research targets on the Rust engine (ADR-0008, step 6)
+
+Measured on 2026-11-15 on the same machine with `--backend rust`, the same harness and the same core budget. Raw results are in `benchmarks/results/2026-11-15-1333-rust-jaws-zbook-research-b4.json` and `…-1346-…-research-batch.json`.
+
+| Target | Limit | SimPy (2026-11-13) | Rust | Result |
+|---|---|---|---|---|
+| B4 (10 201 nodes) at 100 M frames, metrics off | 30 min | 6 361 s (106 min) | **310 s (5.2 min)**: 2.50 G events, 8.1 M events/s, 322 k frames/s, peak 170 MB | **met**, 5.8× under the limit |
+| 1 000 × B3 at 1 M frames, metrics on, 8 cores | 30 min | ≈ 3.2 h (315 runs/h) | **413 s (6.9 min)**: all 1 000 runs, 8 714 runs/h, median 2.6 s per run | **met**, 4.4× under the limit |
+
+- **The same model.** The SimPy figures predate integer time and ADR-0010, so the speed-ups of about 20× for B4 and 28× for batches compare two slightly different models. The targets are absolute, and the Rust engine meets them on the current model.
+- **Bit-exact with SimPy.** At 200 k frames, B3 and B4 give the same output and metrics hashes on both engines, with metrics on and off.
+- **The batch ran exactly as for SimPy.** Each run is its own process, 8 at a time, as in the SimPy measurement. All 1 000 runs have the same seed and give one output hash.
+- **B4 at 100 M frames was not repeated on SimPy:** it takes 106 min. Its event count, 2 499 800 367, is consistent with B4's 25 events per frame.
+- **Two fixes on the way.** Building B4's converged MAC tables was quadratic in the number of stations, and forwarding searched the port list. Both are now constant time per lookup. B4 at 200 k frames went from 7.1 s to 1.7 s, with unchanged hashes.
+
+`python -m benchmarks run … --backend rust` and `python -m benchmarks batch … --backend rust` measure the Rust backend. The default stays `simpy`.

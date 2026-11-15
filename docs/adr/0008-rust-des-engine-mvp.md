@@ -122,7 +122,7 @@ Anything outside this scope is rejected by the capability check with a message s
 - **Cross-engine equivalence** against SimPy uses the harness from ADR-0009:
     - **Deterministic scenarios** (constant patterns, fixed sizes) must agree with SimPy ~~within a tight tolerance on every metric window. Differences come only from float µs (SimPy) versus integer ns (Rust).~~ *Amended by the ADR-0007 revision of 2026-11-14:* exactly, on every metric window. Both engines use integer nanoseconds and the same rounding rules ([ADR-0007](0007-execution-independent-scenario-model.md#simulated-time-integer-nanoseconds)).
     - **Stochastic scenarios** must agree statistically across replications.
-- **Benchmark acceptance:** B1, B3 and B4 of the ADR-0006 suite, run with `--backend rust`, must meet the research targets defined there on the reference machine. B2 follows with protocol parity (Phase 5).
+- **Benchmark acceptance:** B1, B3 and B4 of the ADR-0006 suite, run with `--backend rust`, must meet the research targets defined there on the reference machine. B2 follows with protocol parity (Phase 5). *Met on 2026-11-15; see step 6.*
 
 ### Stop criterion
 
@@ -169,8 +169,8 @@ Raw results: `benchmarks/results/2026-11-15-1255-rust-jaws-zbook-stop-criterion.
         - one xoshiro256** generator per traffic statement, seeded from the same SHA-256 stream seed as SimPy (checked against Python);
         - the distributions as Python's `random` module computes them.
     - **Result.** Against SimPy with 30 replications each, means agree within 0.7 % on `random-load` (Poisson, bursty, IMIX) and pass the comparison on the new `groups` scenario (all three batch sizes, IMIX, priorities). Deterministic scenarios stay bit-exact.
-6. **The research targets B3 and B4** with `--backend rust`.
-7. **Wheels and CI,** as below. *(CI done early, with step 4: a `rust` job in `ci.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test`. It builds the module with maturin and runs the equivalence suite against SimPy, and it fails if the Rust backend is not installed, so the suite cannot skip it silently. The wheels and their release remain.)*
+6. **The research targets B3 and B4** with `--backend rust`. *(Done, 2026-11-15: both are met. B4 at 100 M frames runs in 310 s against a 30 min limit, and 1 000 × B3 at 1 M frames in 413 s on 8 cores against 30 min. Details are in [Benchmarks](../benchmarks.md#research-targets-on-the-rust-engine-adr-0008-step-6).)*
+7. **Wheels and CI,** as below. *(CI done early, with step 4: a `rust` job in `ci.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test`. It builds the module with maturin and runs the equivalence suite against SimPy, and it fails if the Rust backend is not installed, so the suite cannot skip it silently. The wheels and their release remain. Since 2026-11-15 every release also gets a GitHub Release, created by `github-release.yml` once the tag is on PyPI, with generated notes and the `smolpy` sdist and wheel. The `smolpy-engine-rs` wheels are to be attached to the same release.)*
 
 ### Build and release
 

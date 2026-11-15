@@ -55,8 +55,11 @@ jobs:
           git push origin "${{ steps.version.outputs.tag }}"
 
   publish:
-    name: Publish to PyPI
+    name: Publish to PyPI and GitHub Releases
     needs: tag
     uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
     permissions:
-      id-token: write
+      id-token: write  # PyPI trusted publishing
+      contents: write  # the GitHub Release
