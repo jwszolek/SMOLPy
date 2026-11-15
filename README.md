@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/jwszolek/SMOLPy/actions/workflows/ci.yml/badge.svg)](https://github.com/jwszolek/SMOLPy/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/smolpy)](https://pypi.org/project/smolpy/)
+[![Dev build](https://img.shields.io/github/v/release/jwszolek/SMOLPy?include_prereleases&filter=Development%2A&display_name=release&label=main)](https://github.com/jwszolek/SMOLPy/releases/tag/dev)
 [![Python](https://img.shields.io/pypi/pyversions/smolpy)](https://pypi.org/project/smolpy/)
 [![License](https://img.shields.io/github/license/jwszolek/SMOLPy)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-mkdocs--material-blue)](https://jwszolek.github.io/SMOLPy/)
@@ -48,7 +49,17 @@ pip install "smolpy[rust]"       # plus the native Rust engine, about 40x faster
 pip install --pre "smolpy[rust]" # the latest development build of main
 ```
 
-Every merge to `main` that changes the package publishes a **development build**, `X.Y.(Z+1).devN` (N commits after the latest release). It is a pre-release on PyPI, so `pip` installs it only with `--pre`, and the GitHub pre-release [Development build](https://github.com/jwszolek/SMOLPy/releases/tag/dev) points to its commit. Releases proper are made by hand.
+**Release channels.** The versions below are read live from PyPI and GitHub, so this table is always current:
+
+| Channel | smolpy | smolpy-engine-rs | Install |
+|---|---|---|---|
+| **Stable**, released by hand | [![smolpy](https://img.shields.io/pypi/v/smolpy?label=)](https://pypi.org/project/smolpy/) | [![smolpy-engine-rs](https://img.shields.io/pypi/v/smolpy-engine-rs?label=)](https://pypi.org/project/smolpy-engine-rs/) | `pip install "smolpy[rust]"` |
+| **Development**, every merge to `main` | [![dev](https://img.shields.io/github/v/release/jwszolek/SMOLPy?include_prereleases&filter=Development%2A&display_name=release&label=)](https://github.com/jwszolek/SMOLPy/releases/tag/dev) | same version | `pip install --pre "smolpy[rust]"` |
+
+- **What a development build is.** Every merge to `main` that changes the package publishes one, as `X.Y.(Z+1).devN`, N commits after the latest release.
+- **How to get it.** It is a pre-release on PyPI, so `pip` installs it only with `--pre`.
+- **Where it is on GitHub.** The [Development build](https://github.com/jwszolek/SMOLPy/releases/tag/dev) pre-release points to its commit.
+- **Releases proper** are made by hand.
 
 From a clone, for development:
 
