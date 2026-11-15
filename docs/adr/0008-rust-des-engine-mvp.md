@@ -32,7 +32,7 @@ This ADR applies **only if the ADR-0006 decision gate is met**, i.e. if optimise
 
 **Distribution**
 - **A — one `smolpy` package that includes the native extension.** Everyone needs a platform-specific wheel. Platforms without one would need a Rust toolchain to install SMOLPy at all.
-- **B — separate optional package `smolpy-engine-rs`, installed with `pip install smolpy[rust]`.** **Chosen.** *(Until the first release of `smolpy-engine-rs` it is installed as `pip install smolpy-engine-rs`. The `smolpy[rust]` extra is added once the package is on PyPI, because `uv.lock` cannot refer to a package that does not exist yet.)*
+- **B — separate optional package `smolpy-engine-rs`, installed with `pip install smolpy[rust]`.** **Chosen.** *(Until the first release of `smolpy-engine-rs` it is installed as `pip install smolpy-engine-rs`. The `smolpy[rust]` extra is added once the package is on PyPI, because `uv.lock` cannot refer to a package that does not exist yet. Both were done with v1.8.0.)*
     - `smolpy` stays pure Python and installs everywhere.
     - Its build and release pipeline stays unchanged.
     - The Rust backend simply reports *not installed* when absent.
@@ -172,7 +172,7 @@ Raw results: `benchmarks/results/2026-11-15-1255-rust-jaws-zbook-stop-criterion.
 6. **The research targets B3 and B4** with `--backend rust`. *(Done, 2026-11-15: both are met. B4 at 100 M frames runs in 310 s against a 30 min limit, and 1 000 × B3 at 1 M frames in 413 s on 8 cores against 30 min. Details are in [Benchmarks](../benchmarks.md#research-targets-on-the-rust-engine-adr-0008-step-6).)*
 7. **Wheels and CI,** as below. *(CI done early, with step 4: a `rust` job in `ci.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test`. It builds the module with maturin and runs the equivalence suite against SimPy, and it fails if the Rust backend is not installed, so the suite cannot skip it silently. Since 2026-11-15 every release also gets a GitHub Release, created by `github-release.yml` once the tag is on PyPI, with generated notes and the `smolpy` sdist and wheel.)*
 
-    *Done on 2026-11-15, publication pending the first release:*
+    *Done on 2026-11-15, and released with v1.8.0. `smolpy` and `smolpy-engine-rs` 1.8.0 are on PyPI with wheels for all five platforms, and the GitHub Release carries every file:*
     - **`rust-wheels.yml`** builds one abi3 wheel per platform, for every Python from 3.10: Linux x86_64 and aarch64 (manylinux), macOS arm64 and x86_64, and Windows x86_64. It also builds an sdist.
         - The wheels the runner can execute (Linux x86_64, macOS arm64, Windows) are installed and smoke-tested: a small scenario must be bit-exact with SimPy.
         - It runs on every pull request that touches `rust/`.

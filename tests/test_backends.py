@@ -87,7 +87,7 @@ def test_simulate_on_the_default_backend_is_simpy() -> None:
 def test_rust_reports_that_it_is_not_installed(no_rust) -> None:
     assert "rust" not in backends.installed()
     with pytest.raises(
-        BackendUnavailable, match="rust backend is not installed: pip install smolpy-engine-rs"
+        BackendUnavailable, match=r"rust backend is not installed: pip install smolpy\[rust\]"
     ):
         _net().simulate(duration=50, backend="rust")
     with pytest.raises(BackendUnavailable, match="not installed"):

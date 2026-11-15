@@ -166,7 +166,39 @@ A new test suite runs selected scenarios on both backends and compares metrics:
 - **Low-load scenarios** (no queuing, no TCP congestion effects) — metrics must agree within a stated tolerance. Disagreement here indicates a translation bug in the backend.
 - **Loaded scenarios** — differences are expected and are reported rather than asserted; quantifying them is part of the research output.
 
-The ns-3 suite is skipped automatically when ns-3 is not available, and runs in CI in a container image with the pinned ns-3 release.
+The ns-3 suite is skipped automatically when ns-3 is not available, and runs in CI in a container image with the pinned ns-3 release ([below](#container-images)).
+
+### Container images
+
+*Added 2026-11-15.*
+
+ns-3 is the one backend that cannot be installed with `pip`. It is a C++ code base that must be built from source with its own toolchain, which takes tens of minutes, and SMOLPy supports exactly one pinned release. The ns-3 backend is therefore shipped, run in CI and archived as a **container image**. A lighter image without ns-3 serves users who want SMOLPy without installing Python.
+
+**Registry and images.** The images are published to the GitHub Container Registry, `ghcr.io/jwszolek/smolpy`, public, for `linux/amd64` and `linux/arm64`:
+
+| Tag | Contents | Size | From |
+|---|---|---|---|
+| `<version>`, `latest` | Python, `smolpy` and `smolpy-engine-rs` from the release's own wheels | ~ 200 MB | the first release that publishes the Rust engine (ADR-0008 step 7) |
+| `<version>-ns3`, `latest-ns3` | the above, plus the pinned ns-3 release built with the SMOL C++ module, and `NS3_HOME` set | several GB | Phase 6, with the ns-3 backend |
+
+The entry point is the CLI:
+
+```bash
+docker run --rm -v "$PWD:/work" -w /work ghcr.io/jwszolek/smolpy run plant.smol --backend rust
+docker run --rm -v "$PWD:/work" -w /work ghcr.io/jwszolek/smolpy:latest-ns3 run plant.smol --backend ns3
+```
+
+- **Headless only.** The live dashboard needs a display, which a container does not have. Headless runs, text mode, `--runs` and `-o` all work.
+- **Built at release.** `publish.yml` builds and pushes the images at each release, after `smolpy` and `smolpy-engine-rs` are on PyPI, from the same files. The pushed images are listed under the repository's "Packages". The Dockerfiles live in `docker/`.
+- **ns-3 is built once per pinned release.** It is built in a separate base image, `ghcr.io/jwszolek/smolpy-ns3-base:<ns-3 version>`, which is rebuilt only when the pinned version changes. Each release then adds SMOLPy to it in a few minutes, instead of rebuilding ns-3.
+- **CI uses the image.** The ns-3 equivalence suite (ADR-0009) runs inside `<version>-ns3`, or inside the base image for pull requests. It never builds ns-3 itself.
+- **Reproducible results.** An image tag fixes the SMOLPy, Rust engine and ns-3 versions together. Recording the image digest next to the scenario JSON, and the generated ns-3 scenario (`--keep-generated`), is enough to rerun a published experiment exactly.
+- **Licences.** ns-3 is licensed under GPLv2, and SMOLPy and its Rust engine under MIT.
+    - The `-ns3` image distributes ns-3 binaries and the SMOL C++ module linked against them, so that image as a whole is distributed under GPLv2's terms.
+    - Its ns-3 sources are public at the pinned release, and the image records where. The SMOL module's source is in this repository.
+    - MIT is compatible with GPLv2, so the MIT code needs no change.
+    - The image without ns-3 contains no GPL code.
+- **Not a replacement for pip.** `pip install smolpy smolpy-engine-rs` stays the main way to install SMOLPy. The images are for ns-3, for running without a Python setup, and for archiving.
 
 ### Documentation
 
@@ -178,6 +210,8 @@ The ns-3 suite is skipped automatically when ns-3 is not available, and runs in 
 - Exact behaviour of ns-3's CSMA model versus SimPy's collision approximation, to decide whether `hub` support should be limited further. *(Resolved: hubs were removed.)*
 - How ns-3 queue lengths should be sampled so that `queue_depth` is comparable to SimPy's per-port frame count.
 - Whether the pinned ns-3 release's build tool supports building scratch programs with an extra module cleanly, or the module should be installed as a contrib module.
+- The size of the `-ns3` image, and whether to build ns-3 in its `optimized` profile only, without examples and tests, to keep it small.
+- Whether GitHub's hosted runners can build the ns-3 base image for `linux/arm64` in reasonable time, or that platform needs a native arm64 runner or is offered for `amd64` only at first.
 
 ---
 

@@ -422,7 +422,7 @@ Every simulation goes through the same path. The Python API and `.smol` files bu
 | Backend | Language | What it runs | Speed | Install |
 |---|---|---|---|---|
 | `simpy` (default) | Python, SimPy | the whole model, the live and text dashboards | reference | included |
-| `rust` | Rust, through PyO3 | Ethernet: adapters, switches, links, flows (constant, Poisson, bursty, batch, IMIX), six metrics | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy-engine-rs` (from the release after v1.7.0) |
+| `rust` | Rust, through PyO3 | Ethernet: adapters, switches, links, flows (constant, Poisson, bursty, batch, IMIX), six metrics | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy[rust]` (since v1.8.0) |
 
 ```python
 result = net.simulate(duration=60_000, backend="rust")       # one run
