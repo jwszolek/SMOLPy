@@ -6,9 +6,11 @@ implementation (ADR-0007, ADR-0009).
   nanosecond clock and computes each value as one rounded quotient (Model
   Semantics §1, §8), so there is nothing a tolerance would have to cover.
 - **Stochastic scenarios**: 30 replications per backend, with different
-  seeds. For each metric's per-run mean, Welch's 95 % confidence interval of
-  the difference of means must contain 0, and the means must differ by less
-  than 2 %.
+  seeds. For each metric's per-run mean, Welch's confidence interval of the
+  difference of means must contain 0, and the means must differ by less than
+  2 %. The interval of each of a scenario's *k* metrics is at
+  ``1 - 0.05 / k`` (Bonferroni), so that two equivalent backends fail a
+  scenario by chance at most 5 % of the time, however many metrics it has.
 
 Every comparison returns a list of :class:`Mismatch`; empty means equivalent.
 """
@@ -28,7 +30,7 @@ REFERENCE = "simpy"
 KNOWN_BACKENDS = ("simpy", "rust", "ns3")
 
 REPLICATIONS = 30
-LEVEL = 0.95
+LEVEL = 0.95  # for the scenario as a whole; each metric gets 1 - (1 - LEVEL) / k
 MAX_REL_DIFF = 0.02
 CANDIDATE_SEED_OFFSET = 1000  # the candidate's runs are independent of the reference's
 
@@ -95,6 +97,12 @@ def run_replications(
     return batch
 
 
+def metric_level(level: float, metrics: int) -> float:
+    """The Bonferroni level of each of *metrics* intervals, so that all of
+    them hold together with probability at least *level*."""
+    return 1 - (1 - level) / metrics
+
+
 def compare_batches(
     candidate: BatchResult,
     reference: BatchResult,
@@ -102,11 +110,13 @@ def compare_batches(
     max_rel_diff: float = MAX_REL_DIFF,
 ) -> list[Mismatch]:
     """Compare the per-run means of every metric of two batches of one
-    stochastic scenario."""
+    stochastic scenario. *level* holds for the scenario as a whole."""
     keys_c = {k for r in candidate.results() for k in r.metrics}
     keys_r = {k for r in reference.results() for k in r.metrics}
     out = _compare_keys(keys_c, keys_r)
-    for key in sorted(keys_c & keys_r):
+    common = sorted(keys_c & keys_r)
+    per_metric = metric_level(level, len(common)) if common else level
+    for key in common:
         a, b = candidate.scalar(key), reference.scalar(key)
         empty_a, empty_b = sum(map(math.isnan, a)), sum(map(math.isnan, b))
         if empty_a or empty_b:
@@ -114,13 +124,13 @@ def compare_batches(
             # chosen so that this does not happen; if it does, say so.
             out.append(Mismatch(key, f"runs without samples: {empty_a} and {empty_b}"))
             continue
-        ci = diff_ci(a, b, level)
+        ci = diff_ci(a, b, per_metric)
         mean_b = math.fsum(b) / len(b)
         if not ci.contains(0):
             out.append(
                 Mismatch(
                     key,
-                    f"difference of means {ci.diff:.6g}, {level:.0%} interval"
+                    f"difference of means {ci.diff:.6g}, {per_metric:.2%} interval"
                     f" [{ci.low:.6g}, {ci.high:.6g}] excludes 0",
                 )
             )

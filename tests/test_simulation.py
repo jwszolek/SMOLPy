@@ -180,8 +180,8 @@ class TestMQTT:
         spec = sensor.mqtt_specs[0]
         assert spec.rate_hz == 2.0
         assert spec.qos == 0
-        # frame_size = 54 (Ethernet+IP+TCP) + 2+2+3 (MQTT hdr + topic "t/1") + 32 payload = 93
-        assert spec.frame_size == 54 + 2 + 2 + len("t/1") + 32
+        # frame_size = 58 (Ethernet+IP+TCP+FCS) + 2+2+3 (MQTT hdr + topic "t/1") + 32 payload = 97
+        assert spec.frame_size == 58 + 2 + 2 + len("t/1") + 32
 
 
 # ---------------------------------------------------------------------------
@@ -215,9 +215,9 @@ class TestModbus:
         spec = plc.modbus_specs[0]
         assert spec.rate_hz == 2.0
         # Request frame is constant regardless of register count.
-        assert spec.request_frame_size == 65
-        # Response frame grows with register count: 62 B overhead + 2 B/register.
-        assert spec.response_frame_size == 62 + 2 * 10
+        assert spec.request_frame_size == 69
+        # Response frame grows with register count: 66 B overhead + 2 B/register.
+        assert spec.response_frame_size == 66 + 2 * 10
 
     def test_modbus_latency_samples_produced(self):
         result, *_ = self._modbus_net()
@@ -394,7 +394,9 @@ class TestLinkPipelining:
         size_bytes = 512
         net.link(client, sw, speed=speed_mbps, length=200_000)  # exaggerated length
         net.link(server, sw, speed=speed_mbps, length=2)
-        fps = int(speed_mbps * 1_000_000 / (size_bytes * 8))  # exactly saturate the link
+        # exactly saturate the link: every frame occupies it for size + 20 B
+        # (preamble, SFD, inter-frame gap; ADR-0010)
+        fps = speed_mbps * 1_000_000 / ((size_bytes + 20) * 8)
         client.sends(to=server, rate=fps, size=size_bytes, pattern="constant")
         net.observe("throughput", on=server, every=200)
         result = net.simulate(duration=2_000)
@@ -402,8 +404,10 @@ class TestLinkPipelining:
         # Sampling-interval quantization (a frame stradding a 200 ms bucket
         # boundary) adds a few percent of noise per bucket, so check the mean
         # rather than every sample. It should be close to the nominal
-        # 1 Mb/s, not ~20% below it as with the unfixed engine.
-        assert sum(samples) / len(samples) > speed_mbps * 0.98
+        # frame rate of the link, size / (size + 20) of 1 Mb/s, not ~20% below
+        # it as with the unfixed engine.
+        nominal = speed_mbps * size_bytes / (size_bytes + 20)
+        assert sum(samples) / len(samples) > nominal * 0.98
 
 
 # ---------------------------------------------------------------------------

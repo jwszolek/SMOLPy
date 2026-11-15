@@ -103,7 +103,7 @@ Python API ─┐
 
 ### Serialisation
 
-- `Scenario` serialises to versioned JSON: `{"format": "smol-ir", "version": 1, ...}`, with `Scenario.to_json()` and `Scenario.from_json()`.
+- `Scenario` serialises to versioned JSON: `{"format": "smol-ir", "version": 1, ...}`, with `Scenario.to_json()` and `Scenario.from_json()`. *Version 2 since [ADR-0010](0010-ethernet-frames-on-the-wire.md), which changed the meaning of frame sizes; version 1 documents are rejected with an explanation.*
 - **Why JSON:**
     - the Rust engine can receive a scenario without depending on Python object layouts;
     - the ns-3 code generator reads the same input;

@@ -126,7 +126,7 @@ assert same == scenario
 ```json
 {
   "format": "smol-ir",
-  "version": 1,
+  "version": 2,
   "name": "cell",
   "nodes": [{"kind": "adapter", "name": "plc", "ip": "10.0.0.1", "mac": "02:00:0a:00:00:01"}, ...],
   "links": [{"a": "plc", "b": "sw", "speed_mbps": 100, "length_m": 5, "duplex": true}, ...],
@@ -140,7 +140,7 @@ Each node and traffic entry carries a `kind`: `adapter`, `switch`, `mqtt_broker`
 
 **Reading is strict.** `from_json()` raises `ValueError` for:
 - a different `format`;
-- an unknown `version`;
+- an unknown `version`, and version 1, whose frame sizes meant something else before [ADR-0010](adr/0010-ethernet-frames-on-the-wire.md). Rebuild such a scenario from its `Network` or `.smol` file;
 - an unknown `kind` or field;
 - a missing required field.
 

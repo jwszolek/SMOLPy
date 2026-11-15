@@ -12,8 +12,8 @@ the metric charts.
 
 QoS 1 acknowledgement
 ---------------------
-With qos=1, the broker also sends a PUBACK frame (58 bytes) back to the
-publisher.  Broker and server both hang off the switch, which forwards each
+With qos=1, the broker also sends a PUBACK frame (64 bytes, the Ethernet
+minimum) back to the publisher.  Broker and server both hang off the switch, which forwards each
 PUBACK to the sensor that sent the PUBLISH.
 
 broker_queue metric
@@ -26,19 +26,20 @@ is becoming a bottleneck.
 
 Frame sizes
 -----------
-Each PUBLISH creates a wire frame of:
-  Ethernet+IPv4+TCP  =  54 B
-  MQTT overhead      =   2 B (fixed header) + 2 B (topic-length field)
-                       + 16 B ("plant/temperature") + 2 B (packet-ID, QoS 1)
-                       =  22 B
-  Payload            =  20 B
+Each PUBLISH is an Ethernet frame of:
+  Ethernet+IPv4+TCP+FCS  =  58 B
+  MQTT overhead          =   2 B (fixed header) + 2 B (topic-length field)
+                           + 17 B ("plant/temperature") + 2 B (packet-ID, QoS 1)
+                           =  23 B
+  Payload                =  20 B
   ─────────────────────
-  Total              =  96 B    (~100 B, vs bulk transfers at 1 518 B)
+  Total                  = 101 B    (vs bulk transfers at 1 518 B)
 
-With all 10 sensors active the aggregate publish rate is
-  10 × 96 B × 8 bits ≈ 7.7 kb/s on each sensor's 100 Mbps link,
-and ≈ 9.6 kb/s (publishes) + overhead (PUBACKs) on the 1 Gbps backbone —
-negligible compared to the link capacity.
+On the link each frame also takes 20 B of preamble, SFD and inter-frame gap.
+With all 10 sensors active the broker receives 10 msg/s:
+  10 × 101 B × 8 bits ≈ 8.1 kb/s of PUBLISH frames on its 1 Gbps link,
+plus 10 PUBACKs of 64 B per second the other way — negligible compared to the
+link capacity. Each sensor's own 100 Mbps link carries one PUBLISH per second.
 """
 from smolpy import Network, MQTTBroker
 

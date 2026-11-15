@@ -12,8 +12,8 @@ SMOLPy also models Modbus TCP — a request/response protocol, unlike MQTT's fir
 ## Frame size formula
 
 ```
-request_size  = 65 bytes                                  (constant — Ethernet/IP/TCP + MBAP + FC + address + quantity)
-response_size = 62 + 2 × register_count bytes              (grows with the number of registers read)
+request_size  = 69 bytes                                  (constant — Ethernet/IP/TCP/FCS + MBAP + FC + address + quantity)
+response_size = 66 + 2 × register_count bytes              (grows with the number of registers read; at least 64)
 ```
 
 ## Dashboard

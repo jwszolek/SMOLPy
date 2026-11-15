@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from typing import Literal
 
 from smolpy.model import timebase
-from smolpy.model.frames import PN_CYCLES_MS, PN_MAX_IO_BYTES
+from smolpy.model.frames import MIN_FRAME_BYTES, PN_CYCLES_MS, PN_MAX_IO_BYTES
 from smolpy.model.scenario import (
     AdapterNode,
     Flow,
@@ -189,8 +189,12 @@ def check_traffic(t: TrafficSpec, nodes: Mapping[str, NodeSpec] | None = None) -
             _lookup(nodes, end, t, kinds)
     if isinstance(t, Flow):
         _positive(t, "rate", t.rate)
-        if t.size != "imix" and (not _integer(t.size) or t.size < 1):
-            raise _fail(t, f"size must be a positive number of bytes or 'imix', got {t.size!r}")
+        if t.size != "imix" and (not _integer(t.size) or t.size < MIN_FRAME_BYTES):
+            raise _fail(
+                t,
+                f"size must be a frame of at least {MIN_FRAME_BYTES} bytes (FCS included)"
+                f" or 'imix', got {t.size!r}",
+            )
         _one_of(t, "pattern", t.pattern, PATTERNS)
         _in_range(t, "priority", t.priority, 0, 7)
         if t.pattern == "batch":

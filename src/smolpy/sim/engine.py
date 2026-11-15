@@ -15,9 +15,13 @@ import simpy
 from smolpy import model
 from smolpy.model import timebase as tb
 from smolpy.model.frames import (
+    IFG_BYTES,
     MODBUS_REQUEST_BYTES,
     MQTT_PUBACK_BYTES,
     PN_RT_PRIORITY,
+    PREAMBLE_SFD_BYTES,
+    WIRE_OVERHEAD_BYTES,
+    flow_frame_size,
     modbus_response_frame_size,
     mqtt_publish_frame_size,
     pn_frame_size,
@@ -38,9 +42,11 @@ class _Environment(simpy.Environment):
     """A SimPy environment whose clock is an integer number of nanoseconds:
     every timeout is an int, so ``now`` is one too."""
 
+    _now: int
+
     @property
     def now(self) -> int:
-        return self._now  # type: ignore[return-value]
+        return self._now
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +75,7 @@ class _Frame:
 def _resolve_size(size: int | str, rng: random.Random) -> int:
     if isinstance(size, int):
         return size
-    # IMIX: 40% 64 B, 57% 594 B, 3% 1518 B
+    # IMIX (frames.IMIX_SIZES): 40% 64 B, 57% 594 B, 3% 1518 B
     r = rng.random()
     if r < 0.40:
         return 64
@@ -137,7 +143,9 @@ class _LinkChannel:
         self.env = env
         self.speed_mbps = speed_mbps
         self.prop_delay_ns = prop_delay_ns
-        self._tx_ns: dict[int, int] = {}  # transmission time by frame size
+        self._tx_ns: dict[int, int] = {}  # preamble, SFD and frame, by frame size
+        self._ifg_ns = tb.transmission_ns(IFG_BYTES, speed_mbps)
+        self._free_at = 0  # end of the inter-frame gap after the last frame
         self.in_port = in_port
         self.dst_store = dst_store
         self.strict_priority = strict_priority
@@ -145,7 +153,8 @@ class _LinkChannel:
         # PriorityItem compares on the key only, so the sequence number is what
         # keeps equal-priority frames in FIFO order.
         self._seq = itertools.count()
-        self.bits_sent: int = 0
+        self.bits_sent: int = 0  # frame bits whose transmission has completed
+        self.frames_sent: int = 0  # those frames; each also took 20 B of wire overhead
         env.process(self._run())
 
     def enqueue(self, frame: _Frame) -> None:
@@ -171,9 +180,19 @@ class _LinkChannel:
             size = frame.size_bytes
             tx_ns = self._tx_ns.get(size)
             if tx_ns is None:
-                tx_ns = self._tx_ns[size] = tb.transmission_ns(size, self.speed_mbps)
-            yield self.env.timeout(tx_ns)
+                tx_ns = self._tx_ns[size] = tb.transmission_ns(
+                    PREAMBLE_SFD_BYTES + size, self.speed_mbps
+                )
+            # The inter-frame gap after the previous frame is waited out in the
+            # same timeout: one event per frame, as without it. The clock is
+            # read from _now, not through the `now` property: this loop runs
+            # once per frame and hop.
+            env = self.env
+            gap = self._free_at - env._now
+            yield env.timeout(tx_ns + gap if gap > 0 else tx_ns)
+            self._free_at = env._now + self._ifg_ns
             self.bits_sent += size * 8
+            self.frames_sent += 1
             in_flight = self.env.timeout(self.prop_delay_ns, frame)
             in_flight.callbacks.append(self._deliver)
 
@@ -238,7 +257,7 @@ def _traffic_gen(
             _Frame(
                 src_mac=src_mac,
                 dst_mac=dst_mac,
-                size_bytes=_resolve_size(size_spec, rng),
+                size_bytes=flow_frame_size(_resolve_size(size_spec, rng), priority),
                 created_at_ns=env.now,
                 priority=priority,
             )
@@ -670,7 +689,8 @@ def _utilization_sampler(
     last_t = 0
     for tick in _ticks(env, period):
         yield tick
-        bits = sum(ch.bits_sent for ch in channels)
+        # wire occupancy (ADR-0010): frames plus 20 B of overhead each
+        bits = sum(ch.bits_sent + ch.frames_sent * WIRE_OVERHEAD_BYTES * 8 for ch in channels)
         window_ns = env.now - last_t
         # bits / (speed · 10⁶ bit/s · window_ns · 10⁻⁹ s) · 100 %
         util = tb.quotient((bits - last_bits) * 100_000, speed * window_ns)
