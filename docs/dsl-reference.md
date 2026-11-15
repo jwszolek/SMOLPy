@@ -170,9 +170,9 @@ result.export("out.csv", format="csv")   # explicit format override
 - **A missing backend is an error.** When a backend is not installed, selecting it raises `BackendUnavailable` with the install command.
 - **`smolpy.backends.installed()`** lists the backends that can run here.
 
-**The Rust backend so far** runs adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with the `constant` pattern and fixed sizes. It covers the metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth` and `utilization`.
-- **Same results as SimPy.** It gives SimPy's results bit for bit.
-- **Not in it yet.** Random patterns and IMIX are not supported yet, and neither are MQTT, Modbus and PROFINET (Phase 5 of the [roadmap](roadmap.md)).
+**The Rust backend so far** runs adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes. It covers the metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth` and `utilization`.
+- **Same results as SimPy.** Deterministic scenarios give SimPy's results bit for bit. Random traffic uses the same streams and distributions with the engine's own generator, so there the results agree statistically.
+- **Not in it yet.** MQTT, Modbus and PROFINET come in Phase 5 of the [roadmap](roadmap.md).
 - **Not on PyPI yet.** Until it is published, build it from the repository with a Rust toolchain:
 
 ```bash

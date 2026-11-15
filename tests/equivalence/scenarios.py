@@ -162,6 +162,27 @@ def batches() -> Scenario:
     return net.to_scenario(duration=1_000, seed=5)
 
 
+def groups() -> Scenario:
+    """Ethernet only, within the Rust MVP: batch arrivals with fixed,
+    geometric and heavy-tailed group sizes, IMIX, and priorities."""
+    net = Network("groups")
+    sw = net.switch("sw", ports=4)
+    srv = net.adapter("srv", ip="10.0.0.1")
+    cam = net.adapter("cam", ip="10.0.0.2")
+    log = net.adapter("log", ip="10.0.0.3")
+    hmi = net.adapter("hmi", ip="10.0.0.4")
+    for node in (srv, cam, log, hmi):
+        net.link(node, sw, speed=100, length=10)
+    cam.sends(srv, rate=3_000, size=1_000, pattern="batch", batch=4)
+    log.sends(srv, rate=2_000, size="imix", pattern="batch", batch="geom:3", priority=2)
+    hmi.sends(srv, rate=1_000, size=300, pattern="batch", batch="pareto:2.5", priority=5)
+    net.observe("latency", on=srv, every=20)
+    net.observe("throughput", on=srv, every=20)
+    net.observe("bytes_received", on=srv, every=20)
+    net.observe("utilization", on=sw, every=20)
+    return net.to_scenario(duration=800, seed=17)
+
+
 DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "line": line,
     "priorities": priorities,
@@ -171,4 +192,5 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
     "random-load": random_load,
     "batches": batches,
+    "groups": groups,
 }

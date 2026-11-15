@@ -1,4 +1,4 @@
-"""The Rust engine's time rules against smolpy.model.timebase (ADR-0008).
+"""The Rust engine's time rules and random streams against Python (ADR-0008).
 
 Bit-exact equivalence needs both engines to turn every scenario number into
 the same nanoseconds and every metric into the same float. These tests feed
@@ -58,3 +58,11 @@ def test_ratio_is_rounded_as_python_does() -> None:
         )
     for n, d in pairs:
         assert rust._ratio(str(n), str(d)) == n / d == float(Fraction(n, d)), (n, d)
+
+
+def test_stream_seeds() -> None:
+    from smolpy.model.streams import stream_seed
+
+    for seed in (0, 42, 7, 2**63):
+        for source in ("flow:a->b#0", "flow:plc->host#1", "flow:n-3-7->n-2-7#12"):
+            assert rust._stream_seed(seed, source) == stream_seed(seed, source)

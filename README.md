@@ -8,7 +8,18 @@
 
 Python rewrite of SMOL — a Network Description Language and Discrete-Event Simulator for industrial Measurement-Diagnostics-Control (MDC) networks.
 
-SMOLPy lets you describe a network topology in pure Python, define traffic flows, and run a discrete-event simulation (powered by SimPy) that produces real metric time-series.  A built-in Dear PyGui desktop dashboard shows the topology and live metric charts as the simulation runs.
+SMOLPy lets you describe a network topology in pure Python, define traffic flows, and run a discrete-event simulation that produces real metric time-series.  A built-in Dear PyGui desktop dashboard shows the topology and live metric charts as the simulation runs.
+
+> **Two simulation engines, one model.** SMOLPy is no longer a SimPy-only simulator. A scenario, written in Python or in a `.smol` file, becomes one execution-independent model, and it can run on more than one engine:
+>
+> - **SimPy** (Python): the reference implementation. It is always installed, runs the whole model and drives the dashboards.
+> - **Rust** (`smol-engine`): a native engine that gives **SimPy's results bit for bit** and runs about **40× faster**. B1 at 10 M frames takes 4.9 s, against 200.8 s on SimPy.
+>
+> ```python
+> result = net.simulate(duration=60_000, backend="rust")
+> ```
+>
+> The Rust engine covers Ethernet for now: adapters, switches, links and flows. MQTT, Modbus TCP and PROFINET follow. See [Simulation engine](#simulation-engine) and [ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/).
 
 📖 **Full documentation:** [jwszolek.github.io/SMOLPy](https://jwszolek.github.io/SMOLPy/)
 
@@ -404,11 +415,34 @@ IRT (isochronous, scheduled) traffic, AR establishment (DCP / RPC connect), acyc
 
 ## Simulation engine
 
+Every simulation goes through the same path. The Python API and `.smol` files build a **Scenario IR**, an execution-independent model ([ADR-0007](https://jwszolek.github.io/SMOLPy/adr/0007-execution-independent-scenario-model/)), and a **backend** runs it. Both engines follow the same written contract, [Model Semantics](https://jwszolek.github.io/SMOLPy/model-semantics/):
+- simulated time is integer nanoseconds;
+- frames are modelled on the wire as real Ethernet, with preamble, FCS and inter-frame gap.
+
+| Backend | Language | What it runs | Speed | Install |
+|---|---|---|---|---|
+| `simpy` (default) | Python, SimPy | the whole model, the live and text dashboards | reference | included |
+| `rust` | Rust, through PyO3 | Ethernet: adapters, switches, links, flows (constant, Poisson, bursty, batch, IMIX), six metrics | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | built from `rust/` with maturin (PyPI wheels to follow) |
+
+```python
+result = net.simulate(duration=60_000, backend="rust")       # one run
+batch = run_many(net, runs=30, duration=60_000, backend="rust")
+```
+
+```bash
+smolpy run plant.smol --backend rust
+```
+
+- **The same numbers.** On deterministic scenarios the Rust engine reproduces SimPy's results bit for bit, down to the event count. Random traffic uses each engine's own generator, so there the results agree statistically. CI checks both on every pull request ([ADR-0009](https://jwszolek.github.io/SMOLPy/adr/0009-batch-execution-and-cross-backend-validation/)).
+- **Nothing is skipped silently.** A scenario that uses something a backend does not support, such as PROFINET on Rust for now, is rejected before the run with a message naming the element.
+
+The model both engines implement:
+
 - **MAC-learning switch** — each switch pre-seeds its forwarding table from the topology wiring, eliminating spurious flooding toward silent endpoints (e.g. a server that only receives).  Dynamic learning still operates for traffic through intermediate switches.
 - **Store-and-forward model** — transmission delay + propagation delay per hop.
 - **Queuing** — each link direction has its own egress queue with 8 strict 802.1Q priority classes (FIFO within a class, non-preemptive); `qos="fifo"` on a switch ignores priorities. `queue_depth` reports buffered frames at the switch's outbound ports.
-- **Traffic shaping** — constant, Poisson, and Pareto-burst patterns; IMIX frame-size distribution.
-- **Live mode** — simulation runs in 200 chunks (~8 s total wall time); the dashboard reads shared metric arrays between chunks via Python's GIL.
+- **Traffic shaping** — constant, Poisson, Pareto-burst and batch patterns; IMIX frame-size distribution.
+- **Live mode** (SimPy only) — simulation runs in 200 chunks (~8 s total wall time); the dashboard reads shared metric arrays between chunks via Python's GIL.
 
 ---
 

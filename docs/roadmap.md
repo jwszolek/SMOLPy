@@ -123,14 +123,16 @@ Decided before the Rust engine, so that it implements the final model once:
 - Research targets from ADR-0006 are met.
 - Wheels are published for Linux, macOS and Windows.
 
-**Status:** ADR-0008 accepted on 2026-11-15 and brought up to date: integer nanoseconds, IR version 2, frames on the wire (ADR-0010), bit-exact deterministic equivalence. Steps 1–4 of 7 are done.
+**Status:** ADR-0008 accepted on 2026-11-15 and brought up to date: integer nanoseconds, IR version 2, frames on the wire (ADR-0010), bit-exact deterministic equivalence. Steps 1–5 of 7 are done.
 - Step 2: `smolpy.backends` is the backend registry. `backend=` is available on `simulate()` and `run_many()`, and `--backend` on `smolpy run`. Each backend's capabilities are checked before the run, and the Rust backend reports clearly when it is not installed.
 - Step 3: `rust/` holds the engine `smol-engine` and the Python module `smolpy-engine-rs`. The engine reproduces SimPy's event graph, so it gives SimPy's results bit for bit, down to the event count. It covers adapters, switches, links, constant flows and six metrics.
 - **Step 4, the stop criterion: go.** B1 at 10 M frames runs in 4.93 s against 200.8 s on SimPy, 40.8× faster where 10× was required, with an identical output hash.
 
 - CI: a `rust` job runs `cargo fmt`, `clippy` and `cargo test`, then the bit-exact equivalence suite with the Rust backend, on every push and pull request.
 
-Next is step 5, the rest of the MVP scope: random patterns and IMIX.
+- Step 5: random patterns (`poisson`, `bursty`, `batch`) and IMIX in Rust. Each flow has its own generator, seeded from the same stream seed as SimPy. The engines agree statistically on random traffic and bit for bit on deterministic scenarios.
+
+Next is step 6: the research targets B3 and B4 with `--backend rust`.
 
 ## Phase 5: Rust protocol parity
 

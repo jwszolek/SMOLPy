@@ -3,6 +3,7 @@
 //! dependency. `smolpy-engine-rs` exposes it to Python.
 
 pub mod frames;
+pub mod rng;
 pub mod scenario;
 pub mod sim;
 pub mod timebase;
