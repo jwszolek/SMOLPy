@@ -39,6 +39,11 @@ build-backend = "hatchling.build"
 source = "vcs"
 fallback-version = "0.1.0"
 
+# A commit N commits after tag vX.Y.Z is X.Y.(Z+1).devN, with no "+g<hash>"
+# local part: PyPI rejects local versions, and development builds go there.
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/smolpy"]
 

@@ -1,14 +1,19 @@
 name: Publish to PyPI
 
-# A release (a pushed tag v*, or release.yml passing its tag) publishes:
-#   - smolpy to PyPI;
-#   - the smolpy-engine-rs wheels and sdist to PyPI, same version (ADR-0008);
-#   - the GitHub Release with every file.
-# smolpy does not wait for the engine: if publishing the engine fails, smolpy
-# is still released and the GitHub Release is created without the engine.
+# Three modes:
 #
-# Run by hand (target: testpypi), it only publishes the engine to TestPyPI, as
-# a dev version after the latest tag, to test the wheels before a release.
+# - Release (a pushed tag v*, or release.yml passing its tag): publishes
+#   smolpy and the smolpy-engine-rs wheels and sdist to PyPI with the tag's
+#   version, then the GitHub Release with every file.
+# - Development build (dev-build.yml, dev: true, after a merge to main):
+#   publishes both to PyPI as X.Y.(Z+1).devN, N commits after the latest tag,
+#   a pre-release that pip installs only with --pre, and replaces the GitHub
+#   pre-release "Development build" (tag "dev").
+# - Test (run by hand, target: testpypi): publishes only the engine to
+#   TestPyPI, as a dev version numbered by the run.
+#
+# smolpy does not wait for the engine: if publishing the engine fails, smolpy
+# is still published, and the GitHub release lacks only the engine's files.
 
 on:
   push:
@@ -20,6 +25,11 @@ on:
         description: The tag being released (release.yml passes it; a tag push has it as its ref)
         required: false
         type: string
+      dev:
+        description: A development build of the calling commit (dev-build.yml)
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       target:
@@ -35,7 +45,8 @@ jobs:
     name: Version
     runs-on: ubuntu-latest
     outputs:
-      release: ${{ steps.v.outputs.release }}
+      mode: ${{ steps.v.outputs.mode }}  # release, dev or test
+      release: ${{ steps.v.outputs.release }}  # "true" for release and dev: smolpy goes to PyPI
       tag: ${{ steps.v.outputs.tag }}
       version: ${{ steps.v.outputs.version }}
 
@@ -50,21 +61,37 @@ jobs:
         id: v
         env:
           TEST: ${{ inputs.target == 'testpypi' }}
+          DEV: ${{ inputs.dev }}
           TAG: ${{ inputs.tag || github.ref_name }}
           RUN: ${{ github.run_number }}
         run: |
+          # only release tags: the moving "dev" tag does not count
+          LATEST=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.0.0)
+          IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+          NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
           if [ "$TEST" = "true" ]; then
-            LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
-            IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
-            VERSION="${MAJOR}.${MINOR}.$((PATCH + 1)).dev${RUN}"
+            MODE=test
+            VERSION="${NEXT}.dev${RUN}"
             echo "release=false" >> "$GITHUB_OUTPUT"
+          elif [ "$DEV" = "true" ]; then
+            # as hatch-vcs numbers smolpy: N commits after the latest tag
+            N=$(git rev-list --count "${LATEST}..HEAD")
+            if [ "$N" = "0" ]; then
+              echo "::error::HEAD is release ${LATEST} itself: there is no development build to make"
+              exit 1
+            fi
+            MODE=dev
+            VERSION="${NEXT}.dev${N}"
+            echo "release=true" >> "$GITHUB_OUTPUT"
           else
+            MODE=release
             VERSION="${TAG#v}"
             echo "release=true" >> "$GITHUB_OUTPUT"
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           fi
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION (release: $([ "$TEST" = "true" ] && echo no || echo yes))"
+          echo "Mode: $MODE, version: $VERSION (latest release ${LATEST})"
 
   build:
     name: Build smolpy
@@ -85,6 +112,17 @@ jobs:
 
       - name: Build package
         run: uv build
+
+      # hatch-vcs numbers smolpy from git, the engine is numbered above: they must agree
+      - name: Check the version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          ls dist/
+          test -f "dist/smolpy-${VERSION}.tar.gz" || {
+            echo "::error::smolpy was built as $(ls dist/*.tar.gz), expected version ${VERSION}"
+            exit 1
+          }
 
       - name: Upload dist
         uses: actions/upload-artifact@v4
@@ -146,10 +184,64 @@ jobs:
     name: GitHub Release
     needs: [version, publish, publish-engine]
     # only once smolpy is on PyPI; with the engine's files if it is there too
-    if: ${{ always() && needs.publish.result == 'success' }}
+    if: ${{ always() && needs.version.outputs.mode == 'release' && needs.publish.result == 'success' }}
     permissions:
       contents: write
     uses: ./.github/workflows/github-release.yml
     with:
       tag: ${{ needs.version.outputs.tag }}
       engine: ${{ needs.publish-engine.result == 'success' }}
+
+  dev-release:
+    name: GitHub pre-release "Development build"
+    needs: [version, publish, publish-engine]
+    if: ${{ always() && needs.version.outputs.mode == 'dev' && needs.publish.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download smolpy
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Download smolpy-engine-rs
+        if: ${{ needs.publish-engine.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          merge-multiple: true
+          path: dist/
+
+      # One pre-release, replaced by every development build, so the list of
+      # releases keeps only real releases and the latest development build.
+      - name: Replace the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.version.outputs.version }}
+          ENGINE: ${{ needs.publish-engine.result == 'success' }}
+          SHA: ${{ github.sha }}
+        run: |
+          SHORT=${SHA:0:7}
+          ENGINE_LINE="smolpy-engine-rs ${VERSION}"
+          [ "$ENGINE" = "true" ] || ENGINE_LINE="smolpy-engine-rs: not published in this build"
+          cat > notes.md <<NOTES
+          The latest development build of \`main\`, from commit [\`${SHORT}\`](https://github.com/${GH_REPO}/commit/${SHA}). It is replaced by every merge that changes the package.
+
+          - smolpy ${VERSION}
+          - ${ENGINE_LINE}
+
+          Development builds are pre-releases on PyPI: pip installs them only when asked.
+
+          \`\`\`bash
+          pip install --pre "smolpy[rust]==${VERSION}"
+          \`\`\`
+
+          For a stable version, use the latest release instead.
+          NOTES
+          gh release delete dev --cleanup-tag --yes || true
+          gh release create dev dist/* --prerelease --target "$SHA" \
+            --title "Development build ${VERSION}" --notes-file notes.md

@@ -191,6 +191,11 @@ Raw results: `benchmarks/results/2026-11-15-1255-rust-jaws-zbook-stop-criterion.
 - The workflow publishes `smolpy-engine-rs` to PyPI. Its version is kept in lock-step with `smolpy`: the same tag triggers both releases.
 - The existing `ci.yml`, `release.yml` and `publish.yml` of the main package stay unchanged, apart from an extra CI job that runs the equivalence tests with the Rust backend.
 - The Rust toolchain is needed only by contributors who work on the engine.
+- *Added 2026-11-15:* **development builds.**
+    - **What.** After every merge to `main` that changes `src/`, `rust/` or `pyproject.toml`, `dev-build.yml` publishes `smolpy` and `smolpy-engine-rs` to PyPI as `X.Y.(Z+1).devN`, where N is the number of commits after the latest release tag. This is hatch-vcs's own numbering, and the workflow checks that the two agree.
+    - **For whom.** They are PEP 440 pre-releases, so `pip install smolpy` ignores them and `pip install --pre` gets them. A git hash cannot be part of a version on PyPI, so it goes into the GitHub pre-release instead.
+    - **On GitHub.** One pre-release, "Development build" on the moving tag `dev`, is replaced each time and names the commit. Every place that looks for the latest release matches `v*` tags only, so `dev` never counts as one.
+    - **Releases** (patch, minor or major) stay manual, through `release.yml`. Release `X.Y.(Z+1)` sorts above all its development builds.
 
 ---
 
