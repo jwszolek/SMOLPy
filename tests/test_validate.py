@@ -240,7 +240,7 @@ def test_loops_are_rejected() -> None:
 def test_half_duplex_is_not_supported_by_simpy() -> None:
     sc = _with("links", 5, duplex=False)
     validate(sc)  # a valid model ...
-    with pytest.raises(ScenarioError, match="half-duplex links are not supported by the simpy"):
+    with pytest.raises(ScenarioError, match="the simpy backend does not support half-duplex links"):
         run_simulation(sc)  # ... that this backend cannot run
 
 

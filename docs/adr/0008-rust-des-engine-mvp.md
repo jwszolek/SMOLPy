@@ -1,8 +1,8 @@
 # ADR-0008: Rust DES Engine (MVP)
 
-**Status:** Proposed  
-**Date:** 2026-11-13  
-**Depends on:** ADR-0006 (benchmark targets, decision gate with research targets), ADR-0007 (Scenario IR, semantics contract)
+**Status:** Accepted  
+**Date:** 2026-11-13; accepted 2026-11-15 and brought up to date with ADR-0007 (revision of 2026-11-14), ADR-0009 and ADR-0010  
+**Depends on:** ADR-0006 (benchmark targets, decision gate with research targets), ADR-0007 (Scenario IR, semantics contract), ADR-0010 (Ethernet frames on the wire)
 
 ---
 
@@ -19,7 +19,7 @@ A native engine written in Rust can remove most of this per-event overhead:
 - there is no interpreter overhead per event;
 - runs execute without holding Python's GIL, so independent simulations can use all cores in one process.
 
-This ADR applies **only if the ADR-0006 decision gate is met**, i.e. if optimised SimPy misses the performance targets. The original targets were met by optimised SimPy (ADR-0006 §6, evaluation of 2026-11-13). The case for Rust rests on the **research targets** added there: B4 (10 000 nodes) at 100 M frames, and 1 000 replications of B3. Both must first be measured on SimPy. The engine is an optional accelerator for research use; SimPy remains the reference implementation. It also requires the Scenario IR (ADR-0007), so that the Rust engine reads exactly the same model as SimPy and is checked against the same semantics contract.
+This ADR applies **only if the ADR-0006 decision gate is met**, i.e. if optimised SimPy misses the performance targets. The original targets were met by optimised SimPy (ADR-0006 §6, evaluation of 2026-11-13). The case for Rust rests on the **research targets** added there: B4 (10 000 nodes) at 100 M frames, and 1 000 replications of B3. Both must first be measured on SimPy. *They were, on 2026-11-13, and optimised SimPy missed both: B4 took 106 min against 30, and 1 000 × B3 about 3.2 h against 30 min ([Benchmarks](../benchmarks.md#research-targets)). The gate is open.* The engine is an optional accelerator for research use; SimPy remains the reference implementation. It also requires the Scenario IR (ADR-0007), so that the Rust engine reads exactly the same model as SimPy and is checked against the same semantics contract.
 
 ### Options considered
 
@@ -48,7 +48,9 @@ rust/
 ├── Cargo.toml                # workspace
 ├── smol-engine/              # pure Rust DES library — no Python dependency
 │   └── src/
-│       ├── scenario.rs       # deserialises Scenario IR JSON (format "smol-ir", version 1)
+│       ├── scenario.rs       # deserialises Scenario IR JSON (format "smol-ir", version 2)
+│       ├── timebase.rs       # the time rules of Model Semantics §1 (ADR-0007 revision)
+│       ├── frames.rs         # frame sizes and wire overhead (ADR-0010)
 │       ├── sim.rs            # event list, clock, main loop
 │       ├── net/              # links, switches, NIC egress queues
 │       ├── traffic.rs        # flow generators
@@ -56,16 +58,35 @@ rust/
 └── smolpy-engine-rs/         # PyO3 bindings, built with maturin → Python module smolpy_engine_rs
 ```
 
+*As built in step 3:* links, switches, flow generators and metric samplers all live in `sim.rs`, which reproduces SimPy's event graph (below). `net/`, `traffic.rs` and `metrics.rs` are split out when Phase 5 makes the file large enough to need it.
+
 `smol-engine` has no Python dependency, so it can be tested and benchmarked with `cargo test` / `cargo bench` on its own, and later reused by other front ends.
 
 ### Engine design
 
 - **Time:** `u64` nanoseconds. This is exact, has no floating-point drift, and gives a deterministic order for simultaneous events.
+    - *Since the ADR-0007 revision of 2026-11-14, SimPy uses the same clock.* The engine implements the rules of `smolpy.model.timebase` exactly, and `timebase.rs` is tested against the same vectors:
+        - a JSON number means its shortest decimal value;
+        - every quantity is computed exactly and rounded once, ties to even;
+        - periodic instants are `start + round(k · period)`;
+        - metric values are one rounded quotient of integers.
+- **Frames on the wire** follow ADR-0010:
+    - frame sizes from destination MAC to FCS, at least 64 B, with an 802.1Q tag above priority 0;
+    - a preamble and SFD before every frame and an inter-frame gap after it.
+- **Order of simultaneous events.** Events at the same instant are processed in the order they were scheduled ([Model Semantics §9](../model-semantics.md#9-simultaneous-events)).
+    - The engine must also schedule them in the same order as SimPy: start-up order, a sample before a frame arriving at the same instant, a batch group in draw order.
+    - Bit-exact equivalence depends on this more than on anything else. Every case the equivalence suite finds is either written into §9 or fixed as a bug.
+    - *As built in step 3:* the engine reproduces SimPy's event graph exactly as `smolpy.sim.engine` creates it.
+        - Events are keyed `(time, priority, sequence)`. Process starts are URGENT and everything else NORMAL, as in SimPy.
+        - A store `put` is an event of its own, and a waiting `get` is triggered when that event is processed. A `get` on a non-empty store is scheduled at once.
+        - Processes are created in SimPy's order.
+
+      It therefore even processes the same number of events: B1 at 200 k frames gives 2 600 156 in both engines, with the same output hash.
 - **Event list:** a binary heap keyed by `(time, sequence)`. The sequence number makes the processing order of same-time events deterministic. If ADR-0006 profiling shows that heap operations dominate, a calendar queue can replace the heap later without changing behaviour.
 - **Frames:** small structs held in an arena and referenced by index. No copy per hop; the information that varies per hop (ingress port) lives in the event, not in the frame.
-- **Links and egress queues:** each link direction has 8 priority classes, each a `VecDeque` of frame indices, and a "busy until" timestamp. Transmission completion and delivery after propagation are ordinary scheduled events, with no per-frame process.
+- **Links and egress queues:** each link direction has 8 priority classes, each a `VecDeque` of frame indices, and a "busy until" timestamp that includes the inter-frame gap. Transmission completion and delivery after propagation are ordinary scheduled events, with no per-frame process.
 - **Switches:** a MAC table per switch (`HashMap<MacId, Port>`), pre-seeded from topology as in SimPy. MACs and node names are interned to integer ids when the scenario is loaded.
-- **Randomness:** one generator per traffic source, seeded from the derived stream seed defined in ADR-0007.
+- **Randomness:** one generator per traffic source, seeded from the derived stream seed defined in ADR-0007. The generator is the engine's own: a small PCG or xoshiro implementation, so no `rand` dependency is needed. Its draws differ from SimPy's, which is why stochastic scenarios are compared statistically (ADR-0009).
 - **Metrics:** streaming aggregation per sampling window (sum/count for means, running max, counters). Memory is constant in the number of frames, which is the main memory fix identified in ADR-0006, applied from day one.
 - **Results:** the engine returns the same `(time_ms, value)` series per metric key, wrapped into a regular `SimulationResult`. `report()`, `export()` and `--output` work unchanged.
 
@@ -79,7 +100,7 @@ result = net.simulate(duration=60_000, backend="rust")
 smolpy run plant.smol --backend rust
 ```
 
-- The backend is registered in the ADR-0004/0007 backend registry. When `smolpy_engine_rs` is not installed, selecting it raises a clear error that names the install command.
+- The backend is registered in the ADR-0004/0007 backend registry. When `smolpy_engine_rs` is not installed, selecting it raises a clear error that names the install command. *Implemented in step 2 as `smolpy.backends`.* Each backend declares its `Capabilities`. The Rust backend takes them from the engine module itself, so Python never claims more than the engine supports.
 - `run()` serialises the Scenario to IR JSON, passes it to Rust and releases the GIL for the whole simulation.
 - The live dashboard and text mode are **not supported** in the MVP; the Rust backend runs headless. This is declared in its capabilities, so `live=True` is rejected before the run.
 
@@ -87,7 +108,7 @@ smolpy run plant.smol --backend rust
 
 | In the MVP | Later (Phase 5 of the roadmap) |
 |---|---|
-| Adapters, switches (`strict` / `fifo` QoS), links | Hubs |
+| Adapters, switches (`strict` / `fifo` QoS), links | — *(hubs were removed from the model)* |
 | Ethernet flows: constant, Poisson, bursty, batch; fixed sizes and `imix`; `priority` | MQTT (publish, route, broker) |
 | Metrics: `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth`, `utilization` | Modbus TCP |
 | Seeded runs | PROFINET RT and its metrics |
@@ -107,10 +128,43 @@ Anything outside this scope is rejected by the capability check with a message s
 
 The MVP is built first for **B1 only** (one flow, one switch) and measured before the rest of the scope:
 
-- **B1 at 10 M frames, metrics off**, must run **at least 10× faster** than optimised SimPy (198 s, ADR-0006), so **under 20 s**, on the reference machine.
-- It must also pass the equivalence check against SimPy.
+- **B1 at 10 M frames, metrics off**, must run **at least 10× faster** than optimised SimPy on the reference machine.
+    - ~~(198 s, ADR-0006), so **under 20 s**~~ *Amended 2026-11-15:* the 198 s predate integer time and ADR-0010. SimPy is measured again on the current model at implementation step 4, on the same machine and in the same session as the Rust engine. The limit is a tenth of that.
+- It must also pass the equivalence check against SimPy: B1 with metrics on must match bit for bit.
 
 If it does not, work on the Rust engine **stops**. The result, with its measurements, is recorded in this ADR. A negative result is still a publishable finding: it bounds what a native engine buys for this model.
+
+**Result (2026-11-15): go.** B1 at 10 M frames, metrics off, was run on the same machine (Intel Core Ultra 7 255H) in one session, with 3 repetitions per engine alternating:
+
+| Engine | Run time (median of 3) | Events | Output hash | Peak RSS |
+|---|---|---|---|---|
+| SimPy | 200.8 s (197.0, 201.7, 200.8) | 129 999 996 | `9eda076fe235df25` | 38 MB |
+| Rust | 4.93 s (4.70, 4.98, 4.93) | 129 999 996 | `9eda076fe235df25` | 38 MB |
+
+- **Speed-up: 40.8×** against the required 10×; the limit was 20.1 s. The Rust time is the whole backend call, including the IR's JSON and building the model.
+- **Bit-exact.** The output hash (event count and every metric sample) is identical. The equivalence suite passes bit for bit on B1, `line` and `switching` (flooding, learning, converged tables, FIFO QoS, priorities).
+- **Memory.** The peak RSS is the Python process in both cases. The Rust engine adds nothing measurable at this size, because B1 holds only a few frames at a time.
+
+Raw results: `benchmarks/results/2026-11-15-1255-rust-jaws-zbook-stop-criterion.json`.
+
+### Implementation steps
+
+*Added 2026-11-15.*
+
+1. **Bring this ADR up to date and accept it.** *(Done.)*
+2. **A backend registry in Python, no Rust yet.** *(Done: `smolpy.backends`.)*
+    - A `Backend` protocol with `capabilities` (ADR-0007).
+    - `backend=` on `Network.simulate()` and `run_many()`, and `--backend` on `smolpy run`.
+    - The capability check before a run.
+    - `rust` is registered and reports clearly when it is not installed.
+3. **The Rust skeleton for B1:** *(Done; see the results under the stop criterion.)*
+    - `smol-engine` with the IR reader, `timebase.rs`, `frames.rs` and the event loop;
+    - adapters, switches, links and constant flows, with B1's metrics;
+    - the PyO3 module, built with maturin.
+4. **Stop criterion.** B1 at 10 M frames on both engines, and B1's bit-exact equivalence. The result, go or stop, is recorded here. *(Done: go, 40.8×.)*
+5. **If go, the rest of the MVP scope:** random patterns, priorities and `qos`, MAC learning and flooding, `utilization`.
+6. **The research targets B3 and B4** with `--backend rust`.
+7. **Wheels and CI,** as below. *(CI done early, with step 4: a `rust` job in `ci.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test`. It builds the module with maturin and runs the equivalence suite against SimPy, and it fails if the Rust backend is not installed, so the suite cannot skip it silently. The wheels and their release remain.)*
 
 ### Build and release
 

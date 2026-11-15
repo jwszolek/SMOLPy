@@ -718,34 +718,25 @@ def _lookup(nodes: dict[str, model.NodeSpec], name: str, what: str) -> model.Nod
         raise ValueError(f"{what}: reference to undeclared node {name!r}") from None
 
 
-def check_runnable(scenario: model.Scenario) -> None:
-    """Raise unless SimPy can run *scenario*: it has a run section, it is
-    valid (``smolpy.model.validate``) and it uses only what this backend
-    supports."""
-    from smolpy.model.validate import ScenarioError, describe, validate
-
-    if scenario.run is None:
-        raise ValueError(f"scenario {scenario.name!r} has no run configuration")
-    validate(scenario)
-    for i, link in enumerate(scenario.links):
-        if not link.duplex:  # capability of this backend, not a model rule
-            raise ScenarioError(
-                f"{describe(link)}: half-duplex links are not supported by the simpy backend",
-                ("links", i),
-            )
-
-
 def run_simulation(
     scenario: model.Scenario,
     *,
     _all_samples: dict[str, Samples] | None = None,
     _sim_state: dict | None = None,
     _n_chunks: int = 1,
+    _checked: bool = False,
 ) -> SimulationResult:
-    """Run *scenario* on SimPy. Duration and seed come from ``scenario.run``."""
+    """Run *scenario* on SimPy. Duration and seed come from ``scenario.run``.
+
+    The scenario is checked first (``smolpy.backends.check``), unless the
+    caller has done it already (*_checked*).
+    """
     from smolpy.core.network import RunStats, SimulationResult
 
-    check_runnable(scenario)
+    if not _checked:
+        from smolpy.backends import check
+
+        check(scenario, "simpy")
     assert scenario.run is not None
     t_start = time.perf_counter()
 

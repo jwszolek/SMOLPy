@@ -43,3 +43,58 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short
+
+  rust:
+    name: Rust engine
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Format — cargo fmt
+        working-directory: rust
+        run: cargo fmt --all --check
+
+      - name: Lint — cargo clippy
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Unit tests — cargo test
+        working-directory: rust
+        run: cargo test
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras --python 3.12
+
+      - name: Build the Python module (maturin)
+        run: uvx maturin build --release -m rust/smolpy-engine-rs/Cargo.toml -o dist-rust
+
+      - name: Install the Python module
+        run: uv pip install dist-rust/smolpy_engine_rs-*.whl
+
+      # --no-sync keeps the module just installed; the check makes sure the
+      # equivalence tests below run the Rust backend instead of skipping it.
+      - name: Check that the rust backend is installed
+        run: uv run --no-sync python -c "from smolpy import backends; assert 'rust' in backends.installed(), backends.installed()"
+
+      - name: Equivalence with SimPy (bit for bit)
+        run: uv run --no-sync pytest tests/equivalence tests/test_backends.py -v --tb=short

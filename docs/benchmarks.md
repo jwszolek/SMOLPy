@@ -299,6 +299,12 @@ Frames now carry their FCS and, with a priority, an 802.1Q tag. Every frame also
 | B4 | on | 4 806 377 | `65ca251c2c3cd9db` | `06a64eac51c98358` |
 | B4 | off | 4 800 367 | `5eeb1fb6fffa3dac` | `44136fa355b3678a` |
 
+## Rust engine: stop criterion (ADR-0008)
+
+B1 at 10 M frames, metrics off, on both engines in one session, 3 alternating repetitions. Median run time: SimPy 200.8 s, Rust 4.93 s, which is **40.8×** faster. The required factor was 10×. Event counts (129 999 996) and output hashes (`9eda076fe235df25`) are identical. Details are in [ADR-0008](adr/0008-rust-des-engine-mvp.md#stop-criterion). Raw results are in `benchmarks/results/2026-11-15-1255-rust-jaws-zbook-stop-criterion.json`.
+
+`python -m benchmarks.worker --backend rust` runs one measurement on the Rust backend. The record has `call_s`, the whole backend call, next to the backend's own `run_s`.
+
 ## Rust decision gate (ADR-0006 §6)
 
 | Target | Optimised SimPy | Result |

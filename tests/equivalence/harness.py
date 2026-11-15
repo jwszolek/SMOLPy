@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from smolpy import batch as smolpy_batch
+from smolpy import backends
 from smolpy.batch import BatchResult, run_many
 from smolpy.core.network import SimulationResult
 from smolpy.model import Scenario
@@ -36,7 +36,7 @@ CANDIDATE_SEED_OFFSET = 1000  # the candidate's runs are independent of the refe
 
 
 def installed(backend: str) -> bool:
-    return backend in smolpy_batch.BACKENDS
+    return backend in backends.installed()
 
 
 @dataclass(frozen=True)

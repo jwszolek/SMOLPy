@@ -1,0 +1,13 @@
+[package]
+name = "smolpy-engine-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pyo3 = { version = "0.30.1", features = ["extension-module", "abi3-py310"] }
+smol-engine = { version = "0.1.0", path = "../smol-engine" }
+
+[lib]
+name = "smolpy_engine_rs"
+crate-type = ["cdylib"]

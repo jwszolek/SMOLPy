@@ -1,6 +1,6 @@
 """Worker process of ``run_many`` (ADR-0009): ``python -m smolpy._worker``.
 
-Reads pickled ``(scenario id, scenario JSON or None, seed)`` tasks from
+Reads pickled ``(scenario id, scenario JSON or None, seed, backend)`` tasks from
 stdin and writes one pickled outcome per task to stdout: ``(metrics, stats)``
 or the traceback of a failed run. The JSON is sent with the first task of a
 scenario only; later tasks refer to it by id. ``None`` ends the worker.
@@ -23,17 +23,18 @@ from smolpy.model import Scenario
 _parse = lru_cache(maxsize=4)(Scenario.from_json)
 
 
-def run_task(text: str, seed: int) -> Any:
-    """``(metrics, stats)`` of one run, or the traceback if it failed."""
+def run_task(text: str, seed: int, backend: str = "simpy") -> Any:
+    """``(metrics, stats)`` of one run, or the traceback if it failed. The
+    scenario was checked against *backend* by ``run_many`` before any run."""
     import dataclasses
 
-    from smolpy.sim.engine import run_simulation
+    from smolpy import backends
 
     try:
         scenario = _parse(text)
         assert scenario.run is not None
         run = dataclasses.replace(scenario.run, seed=seed)
-        result = run_simulation(dataclasses.replace(scenario, run=run))
+        result = backends.get(backend).run(dataclasses.replace(scenario, run=run))
     except Exception:
         return traceback.format_exc()
     return result.metrics, result.stats
@@ -48,10 +49,11 @@ def serve(tasks: BinaryIO, out: BinaryIO) -> None:
             return
         if task is None:
             return
-        scenario, text, seed = task
+        scenario, text, seed, backend = task
         if text is not None:
             texts[scenario] = text
-        pickle.dump(run_task(texts[scenario], seed), out, protocol=pickle.HIGHEST_PROTOCOL)
+        outcome = run_task(texts[scenario], seed, backend)
+        pickle.dump(outcome, out, protocol=pickle.HIGHEST_PROTOCOL)
         out.flush()
 
 

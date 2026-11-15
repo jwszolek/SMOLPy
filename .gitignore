@@ -40,3 +40,6 @@ pyrightconfig.json
 
 # Benchmark profiles (ADR-0006) — regenerate with `python -m benchmarks profile`
 benchmarks/profiles/
+
+# Rust engine build output (ADR-0008)
+rust/target/

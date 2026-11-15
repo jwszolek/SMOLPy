@@ -89,7 +89,7 @@ def test_runs_apply_to_smol_files_only(tmp_path) -> None:
     script.write_text("import sys\nprint('args', sys.argv[1:])\n")
     done = _smolpy("--runs", "3", str(script))
     assert done.returncode == 1
-    assert "--runs and --workers apply to .smol files" in " ".join(done.stdout.split())
+    assert "--runs, --workers and --backend apply to .smol files" in " ".join(done.stdout.split())
     # after a Python script, the options are the script's own
     done = _smolpy(str(script), "--runs", "3")
     assert done.returncode == 0 and "args ['--runs', '3']" in done.stdout

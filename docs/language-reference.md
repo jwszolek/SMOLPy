@@ -7,6 +7,7 @@ uv run smolpy run topology.smol
 uv run smolpy run topology.smol --text      # force text-mode dashboard
 uv run smolpy run topology.smol -o out.csv  # export metrics after the run
 uv run smolpy run topology.smol --runs 30 --workers 8 -o runs.csv   # 30 runs, mean ± CI
+uv run smolpy run topology.smol --backend rust   # another execution backend, headless
 ```
 
 A `.smol` file is **declarative**: it cannot express loops, conditionals, or parameterised topologies. Scenarios that need those still require the Python API.

@@ -144,6 +144,7 @@ result = net.simulate(duration=30_000)              # headless — silent, faste
 result = net.simulate(duration=30_000, text=True)   # rich text dashboard in terminal
 result = net.simulate(duration=30_000, live=True)   # full Dear PyGui desktop window
 result = net.simulate(duration=30_000, seed=7)      # seed of the traffic generators (default 42)
+result = net.simulate(duration=30_000, backend="rust")  # another execution backend
 
 result.report()   # print summary table (avg / min / max per metric)
 result.stats      # RunStats(backend="simpy", events=..., wall_s=...)
@@ -154,6 +155,29 @@ result.plot()     # open static dashboard for a completed result
 result.export("results.csv")    # long CSV: time_ms, metric, value
 result.export("results.json")   # JSON dict of lists-of-pairs
 result.export("out.csv", format="csv")   # explicit format override
+```
+
+### Backends
+
+`backend=` selects the execution backend, in `simulate()` and in `run_many()`:
+
+| Backend | What it is |
+|---|---|
+| `"simpy"` | The reference implementation. It is the default, always installed, and runs the whole model, including the live and text dashboards. |
+| `"rust"` | The native engine of [ADR-0008](adr/0008-rust-des-engine-mvp.md), from the optional package installed with `pip install smolpy[rust]`. It runs headless. |
+
+- **What a backend can run is checked before the run.** Every backend declares what it supports: node kinds, traffic kinds, patterns and metrics. A scenario that uses anything else is rejected with a `ScenarioError` naming the element, for example `poll a -> meter: the rust backend does not support poll (Modbus TCP)`.
+- **A missing backend is an error.** When a backend is not installed, selecting it raises `BackendUnavailable` with the install command.
+- **`smolpy.backends.installed()`** lists the backends that can run here.
+
+**The Rust backend so far** runs adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with the `constant` pattern and fixed sizes. It covers the metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth` and `utilization`.
+- **Same results as SimPy.** It gives SimPy's results bit for bit.
+- **Not in it yet.** Random patterns and IMIX are not supported yet, and neither are MQTT, Modbus and PROFINET (Phase 5 of the [roadmap](roadmap.md)).
+- **Not on PyPI yet.** Until it is published, build it from the repository with a Rust toolchain:
+
+```bash
+uvx maturin build --release -m rust/smolpy-engine-rs/Cargo.toml -o dist/
+uv pip install dist/smolpy_engine_rs-*.whl
 ```
 
 **Text mode** (`text=True`) displays a live updating table in the terminal — no display server or GUI toolkit required. Ideal for headless servers, SSH sessions, and CI environments.

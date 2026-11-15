@@ -31,14 +31,22 @@ Without `duration`, `to_scenario()` describes the network only, and `scenario.ru
 ## Running a scenario
 
 ```python
-from smolpy.sim.engine import run_simulation
+from smolpy import backends
 
-result = run_simulation(Scenario.from_json(text))   # duration and seed from scenario.run
+result = backends.run(Scenario.from_json(text))   # duration and seed from scenario.run
+result = backends.run(scenario, "rust")           # on another backend
 result.scenario     # the scenario that was run
 result.stats        # RunStats(backend="simpy", events=..., wall_s=...)
 ```
 
-A scenario read back from JSON gives exactly the same results as the `Network` it came from. The run fails with `ValueError` if the scenario has no `run` section or references an undeclared node.
+A scenario read back from JSON gives exactly the same results as the `Network` it came from.
+
+`backends.check(scenario, backend)` runs before every run:
+- it fails with `ValueError` if the scenario has no `run` section;
+- it raises `ScenarioError` if the scenario is invalid ([Validation](#validation)) or uses something the backend does not support;
+- it raises `BackendUnavailable` if the backend is not installed.
+
+`smolpy.sim.engine.run_simulation(scenario)` is the SimPy engine itself, with the same check.
 
 ## Changing a scenario
 

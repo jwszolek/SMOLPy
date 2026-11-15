@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "smolpy-engine-rs"
+description = "Native discrete-event engine for SMOLPy (ADR-0008)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dynamic = ["version"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "smolpy_engine_rs"
