@@ -1,0 +1,116 @@
+name: Rust wheels
+
+# Builds the smolpy-engine-rs wheels (ADR-0008, step 7): one abi3 wheel per
+# platform serves every Python >= 3.10. Each wheel the runner can execute is
+# installed and smoke-tested against SimPy.
+#
+# - On a pull request that touches the engine: build and test only.
+# - Called by publish.yml: with the release version, before publishing.
+
+on:
+  pull_request:
+    paths:
+      - "rust/**"
+      - ".github/workflows/rust-wheels.yml"
+  workflow_call:
+    inputs:
+      version:
+        description: Package version (PEP 440), e.g. 1.8.0 or 1.7.1.dev12; empty keeps Cargo's
+        required: false
+        type: string
+      ref:
+        description: Git ref to build; empty builds the triggering commit
+        required: false
+        type: string
+
+jobs:
+  wheels:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64, os: ubuntu-latest, target: x86_64, smoke: true }
+          - { name: linux-aarch64, os: ubuntu-latest, target: aarch64, smoke: false }
+          - { name: macos-arm64, os: macos-14, target: aarch64-apple-darwin, smoke: true }
+          - { name: macos-x86_64, os: macos-14, target: x86_64-apple-darwin, smoke: false }
+          - { name: windows-x86_64, os: windows-latest, target: x64, smoke: true }
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set the package version
+        if: ${{ inputs.version != '' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # PEP 440 for the wheel; Cargo needs SemVer (1.7.1.dev12 -> 1.7.1-dev.12)
+          CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/')
+          sed -i.bak "s/^dynamic = \[\"version\"\]$/version = \"$VERSION\"/" rust/smolpy-engine-rs/pyproject.toml
+          sed -i.bak "s/^version = \"[^\"]*\"$/version = \"$CARGO_VERSION\"/" rust/Cargo.toml
+          grep -n "^version" rust/smolpy-engine-rs/pyproject.toml rust/Cargo.toml
+
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist -m rust/smolpy-engine-rs/Cargo.toml
+
+      - name: Set up Python
+        if: ${{ matrix.smoke }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Smoke test against SimPy
+        if: ${{ matrix.smoke }}
+        run: |
+          python -m pip install --quiet . dist/*.whl
+          python rust/smolpy-engine-rs/smoke_test.py
+
+      - name: Upload the wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set the package version
+        if: ${{ inputs.version != '' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/')
+          sed -i "s/^dynamic = \[\"version\"\]$/version = \"$VERSION\"/" rust/smolpy-engine-rs/pyproject.toml
+          sed -i "s/^version = \"[^\"]*\"$/version = \"$CARGO_VERSION\"/" rust/Cargo.toml
+
+      - name: Build the sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist -m rust/smolpy-engine-rs/Cargo.toml
+
+      - name: Upload the sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error

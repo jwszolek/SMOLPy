@@ -4,10 +4,23 @@ build-backend = "maturin"
 
 [project]
 name = "smolpy-engine-rs"
-description = "Native discrete-event engine for SMOLPy (ADR-0008)"
+description = "Native Rust simulation engine for SMOLPy: SimPy's results bit for bit, about 40x faster"
+readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dynamic = ["version"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: System :: Networking",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Homepage = "https://github.com/jwszolek/SMOLPy"
+Documentation = "https://jwszolek.github.io/SMOLPy/"
+Source = "https://github.com/jwszolek/SMOLPy/tree/main/rust"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

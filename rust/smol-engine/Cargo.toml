@@ -3,6 +3,9 @@ name = "smol-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "SMOLPy's native discrete-event network simulation engine (ADR-0008)"
+publish = false  # shipped as the Python package smolpy-engine-rs, not on crates.io
 
 [dependencies]
 serde_json = { version = "1.0.154", features = ["arbitrary_precision"] }

@@ -2,9 +2,10 @@ name: GitHub Release
 
 # Creates the GitHub Release of a tag, with notes generated from the pull
 # requests since the previous tag and the sdist and wheel built from the tag.
-# Called by publish.yml once the tag is on PyPI; run it by hand to add the
-# release of an existing tag. A release that exists already gets its files
-# replaced and keeps its notes.
+# Called by publish.yml once the tag is on PyPI, which also passes the
+# smolpy-engine-rs wheels and sdist built in the same run (engine: true); run
+# it by hand to add the release of an existing tag. A release that exists
+# already gets its files replaced and keeps its notes.
 
 on:
   workflow_call:
@@ -12,6 +13,11 @@ on:
       tag:
         required: true
         type: string
+      engine:
+        description: Attach the smolpy-engine-rs files built earlier in the same run
+        required: false
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       tag:
@@ -40,6 +46,14 @@ jobs:
 
       - name: Build package
         run: uv build
+
+      - name: Download the smolpy-engine-rs files
+        if: ${{ inputs.engine }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          merge-multiple: true
+          path: dist/
 
       - name: Create or update the release
         env:
