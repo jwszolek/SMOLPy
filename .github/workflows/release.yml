@@ -32,7 +32,8 @@ jobs:
       - name: Compute next version
         id: version
         run: |
-          LATEST=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          # only release tags: the moving "dev" tag of development builds does not count
+          LATEST=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo "v0.0.0")
           echo "Latest tag: $LATEST"
           VERSION=${LATEST#v}
           MAJOR=$(echo "$VERSION" | cut -d. -f1)

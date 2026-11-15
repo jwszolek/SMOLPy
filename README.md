@@ -43,6 +43,16 @@ Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress que
 ## Install
 
 ```bash
+pip install smolpy               # SimPy engine, dashboards, CLI
+pip install "smolpy[rust]"       # plus the native Rust engine, about 40x faster
+pip install --pre "smolpy[rust]" # the latest development build of main
+```
+
+Every merge to `main` that changes the package publishes a **development build**, `X.Y.(Z+1).devN` (N commits after the latest release). It is a pre-release on PyPI, so `pip` installs it only with `--pre`, and the GitHub pre-release [Development build](https://github.com/jwszolek/SMOLPy/releases/tag/dev) points to its commit. Releases proper are made by hand.
+
+From a clone, for development:
+
+```bash
 uv sync          # installs all runtime + dev dependencies
 ```
 

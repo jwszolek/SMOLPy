@@ -63,5 +63,8 @@ jobs:
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
           else
-            gh release create "$TAG" dist/* --title "$TAG" --generate-notes --verify-tag
+            # notes since the previous release tag, never since the moving "dev" tag
+            PREVIOUS=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${TAG}^" 2>/dev/null || true)
+            gh release create "$TAG" dist/* --title "$TAG" --generate-notes --verify-tag \
+              ${PREVIOUS:+--notes-start-tag "$PREVIOUS"} --latest
           fi

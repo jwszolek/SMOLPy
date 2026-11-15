@@ -1,0 +1,30 @@
+name: Development build
+
+# After every merge to main that changes the package, publish a development
+# build: smolpy and smolpy-engine-rs X.Y.(Z+1).devN on PyPI (pre-releases,
+# installed only with pip --pre) and the GitHub pre-release "Development
+# build". Releases proper stay manual (release.yml).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "rust/**"
+      - "pyproject.toml"
+
+# one at a time; a newer merge waiting replaces an older one that waits
+concurrency:
+  group: dev-build
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish
+    uses: ./.github/workflows/publish.yml
+    with:
+      dev: true
+    permissions:
+      id-token: write  # PyPI trusted publishing
+      contents: write  # the GitHub pre-release
