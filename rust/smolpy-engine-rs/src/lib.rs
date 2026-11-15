@@ -4,8 +4,8 @@
 //! - `CAPABILITIES`: what the engine supports, as `smolpy.backends.Capabilities`.
 //! - `run(scenario_json)`: `(metrics, events, wall_s)`, with the GIL released
 //!   for the whole run.
-//! - `_ms_to_ns`, `_transmission_ns`, `_propagation_ns`, `_instants`, `_ratio`:
-//!   the time rules, for tests against `smolpy.model.timebase`.
+//! - `_ms_to_ns`, `_transmission_ns`, `_propagation_ns`, `_instants`, `_ratio`,
+//!   `_stream_seed`: the time rules and stream seeds, for tests against Python.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -55,6 +55,12 @@ fn _instants(start_ns: u64, rate: &str, count: usize) -> PyResult<Vec<u64>> {
     Ok(Instants::new(start_ns, period).take(count).collect())
 }
 
+/// The seed of a traffic statement's random stream.
+#[pyfunction]
+fn _stream_seed(run_seed: u64, source_id: &str) -> u64 {
+    smol_engine::rng::stream_seed(run_seed, source_id)
+}
+
 /// `n / d` rounded once; both given as decimal strings (Python ints).
 #[pyfunction]
 fn _ratio(n: &str, d: &str) -> PyResult<f64> {
@@ -89,5 +95,6 @@ fn smolpy_engine_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(_propagation_ns, m)?)?;
     m.add_function(wrap_pyfunction!(_instants, m)?)?;
     m.add_function(wrap_pyfunction!(_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(_stream_seed, m)?)?;
     Ok(())
 }

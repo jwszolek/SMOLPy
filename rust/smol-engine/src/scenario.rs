@@ -5,6 +5,7 @@
 //! errors) and rejects everything the engine does not support yet, naming
 //! it. Nothing is skipped silently.
 
+use crate::rng::Batch;
 use crate::timebase::Q;
 use serde_json::{Map, Value};
 
@@ -31,9 +32,19 @@ pub struct Link {
     pub length_m: Q,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pattern {
     Constant,
+    Poisson,
+    Bursty,
+    Batch(Batch),
+}
+
+/// A flow's frame size: fixed (untagged, FCS included) or IMIX per frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Size {
+    Fixed(u64),
+    Imix,
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +52,7 @@ pub struct Flow {
     pub source: String,
     pub destination: String,
     pub rate: Q,
-    pub size: u64,
+    pub size: Size,
     pub pattern: Pattern,
     pub delay_ms: Q,
     pub priority: u8,
@@ -103,7 +114,7 @@ pub struct Capabilities {
 pub const CAPABILITIES: Capabilities = Capabilities {
     nodes: &["adapter", "switch"],
     traffic: &["flow"],
-    patterns: &["constant"],
+    patterns: &["constant", "poisson", "bursty", "batch"],
     metrics: &[
         "throughput",
         "latency",
@@ -112,7 +123,7 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "queue_depth",
         "utilization",
     ],
-    features: &[],
+    features: &["imix"],
     notes: &[
         ("mqtt_broker", "planned for Phase 5"),
         ("modbus_slave", "planned for Phase 5"),
@@ -372,25 +383,27 @@ fn parse_traffic(value: Value, i: usize) -> Res<Flow> {
     f.what = format!("flow {source} -> {destination}");
     let rate = f.number("rate")?;
     let size = match f.take("size")? {
-        Value::String(s) if s == "imix" => return Err(unsupported("IMIX frame sizes")),
-        Value::Number(n) => n.as_u64().ok_or("flow: size must be an integer")?,
+        Value::String(s) if s == "imix" => Size::Imix,
+        Value::Number(n) => Size::Fixed(n.as_u64().ok_or("flow: size must be an integer")?),
         other => return Err(format!("flow: invalid size {other}")),
     };
-    let pattern = match f.string("pattern")?.as_str() {
-        "constant" => Pattern::Constant,
-        p @ ("poisson" | "bursty" | "batch") => {
-            return Err(unsupported(&format!("the {p:?} pattern")))
-        }
-        other => return Err(format!("flow: unknown pattern {other:?}")),
-    };
+    let pattern = f.string("pattern")?;
     let delay_ms = match f.take_or("delay_ms") {
         None => Q::int(0),
         Some(v) => number(&v, "flow: delay_ms")?,
     };
-    match f.take_or("batch") {
-        None | Some(Value::Null) => {}
-        Some(_) => return Err(unsupported("batch sizes")),
-    }
+    let batch = match f.take_or("batch") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(parse_batch(v)?),
+    };
+    let pattern = match (pattern.as_str(), batch) {
+        ("constant", _) => Pattern::Constant,
+        ("poisson", _) => Pattern::Poisson,
+        ("bursty", _) => Pattern::Bursty,
+        ("batch", Some(b)) => Pattern::Batch(b),
+        ("batch", None) => return Err("flow: pattern 'batch' needs a batch size".to_string()),
+        (other, _) => return Err(format!("flow: unknown pattern {other:?}")),
+    };
     let priority = match f.take_or("priority") {
         None => 0,
         Some(Value::Number(n)) => n.as_u64().filter(|p| *p <= 7).ok_or("flow: priority 0-7")? as u8,
@@ -406,6 +419,25 @@ fn parse_traffic(value: Value, i: usize) -> Res<Flow> {
         delay_ms,
         priority,
     })
+}
+
+/// `{"kind": "fixed" | "geom" | "pareto", "param": ...}`
+fn parse_batch(value: Value) -> Res<Batch> {
+    let mut f = Fields::new(value, "flow batch")?;
+    let kind = f.string("kind")?;
+    let param = match f.take("param")? {
+        Value::Number(n) => n.as_f64().ok_or("flow batch: param must be a number")?,
+        other => return Err(format!("flow batch: param must be a number, got {other}")),
+    };
+    f.done()?;
+    match kind.as_str() {
+        "fixed" if param >= 1.0 && param.fract() == 0.0 => Ok(Batch::Fixed(param as u64)),
+        "geom" if param >= 1.0 => Ok(Batch::Geom(param)),
+        "pareto" if param > 1.0 => Ok(Batch::Pareto(param)),
+        _ => Err(format!(
+            "flow batch: invalid {kind} batch with param {param}"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -432,12 +464,19 @@ mod tests {
                 .unwrap_err()
                 .contains("unknown field \"x\"")
         );
-        assert!(parse(&B1.replace("\"constant\"", "\"poisson\""))
+        let poisson = parse(&B1.replace("\"constant\"", "\"poisson\"")).unwrap();
+        assert_eq!(poisson.flows[0].pattern, Pattern::Poisson);
+        let imix = parse(&B1.replace("\"size\": 512", "\"size\": \"imix\"")).unwrap();
+        assert_eq!(imix.flows[0].size, Size::Imix);
+        let batch = parse(&B1.replace("\"constant\"", "\"batch\"").replace(
+            "\"batch\": null",
+            "\"batch\": {\"kind\": \"pareto\", \"param\": 2.5}",
+        ))
+        .unwrap();
+        assert_eq!(batch.flows[0].pattern, Pattern::Batch(Batch::Pareto(2.5)));
+        assert!(parse(&B1.replace("\"constant\"", "\"batch\""))
             .unwrap_err()
-            .contains("does not support the \"poisson\" pattern"));
-        assert!(parse(&B1.replace("\"size\": 512", "\"size\": \"imix\""))
-            .unwrap_err()
-            .contains("IMIX"));
+            .contains("needs a batch size"));
         assert!(parse(&B1.replace("\"throughput\"", "\"pn_jitter\""))
             .unwrap_err()
             .contains("metric \"pn_jitter\""));

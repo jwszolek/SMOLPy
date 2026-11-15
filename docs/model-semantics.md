@@ -131,7 +131,7 @@ An end station sends everything over its single link, in the egress queue order 
 - **Random draws.** Each traffic statement has its own random stream. Random patterns and IMIX sizes of a flow draw only from the flow's stream, in the order the flow needs the numbers. Adding, removing or reordering another statement does not change them.
     - **Source id:** `"<kind>:<from>-><to>#<k>"`, where `<from>` is the node that runs the statement, `<to>` the node it is aimed at (a route's topic), and `k` the number of earlier statements of the same kind between the same two ends. Example: the second flow from `plc` to `host` is `flow:plc->host#1`.
     - **Stream seed:** the first 8 bytes of SHA-256 of `"<run.seed>:<source id>"` (UTF-8), read as a big-endian unsigned integer. For seed 42 and `flow:a->b#0` it is `5297917812165586412`.
-    - **Generator:** each engine seeds its own generator from the stream seed. SimPy uses `random.Random`. Engines are not required to produce the same draws, only the same distributions (ADR-0007, cross-engine equivalence).
+    - **Generator:** each engine seeds its own generator from the stream seed. SimPy uses `random.Random`, and the Rust engine xoshiro256** seeded through SplitMix64. Engines are not required to produce the same draws, only the same distributions (ADR-0007, cross-engine equivalence). Both use the formulas of Python's `random` module for the exponential, Pareto and uniform draws, and the same IMIX and batch-size draws.
 
 | Source | Frames |
 |---|---|

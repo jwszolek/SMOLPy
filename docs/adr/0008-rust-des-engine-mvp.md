@@ -162,7 +162,13 @@ Raw results: `benchmarks/results/2026-11-15-1255-rust-jaws-zbook-stop-criterion.
     - adapters, switches, links and constant flows, with B1's metrics;
     - the PyO3 module, built with maturin.
 4. **Stop criterion.** B1 at 10 M frames on both engines, and B1's bit-exact equivalence. The result, go or stop, is recorded here. *(Done: go, 40.8×.)*
-5. **If go, the rest of the MVP scope:** random patterns, priorities and `qos`, MAC learning and flooding, `utilization`.
+5. **If go, the rest of the MVP scope:** random patterns, priorities and `qos`, MAC learning and flooding, `utilization`. *(Done.)*
+    - **Already in step 3:** priorities, both `qos` modes, learning and converged MAC tables, flooding and `utilization`.
+    - **Added in step 5:**
+        - the `poisson`, `bursty` and `batch` patterns, with fixed, geometric and Pareto group sizes, and IMIX;
+        - one xoshiro256** generator per traffic statement, seeded from the same SHA-256 stream seed as SimPy (checked against Python);
+        - the distributions as Python's `random` module computes them.
+    - **Result.** Against SimPy with 30 replications each, means agree within 0.7 % on `random-load` (Poisson, bursty, IMIX) and pass the comparison on the new `groups` scenario (all three batch sizes, IMIX, priorities). Deterministic scenarios stay bit-exact.
 6. **The research targets B3 and B4** with `--backend rust`.
 7. **Wheels and CI,** as below. *(CI done early, with step 4: a `rust` job in `ci.yml` runs `cargo fmt`, `clippy -D warnings` and `cargo test`. It builds the module with maturin and runs the equivalence suite against SimPy, and it fails if the Rust backend is not installed, so the suite cannot skip it silently. The wheels and their release remain.)*
 

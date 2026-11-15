@@ -17,7 +17,8 @@
 //! - the run stops before the first event at `t = duration`.
 
 use crate::frames::{flow_frame_size, IFG_BYTES, PREAMBLE_SFD_BYTES, WIRE_OVERHEAD_BYTES};
-use crate::scenario::{Metric, NodeKind, Scenario};
+use crate::rng::{stream_seed, Rng};
+use crate::scenario::{Metric, NodeKind, Pattern, Scenario, Size};
 use crate::timebase::{self as tb, Instants, Q};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
@@ -103,15 +104,35 @@ struct Switch {
     mac_table: HashMap<u32, i32>,
 }
 
+/// Where a flow's generator is, as in `smolpy.sim.engine._traffic_gen`.
+enum FlowState {
+    /// waiting for `delay_ms` to pass
+    Delay,
+    /// constant, Poisson and batch patterns
+    Run,
+    /// bursty: `left` of `len` frames to go, spaced by `ticks`
+    Burst {
+        left: u64,
+        len: u64,
+        ticks: Instants,
+    },
+    /// bursty: the silence after a burst
+    Silence,
+}
+
 struct FlowGen {
     src: u32,
     dst: u32,
-    size: u64,
+    size: Size,
     priority: u8,
     chan: u32,
     delay_ns: u64,
-    delayed: bool,
+    pattern: Pattern,
+    state: FlowState,
     instants: Instants,
+    mean_ns: f64, // the mean interval, for random gaps
+    quarter: Q,   // T / 4, the spacing within a burst
+    rng: Rng,
 }
 
 enum Sampled {
@@ -261,12 +282,11 @@ impl Engine {
             Proc::Flow(i) => {
                 let fl = &mut self.flows[i as usize];
                 if fl.delay_ns > 0 {
-                    fl.delayed = true;
+                    fl.state = FlowState::Delay;
                     let d = fl.delay_ns;
                     self.schedule(Ev::Timeout(proc), NORMAL, d);
                 } else {
-                    let t = fl.instants.next().unwrap();
-                    self.schedule(Ev::Timeout(proc), NORMAL, t - self.now);
+                    self.flow_begin(i, proc);
                 }
             }
             Proc::Sampler(i) => {
@@ -349,26 +369,7 @@ impl Engine {
                 self.schedule(Ev::InFlight(c, f), NORMAL, prop);
                 self.get(q, proc);
             }
-            Proc::Flow(i) => {
-                let fl = &mut self.flows[i as usize];
-                if fl.delayed {
-                    fl.delayed = false;
-                } else {
-                    let frame = Frame {
-                        src: fl.src,
-                        dst: fl.dst,
-                        size: fl.size,
-                        created: self.now,
-                        priority: fl.priority,
-                        in_port: -1,
-                    };
-                    let chan = fl.chan;
-                    let f = self.alloc(frame);
-                    self.enqueue(chan, f);
-                }
-                let t = self.flows[i as usize].instants.next().unwrap();
-                self.schedule(Ev::Timeout(proc), NORMAL, t - self.now);
-            }
+            Proc::Flow(i) => self.flow_step(i, proc),
             Proc::Sampler(i) => {
                 self.sample(i);
                 let t = self.samplers[i as usize].ticks.next().unwrap();
@@ -376,6 +377,114 @@ impl Engine {
             }
             Proc::AdapterRx(_) | Proc::Switch(_) => unreachable!("these processes do not time out"),
         }
+    }
+
+    /// The first gap of a flow's pattern, after its delay.
+    fn flow_begin(&mut self, i: u32, proc: u32) {
+        let fl = &mut self.flows[i as usize];
+        fl.state = FlowState::Run;
+        let delay = match fl.pattern {
+            Pattern::Constant => fl.instants.next().unwrap() - self.now,
+            Pattern::Poisson => tb::draw_ns(fl.rng.expovariate(1.0 / fl.mean_ns)),
+            Pattern::Batch(b) => tb::draw_ns(fl.rng.expovariate(1.0 / (fl.mean_ns * b.mean()))),
+            Pattern::Bursty => return self.flow_burst(i, proc),
+        };
+        self.schedule(Ev::Timeout(proc), NORMAL, delay);
+    }
+
+    /// A new burst: L = max(1, floor(Pareto(1.5))) frames spaced T / 4.
+    fn flow_burst(&mut self, i: u32, proc: u32) {
+        let now = self.now;
+        let fl = &mut self.flows[i as usize];
+        let len = (fl.rng.paretovariate(1.5) as u64).max(1);
+        let mut ticks = Instants::new(now, fl.quarter);
+        let t = ticks.next().unwrap();
+        fl.state = FlowState::Burst {
+            left: len,
+            len,
+            ticks,
+        };
+        self.schedule(Ev::Timeout(proc), NORMAL, t - now);
+    }
+
+    fn flow_step(&mut self, i: u32, proc: u32) {
+        let fl = &mut self.flows[i as usize];
+        match &mut fl.state {
+            FlowState::Delay => self.flow_begin(i, proc),
+            FlowState::Silence => self.flow_burst(i, proc),
+            FlowState::Run => {
+                let delay = match fl.pattern {
+                    Pattern::Constant => {
+                        self.flow_send(i);
+                        self.flows[i as usize].instants.next().unwrap() - self.now
+                    }
+                    Pattern::Poisson => {
+                        self.flow_send(i);
+                        let fl = &mut self.flows[i as usize];
+                        tb::draw_ns(fl.rng.expovariate(1.0 / fl.mean_ns))
+                    }
+                    Pattern::Batch(b) => {
+                        let k = b.draw(&mut fl.rng);
+                        for _ in 0..k {
+                            self.flow_send(i);
+                        }
+                        let fl = &mut self.flows[i as usize];
+                        tb::draw_ns(fl.rng.expovariate(1.0 / (fl.mean_ns * b.mean())))
+                    }
+                    Pattern::Bursty => unreachable!("a bursty flow is in a burst or a silence"),
+                };
+                self.schedule(Ev::Timeout(proc), NORMAL, delay);
+            }
+            FlowState::Burst { .. } => {
+                self.flow_send(i);
+                let now = self.now;
+                let fl = &mut self.flows[i as usize];
+                let FlowState::Burst { left, len, ticks } = &mut fl.state else {
+                    unreachable!()
+                };
+                *left -= 1;
+                let delay = if *left > 0 {
+                    ticks.next().unwrap() - now
+                } else {
+                    // OFF: silence with mean 0.75 T per frame, so a cycle averages T per frame
+                    let len = *len as f64;
+                    let silence = fl.mean_ns * len * fl.rng.uniform(0.3, 1.2);
+                    fl.state = FlowState::Silence;
+                    tb::draw_ns(silence)
+                };
+                self.schedule(Ev::Timeout(proc), NORMAL, delay);
+            }
+        }
+    }
+
+    /// One frame of a flow, its size drawn now for IMIX.
+    fn flow_send(&mut self, i: u32) {
+        let fl = &mut self.flows[i as usize];
+        let size = match fl.size {
+            Size::Fixed(s) => s,
+            Size::Imix => {
+                // 40 % 64 B, 57 % 594 B, 3 % 1 518 B (frames.IMIX_SIZES)
+                let r = fl.rng.random();
+                if r < 0.40 {
+                    64
+                } else if r < 0.97 {
+                    594
+                } else {
+                    1518
+                }
+            }
+        };
+        let frame = Frame {
+            src: fl.src,
+            dst: fl.dst,
+            size: flow_frame_size(size, fl.priority),
+            created: self.now,
+            priority: fl.priority,
+            in_port: -1,
+        };
+        let chan = fl.chan;
+        let f = self.alloc(frame);
+        self.enqueue(chan, f);
     }
 
     fn on_in_flight(&mut self, c: u32, f: u32) {
@@ -635,20 +744,35 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 let a = role[i] as u32;
                 e.process(Proc::AdapterRx(a));
                 if let Some(chan) = e.adapters[a as usize].out {
-                    for flow in sc.flows.iter().filter(|f| f.source == node.name) {
+                    for (n, flow) in sc.flows.iter().enumerate() {
+                        if flow.source != node.name {
+                            continue;
+                        }
                         let dst = lookup(&flow.destination)?;
                         let dst_mac = mac_of(dst).ok_or("a flow goes to an adapter")?;
                         let delay_ns = tb::ms_to_ns(flow.delay_ms)?;
                         let period = tb::interval_ns(flow.rate)?;
+                        // source id: earlier flows between the same two ends
+                        let k = sc.flows[..n]
+                            .iter()
+                            .filter(|f| {
+                                f.source == flow.source && f.destination == flow.destination
+                            })
+                            .count();
+                        let id = format!("flow:{}->{}#{k}", flow.source, flow.destination);
                         e.flows.push(FlowGen {
                             src: e.adapters[a as usize].mac,
                             dst: intern(&dst_mac),
-                            size: flow_frame_size(flow.size, flow.priority),
+                            size: flow.size,
                             priority: flow.priority,
                             chan,
                             delay_ns,
-                            delayed: false,
+                            pattern: flow.pattern,
+                            state: FlowState::Run,
                             instants: Instants::new(delay_ns, period),
+                            mean_ns: tb::ratio_f64(period.num, period.den),
+                            quarter: Q::new(period.num, period.den * 4)?,
+                            rng: Rng::new(stream_seed(sc.seed, &id)),
                         });
                         e.process(Proc::Flow((e.flows.len() - 1) as u32));
                     }
