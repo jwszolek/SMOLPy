@@ -1571,6 +1571,9 @@ dev = [
 docs = [
     { name = "mkdocs-material" },
 ]
+rust = [
+    { name = "smolpy-engine-rs" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1595,8 +1598,9 @@ requires-dist = [
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "simpy", specifier = ">=4.1" },
+    { name = "smolpy-engine-rs", marker = "extra == 'rust'", specifier = ">=1.8" },
 ]
-provides-extras = ["dev", "docs"]
+provides-extras = ["dev", "docs", "rust"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1605,6 +1609,19 @@ dev = [
     { name = "ruff" },
 ]
 docs = [{ name = "mkdocs-material", specifier = ">=9" }]
+
+[[package]]
+name = "smolpy-engine-rs"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/64/f2/858fd6ba4b6b792411f25f56e10db32319a25c36b0b8320cabeec6de99d6/smolpy_engine_rs-1.8.0.tar.gz", hash = "sha256:8f6d17b48e7eb77c0398ea8600c106fd1d5d983b465790bd5fd7f7e546216ff5", size = 25172, upload-time = "2026-11-15T14:28:44.896Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b4/59/3e7292c05f8d2af703471256d1f4b0ffc9b8e9ef78e7b54ec2af288f7c7b/smolpy_engine_rs-1.8.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:06502c4089af9549ce111f025b9d90c4f1c7e1cdbf9180032ada6c9a4877da4d", size = 331524, upload-time = "2026-11-15T14:28:39.082Z" },
+    { url = "https://files.pythonhosted.org/packages/a3/b2/636675c169a31befaf84b199ccec97bc248d5576ec95ee9e69fc06a74da9/smolpy_engine_rs-1.8.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c29427217f5b5836fcf0b57aeb9219f7f8b400933887101297a398e358b1a014", size = 311989, upload-time = "2026-11-15T14:28:40.346Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/5b/4ac802396316d8943cc24ee5767993d14e7fc40f7f951b1faa90ac59fb69/smolpy_engine_rs-1.8.0-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:80484a7cf08e59def9b4179ddc89c9344352ade2404ba12397ad9fe6e2fbecff", size = 340475, upload-time = "2026-11-15T14:28:41.509Z" },
+    { url = "https://files.pythonhosted.org/packages/07/55/753af8b70c415de20b228356b098684e5cc51d63f071e98b7e1f3f6d7850/smolpy_engine_rs-1.8.0-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:94fd11543b4a21b0e1837667521625f9186a06b66b80a50053429dbb2332d021", size = 348954, upload-time = "2026-11-15T14:28:42.676Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/51/629361601f9e43e4b306590c01eb726c543c29b3e66fbbcfc64d8af6bd95/smolpy_engine_rs-1.8.0-cp310-abi3-win_amd64.whl", hash = "sha256:8ab46ffa2025f9973782edd72fe019f5231e3b27af4f545b09cbe45754b6bc0b", size = 249969, upload-time = "2026-11-15T14:28:44.009Z" },
+]
 
 [[package]]
 name = "sse-starlette"

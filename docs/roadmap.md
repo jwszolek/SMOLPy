@@ -113,7 +113,7 @@ Decided before the Rust engine, so that it implements the final model once:
 ## Phase 4: Rust DES engine, MVP ([ADR-0008](adr/0008-rust-des-engine-mvp.md))
 
 - Native engine for the core model: links, switches with priorities, Ethernet flows, core metrics.
-- Ships as an optional package (`smolpy-engine-rs`, later also as the `smolpy[rust]` extra).
+- Ships as an optional package: `pip install smolpy[rust]`, which installs `smolpy-engine-rs`.
 - Selected with `backend="rust"`.
 
 **Exit criteria:**
@@ -123,7 +123,7 @@ Decided before the Rust engine, so that it implements the final model once:
 - Research targets from ADR-0006 are met.
 - Wheels are published for Linux, macOS and Windows.
 
-**Status:** ADR-0008 accepted on 2026-11-15 and brought up to date: integer nanoseconds, IR version 2, frames on the wire (ADR-0010), bit-exact deterministic equivalence. Steps 1–7 of 7 are done.
+**Status:** ADR-0008 accepted on 2026-11-15 and brought up to date: integer nanoseconds, IR version 2, frames on the wire (ADR-0010), bit-exact deterministic equivalence. Done (steps 1–7), released in v1.8.0.
 - Step 2: `smolpy.backends` is the backend registry. `backend=` is available on `simulate()` and `run_many()`, and `--backend` on `smolpy run`. Each backend's capabilities are checked before the run, and the Rust backend reports clearly when it is not installed.
 - Step 3: `rust/` holds the engine `smol-engine` and the Python module `smolpy-engine-rs`. The engine reproduces SimPy's event graph, so it gives SimPy's results bit for bit, down to the event count. It covers adapters, switches, links, constant flows and six metrics.
 - **Step 4, the stop criterion: go.** B1 at 10 M frames runs in 4.93 s against 200.8 s on SimPy, 40.8× faster where 10× was required, with an identical output hash.
@@ -141,11 +141,11 @@ Decided before the Rust engine, so that it implements the final model once:
     - B1 10× faster: met, 40.8×.
     - Equivalence suite: met, bit-exact on deterministic scenarios and statistical on random ones.
     - Research targets: met.
-    - Wheels on Linux, macOS and Windows: built and smoke-tested in CI (step 7). They are published with the next release.
+    - Wheels on Linux, macOS and Windows: met. They are published since v1.8.0 and smoke-tested against SimPy at every build.
 
 - Step 7: `rust-wheels.yml` builds abi3 wheels for Linux, macOS and Windows and smoke-tests them against SimPy. `publish.yml` publishes them with each release, and a manual run publishes to TestPyPI first.
 
-Phase 4 is complete once the first release publishes `smolpy-engine-rs`. Next is Phase 5, protocol parity in Rust.
+**Phase 4 is done.** v1.8.0 published `smolpy-engine-rs`, so `pip install smolpy[rust]` installs it. Next is Phase 5, protocol parity in Rust.
 
 ## Phase 5: Rust protocol parity
 
@@ -157,10 +157,13 @@ Modbus TCP, MQTT and PROFINET RT in the Rust engine. These need no new architect
 
 A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP stack for Modbus and MQTT.
 
+ns-3 cannot be installed with `pip`, so the backend ships as a container image, `ghcr.io/jwszolek/smolpy:<version>-ns3`. It holds the pinned ns-3 release built once, and CI runs the ns-3 equivalence suite in it ([ADR-0004 — Container images](adr/0004-execution-backends.md#container-images)). A lighter image with SMOLPy and the Rust engine, without ns-3, can be published from the first release of `smolpy-engine-rs`.
+
 **Exit criteria:**
 
 - Low-load scenarios agree with SimPy and Rust.
 - Under load, the differences are quantified and documented.
+- The `-ns3` image is published at each release, and CI runs the ns-3 suite in it.
 
 ## Candidates (not yet scheduled)
 

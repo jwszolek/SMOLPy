@@ -27,6 +27,9 @@ smolpy = "smolpy.cli:main"
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff", "mypy"]
 docs = ["mkdocs-material>=9"]
+# The native Rust engine (ADR-0008). 1.8 is the first release, reading Scenario
+# IR version 2; at import smolpy also checks the IR version the module reads.
+rust = ["smolpy-engine-rs>=1.8"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

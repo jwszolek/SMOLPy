@@ -8,7 +8,7 @@ silently.
 
 - ``simpy``: the reference implementation, always available.
 - ``rust``: the native engine of ADR-0008, from the optional package
-  ``smolpy-engine-rs`` (``pip install smolpy-engine-rs``). It declares its
+  ``smolpy-engine-rs`` (``pip install smolpy[rust]``). It declares its
   own capabilities, so this module never claims more than the engine
   supports, and the Scenario IR version it reads, which must be this
   smolpy's.
@@ -104,7 +104,7 @@ class RustBackend:
 
     name = "rust"
     module_name = "smolpy_engine_rs"
-    install = "pip install smolpy-engine-rs"
+    install = "pip install smolpy[rust]"
 
     def _module(self) -> ModuleType:
         from smolpy.model import VERSION

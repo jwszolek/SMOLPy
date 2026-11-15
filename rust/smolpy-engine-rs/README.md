@@ -3,7 +3,7 @@
 The native simulation engine of [SMOLPy](https://github.com/jwszolek/SMOLPy), a network description language and discrete-event simulator for industrial networks. It is written in Rust and exposed to Python with PyO3 ([ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/)).
 
 ```bash
-pip install smolpy smolpy-engine-rs
+pip install smolpy[rust]        # or: pip install smolpy smolpy-engine-rs
 ```
 
 ```python
