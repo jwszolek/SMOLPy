@@ -138,4 +138,4 @@ If it does not, work on the Rust engine **stops**. The result, with its measurem
 - **Rust skills become a requirement** for engine work on the project.
 - **More expensive releases:** a multi-platform wheel matrix, a second PyPI package, and lock-step versioning.
 - **No live dashboard on the Rust backend in the MVP.** Rust is a batch and experiment engine; interactive use stays on SimPy.
-- **Cross-engine results agree statistically, not bit for bit** (ADR-0007), so they need tolerance-based comparison.
+- ~~**Cross-engine results agree statistically, not bit for bit** (ADR-0007), so they need tolerance-based comparison.~~ *Amended by the ADR-0007 revision of 2026-11-14:* deterministic scenarios agree bit for bit, and only stochastic ones are compared statistically, because the engines' generators differ.

@@ -57,7 +57,7 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - `Network.simulate()` and `smolpy run` both go through it.
 - Benchmark results show no regression against Phase 1.
 
-**Status:** steps 1–7 done, 8 to do.
+**Status:** done (steps 1–8).
 - `Network.to_scenario()` and `interpret_to_scenario()` produce the IR, and it round-trips through JSON for every example and B1–B4.
 - The SimPy engine runs the IR and reports `SimulationResult.stats`. The benchmark harness reads those statistics.
 - B1–B4 give unchanged output hashes.
@@ -69,7 +69,7 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
     - Step 7 (done): the SimPy engine runs on integer nanoseconds.
         - Events and sample times are unchanged in B1–B4. Values differ only in the last digits, e.g. float noise in `pn_jitter` of 10⁻¹¹ µs became exactly 0.
         - Run time is unchanged within noise ([Benchmarks](benchmarks.md#integer-nanoseconds-adr-0007-step-7)).
-    - Step 8: deterministic equivalence becomes exact.
+    - Step 8 (done): the equivalence suite compares deterministic scenarios exactly: the same sample times and values, bit for bit, with no tolerance. A change of one ulp in one value is a mismatch.
 
 ## Phase 3: many independent simulations ([ADR-0009](adr/0009-batch-execution-and-cross-backend-validation.md))
 
@@ -90,7 +90,7 @@ Profiling of the SimPy engine, then a round of low-cost Python optimisations, ea
 - Step 3: `.smol` gains `simulate ... runs=`, and `smolpy run` gains `--runs`, `--workers` and `-o` for batches. A batch prints `BatchResult.report()` (mean ± CI across runs, then failed runs) and exits with status 1 if a run failed. An unknown `simulate` argument is now an error instead of being ignored.
 - Step 4: `Scenario.with_flow_rate()`, `with_cycle()`, `with_link_speed()`, `with_run()` and the general `with_traffic()` build the scenarios of a sweep. A selection that matches nothing is an error. The points of a sweep share their random streams.
 - Step 5: the equivalence suite in `tests/equivalence/` compares every installed backend against SimPy. With SimPy alone it compares SimPy against itself in about 5 s.
-    - **Scenarios.** Three deterministic scenarios are compared window by window. Two stochastic ones are compared with 30 replications per backend, using Welch's interval (`smolpy.stats.diff_ci`) and a 2 % limit. Together they cover every node kind, traffic kind and metric.
+    - **Scenarios.** Three deterministic scenarios are compared sample by sample, exactly (since ADR-0007 step 8). Two stochastic ones are compared with 30 replications per backend, using Welch's interval (`smolpy.stats.diff_ci`) and a 2 % limit. Together they cover every node kind, traffic kind and metric.
     - **Self-checks.** Tests check that the harness detects a 2 ns latency change, a 3 % load change and a slower link.
     - **False failures.** With independent seeds, two correct backends fail a stochastic scenario by chance about once in 10 seed blocks, since each scenario has 3–4 metrics at a 95 % level. The fixed seeds make CI stable, but a failure of a second backend near the limit needs a second seed block before it counts as a difference.
 - **Exit criteria:**

@@ -100,16 +100,22 @@ def _changed(result: SimulationResult, key: str, change) -> SimulationResult:
     return SimulationResult(metrics, result.scenario, result.stats)
 
 
-def test_compare_runs_tolerates_only_time_rounding() -> None:
+def test_compare_runs_has_no_tolerance() -> None:
+    import math
+
     ref = _reference_run("line")
-    assert harness.compare_runs(_changed(ref, "latency:b", lambda v: v + 0.9e-3), ref) == []
-    (m,) = harness.compare_runs(_changed(ref, "latency:b", lambda v: v + 2e-3), ref)
+    assert harness.compare_runs(_changed(ref, "latency:b", lambda v: v), ref) == []
+    # the smallest possible change of one value, one ulp, is a mismatch
+    (m,) = harness.compare_runs(
+        _changed(ref, "latency:b", lambda v: math.nextafter(v, math.inf)), ref
+    )
     assert m.metric == "latency:b" and m.detail.startswith(
         "1 of 11 samples differ, first at index 3"
     )
-    (m,) = harness.compare_runs(_changed(ref, "throughput:b", lambda v: v * (1 + 1e-5)), ref)
+    (m,) = harness.compare_runs(_changed(ref, "throughput:b", lambda v: v * (1 + 1e-12)), ref)
     assert m.metric == "throughput:b"
-    assert harness.compare_runs(_changed(ref, "throughput:b", lambda v: v * (1 + 1e-7)), ref) == []
+    (m,) = harness.compare_runs(_changed(ref, "latency:b", lambda v: math.nan), ref)
+    assert m.metric == "latency:b"
 
 
 def test_compare_runs_reports_missing_and_shifted_samples() -> None:
@@ -118,7 +124,7 @@ def test_compare_runs_reports_missing_and_shifted_samples() -> None:
     del metrics["utilization:sw"]
     metrics["extra:b"] = []
     metrics["latency:b"] = metrics["latency:b"][1:]
-    metrics["bytes_sent:a"] = [(t + 1e-3, v) for t, v in metrics["bytes_sent:a"]]
+    metrics["bytes_sent:a"] = [(t + 1e-6, v) for t, v in metrics["bytes_sent:a"]]  # 1 ns later
     got = harness.compare_runs(SimulationResult(metrics, ref.scenario), ref)
     assert [str(m) for m in got] == [
         "utilization:sw: missing from the candidate",

@@ -1,10 +1,10 @@
 """Compare the results of a candidate backend against SimPy, the reference
 implementation (ADR-0007, ADR-0009).
 
-- **Deterministic scenarios** (no randomness): every metric window must agree
-  within ``abs_tol + rel_tol * |reference|``. The tolerance only covers the
-  representation of time (SimPy float µs, Rust integer ns): ``rel_tol`` is
-  1e-6 and ``abs_tol`` is 1 ns in the metric's unit.
+- **Deterministic scenarios** (no randomness): every metric sample must be
+  identical, time and value, bit for bit. Every engine uses the same integer
+  nanosecond clock and computes each value as one rounded quotient (Model
+  Semantics §1, §8), so there is nothing a tolerance would have to cover.
 - **Stochastic scenarios**: 30 replications per backend, with different
   seeds. For each metric's per-run mean, Welch's 95 % confidence interval of
   the difference of means must contain 0, and the means must differ by less
@@ -27,12 +27,6 @@ from smolpy.stats import diff_ci
 REFERENCE = "simpy"
 KNOWN_BACKENDS = ("simpy", "rust", "ns3")
 
-REL_TOL = 1e-6
-TIME_TOL_MS = 1e-6  # 1 ns
-# 1 ns in the unit of each metric measured in µs; the others are counts,
-# bytes or rates, which time rounding does not change.
-ABS_TOL = {"latency": 1e-3, "modbus_latency": 1e-3, "pn_latency": 1e-3, "pn_jitter": 1e-3}
-
 REPLICATIONS = 30
 LEVEL = 0.95
 MAX_REL_DIFF = 0.02
@@ -52,11 +46,6 @@ class Mismatch:
         return f"{self.metric}: {self.detail}"
 
 
-def abs_tol(key: str) -> float:
-    """The absolute tolerance for a metric key such as ``"latency:plc"``."""
-    return ABS_TOL.get(key.split(":", 1)[0], 0.0)
-
-
 # --- deterministic ---
 
 
@@ -67,22 +56,19 @@ def run_once(scenario: Scenario, backend: str) -> SimulationResult:
     return result
 
 
-def compare_runs(
-    candidate: SimulationResult, reference: SimulationResult, rel_tol: float = REL_TOL
-) -> list[Mismatch]:
-    """Window-by-window comparison of two runs of a deterministic scenario."""
+def compare_runs(candidate: SimulationResult, reference: SimulationResult) -> list[Mismatch]:
+    """Sample-by-sample comparison of two runs of a deterministic scenario:
+    times and values must be identical."""
     out = _compare_keys(set(candidate.metrics), set(reference.metrics))
     for key in sorted(set(candidate.metrics) & set(reference.metrics)):
         got, want = candidate.metrics[key], reference.metrics[key]
         if len(got) != len(want):
             out.append(Mismatch(key, f"{len(got)} samples, the reference has {len(want)}"))
             continue
-        tol = abs_tol(key)
         bad = [
             (i, g, w)
             for i, (g, w) in enumerate(zip(got, want, strict=True))
-            if abs(g[0] - w[0]) > TIME_TOL_MS
-            or not abs(g[1] - w[1]) <= tol + rel_tol * abs(w[1])  # NaN never agrees
+            if not (g[0] == w[0] and g[1] == w[1])  # NaN never agrees
         ]
         if bad:
             i, g, w = bad[0]
