@@ -364,3 +364,27 @@ def test_a_frame_at_the_watchdogs_deadline_is_too_late(length: float) -> None:
     assert ns3 == simpy
     assert _values(ns3["pn_watchdog_expiries:io"]) == [4.0, 9.0, 14.0]  # from the 2nd frame
     assert set(_values(ns3["pn_jitter:io"])) == {0.0}
+
+
+@needs_ns3
+def test_rates_and_speeds_beyond_64_bits() -> None:
+    """A rate or speed computed in Python is an exact rational of its decimal
+    form, whose terms can exceed 64 bits: still SimPy's run, bit for bit."""
+    net = Network("ratios")
+    sw = net.switch("sw", ports=3)
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    m = net.modbus_slave("m", ip="10.0.0.3", unit_id=1)
+    net.link(a, sw, speed=100 / 3, length=7)
+    net.link(b, sw, speed=100, length=7)
+    net.link(m, sw, speed=100, length=7)
+    rate = 0.8 * 10e6 / (1520 * 8)  # 657.8947368421053 frames/s
+    a.sends(b, rate=rate, size=1500)
+    a.sends(b, rate=rate / 7, size=200, priority=5)
+    net.observe("latency", on=b, every=10 / 3)
+    net.observe("utilization", on=sw, every=4.1)
+    scenario = net.to_scenario(duration=200)
+    text, _ = ns3.lower(scenario)
+    assert any(len(f) > 20 for line in text.splitlines() for f in line.split())
+    simpy, ns3_run = _run(net, 200)
+    assert ns3_run == simpy

@@ -5,6 +5,8 @@ python -m benchmarks run [--scenario B1 B2 B3] [--frames 100k 1M 10M] [--metrics
 python -m benchmarks summarize benchmarks/results/<file>.json
 python -m benchmarks batch --scenario B3 --frames 1M --runs 16 --jobs 8 [--backend rust]
 python -m benchmarks profile --scenario B1 --frames 1M --tool cprofile|tracemalloc|py-spy
+python -m benchmarks load [--loads 0.5 0.9 1.0 1.2] [--duration 20000] [--backend simpy ns3]
+python -m benchmarks load-summary benchmarks/results/<file>.json
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from benchmarks.load import DURATION_MS, LOADS, run_load, summarize_load
 from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
 PROFILES_DIR = Path(__file__).parent / "profiles"
@@ -77,6 +80,16 @@ def main() -> None:
     prof.add_argument("--metrics", default="off", choices=("on", "off"))
     prof.add_argument("--tool", default="cprofile", choices=("cprofile", "tracemalloc", "py-spy"))
 
+    load = sub.add_parser("load", help="Modbus and MQTT on ns-3's TCP against SimPy, under load")
+    load.add_argument("--loads", nargs="+", type=float, default=list(LOADS))
+    load.add_argument("--duration", type=float, default=DURATION_MS, help="simulated ms")
+    load.add_argument("--backend", nargs="+", default=["simpy", "ns3"])
+    load.add_argument("--label", default="load")
+    load.add_argument("--out", type=Path, default=None)
+
+    load_summ = sub.add_parser("load-summary", help="markdown table of a load results file")
+    load_summ.add_argument("file", type=Path)
+
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
@@ -87,6 +100,12 @@ def main() -> None:
         print(summarize(out))
     elif a.cmd == "summarize":
         print(summarize(a.file))
+    elif a.cmd == "load":
+        out = run_load(a.loads, a.duration, a.backend, a.label, a.out)
+        print(f"\nresults: {out}\n")
+        print(summarize_load(out, *a.backend[:2]) if len(a.backend) > 1 else "")
+    elif a.cmd == "load-summary":
+        print(summarize_load(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
         r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)

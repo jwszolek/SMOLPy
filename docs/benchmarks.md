@@ -22,6 +22,11 @@ uv run python -m benchmarks batch --scenario B3 --frames 1M --runs 16 --jobs 8
 # markdown summary of a results file
 uv run python -m benchmarks summarize benchmarks/results/<file>.json
 
+# Modbus and MQTT on ns-3's TCP against SimPy, as a shared link loads up
+# (needs ns-3; see Execution backends)
+uv run python -m benchmarks load --label tcp-under-load
+uv run python -m benchmarks load-summary benchmarks/results/<file>.json
+
 # profiling (reports go to benchmarks/profiles/, not committed)
 uv run python -m benchmarks profile --scenario B3 --frames 1M --tool cprofile
 uv run python -m benchmarks profile --scenario B1 --frames 1M --metrics on --tool tracemalloc

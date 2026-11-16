@@ -98,11 +98,36 @@ RoundRatio(u128 num, u128 den)
     return static_cast<uint64_t>(q);
 }
 
+// Exact rationals (speeds, periods) can have numerators and denominators
+// beyond 64 bits: a rate of 405.2631578947368 frames/s is a period of
+// 5 * 10^21 / 2055921052631579 ns. They are read as unsigned 128-bit integers.
+std::istream&
+operator>>(std::istream& in, u128& value)
+{
+    std::string digits;
+    if (!(in >> digits))
+    {
+        return in;
+    }
+    u128 v = 0;
+    for (char c : digits)
+    {
+        if (c < '0' || c > '9' || v > (~u128(0) - 9) / 10)
+        {
+            in.setstate(std::ios::failbit); // not a number, or beyond 128 bits
+            return in;
+        }
+        v = v * 10 + static_cast<unsigned>(c - '0');
+    }
+    value = v;
+    return in;
+}
+
 // The instants start + round(k * num / den) for k = 1, 2, ... (timebase.instants)
 class Instants
 {
   public:
-    Instants(uint64_t start = 0, uint64_t num = 1, uint64_t den = 1)
+    Instants(uint64_t start = 0, u128 num = 1, u128 den = 1)
         : m_start(start),
           m_num(num),
           m_den(den)
@@ -340,8 +365,8 @@ class SmolDevice : public NetDevice
         return tid;
     }
 
-    void Configure(uint64_t speedNum,
-                   uint64_t speedDen,
+    void Configure(u128 speedNum,
+                   u128 speedDen,
                    uint64_t gapNs,
                    bool strict,
                    Ptr<SmolChannel> channel)
@@ -573,8 +598,8 @@ class SmolDevice : public NetDevice
     Mac48Address m_address;
     uint32_t m_ifIndex = 0;
     uint16_t m_mtu = 65535; // no IP fragmentation: SMOL frames may be jumbo
-    uint64_t m_speedNum = 1;
-    uint64_t m_speedDen = 1;
+    u128 m_speedNum = 1;
+    u128 m_speedDen = 1;
     uint64_t m_gapNs = 0;
     bool m_strict = true;
     std::array<std::deque<Frame>, 8> m_queue; // by priority; all in 0 if not strict
@@ -1290,8 +1315,8 @@ Run(std::istream& in, std::ostream& out)
         {
             uint32_t a;
             uint32_t b;
-            uint64_t speedNum;
-            uint64_t speedDen;
+            u128 speedNum;
+            u128 speedDen;
             uint64_t propagationNs;
             uint64_t gapNs;
             int strict[2];
@@ -1454,8 +1479,8 @@ Run(std::istream& in, std::ostream& out)
             Sent message{};
             uint32_t qos = 0;
             uint64_t delayNs;
-            uint64_t num;
-            uint64_t den;
+            u128 num;
+            u128 den;
             if (word == "poll")
             {
                 message.kind = Message::ModbusRequest;
@@ -1538,8 +1563,8 @@ Run(std::istream& in, std::ostream& out)
             {
                 uint32_t payload;
                 uint64_t delayNs;
-                uint64_t num;
-                uint64_t den;
+                u128 num;
+                u128 den;
                 s >> src >> dst >> payload >> priority >> delayNs >> num >> den;
                 flow->Configure(Ipv4Address(dst.c_str()),
                                 priority,
@@ -1581,8 +1606,8 @@ Run(std::istream& in, std::ostream& out)
         {
             std::string kind;
             uint32_t target;
-            uint64_t num;
-            uint64_t den;
+            u128 num;
+            u128 den;
             s >> kind >> target >> num >> den;
             auto* o = new Observation();
             o->index = observations.size();

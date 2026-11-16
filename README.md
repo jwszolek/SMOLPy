@@ -463,7 +463,7 @@ Every simulation goes through the same path. The Python API and `.smol` files bu
 |---|---|---|---|---|
 | `simpy` (default) | Python, SimPy | the whole model, the live and text dashboards | reference | included |
 | `rust` | Rust, through PyO3 | the whole model, headless: Ethernet, Modbus TCP, MQTT and PROFINET RT, every metric | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy[rust]` (since v1.8.0) |
-| `ns3` | ns-3's IPv4 stack, from C++ | the whole model, headless. Ethernet over UDP and PROFINET RT on layer 2, bit-exact with SimPy. Modbus TCP and MQTT over ns-3's TCP, which adds connection setup and acknowledgements | slower: each run is an ns-3 process | the image `ghcr.io/jwszolek/smolpy:latest-ns3`, or an ns-3 3.49 build in `NS3_HOME` |
+| `ns3` | ns-3's IPv4 stack, from C++ | the whole model, headless. Ethernet over UDP and PROFINET RT on layer 2, bit-exact with SimPy. Modbus TCP and MQTT over ns-3's TCP, which adds connection setup and acknowledgements | faster than SimPy on small scenarios (L1, 20 s: 0.6 s, not 3.9 s); each run is one process | the image `ghcr.io/jwszolek/smolpy:latest-ns3`, or an ns-3 3.49 build in `NS3_HOME` |
 
 ```python
 result = net.simulate(duration=60_000, backend="rust")       # one run
@@ -475,6 +475,7 @@ smolpy run plant.smol --backend rust
 ```
 
 - **The same numbers.** On deterministic scenarios the Rust engine reproduces SimPy's results bit for bit, down to the event count. Random traffic uses each engine's own generator, so there the results agree statistically. CI checks both on every pull request ([ADR-0009](https://jwszolek.github.io/SMOLPy/adr/0009-batch-execution-and-cross-backend-validation/)).
+- **ns-3 adds TCP.** Ethernet and PROFINET on ns-3 also give SimPy's results bit for bit. Modbus and MQTT run over ns-3's TCP, so their results differ by what TCP does: under heavy load by up to +43 % in latency. [Execution backends](https://jwszolek.github.io/SMOLPy/backends/) has the details and measurements.
 - **Nothing is skipped silently.** A scenario that uses something a backend does not support is rejected before the run with a message naming the element. Asking the Rust engine for a dashboard is an error too.
 
 The model both engines implement:

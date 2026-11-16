@@ -172,7 +172,7 @@ A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP st
 
 ns-3 cannot be installed with `pip`, so the backend ships as a container image, `ghcr.io/jwszolek/smolpy:<version>-ns3`. It holds the pinned ns-3 release built once, and CI runs the ns-3 equivalence suite in it ([ADR-0004 — Container images](adr/0004-execution-backends.md#container-images)). A lighter image with SMOLPy and the Rust engine, without ns-3, can be published from the first release of `smolpy-engine-rs`.
 
-**Status:** all 3 steps done. What remains for the exit criteria is quantifying the differences under load.
+**Status: done.** All 3 steps are done, and so are the exit criteria. `arm64` for the ns-3 images follows on a native runner.
 1. **The image without ns-3: done.** `ghcr.io/jwszolek/smolpy:<version>` holds SMOLPy and the Rust engine, for `linux/amd64` and `linux/arm64`. It is built, tested and pushed at each release.
 2. **The ns-3 base image: done.** `ghcr.io/jwszolek/smolpy-ns3-base:3.49` holds ns-3.49, built once, for `linux/amd64`. `arm64` follows on a native runner.
 3. **The ns-3 backend.**
@@ -191,7 +191,10 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
     - **The image: done.** `ghcr.io/jwszolek/smolpy:<version>-ns3` and `latest-ns3`, for `linux/amd64`, hold the base image, SMOLPy and the Rust engine, and `smol-ns3` built in.
         - Each release builds it from the release's wheels.
         - Before it is pushed, CI runs a `.smol` file on ns-3 through the CLI, and the ns-3 suite against the SMOLPy installed in it.
-    - **Next:** quantifying the differences under load, and `docs/backends.md`.
+    - **Under load: done.** `python -m benchmarks load` compares Modbus and MQTT on ns-3's TCP with SimPy on a plant cell whose uplink loads up to 150 % ([Execution backends](backends.md#modbus-and-mqtt-over-tcp)).
+        - Below saturation they agree within 0.4 %.
+        - At saturation, TCP's acknowledgements tip the link over.
+        - Heavily overloaded, TCP's windows hold MQTT back while UDP takes the link: up to +43 % latency and −41 % delivered.
 
 **Exit criteria:**
 

@@ -35,6 +35,7 @@ nav:
   - Modbus TCP: modbus.md
   - PROFINET RT: profinet.md
   - Simulation Engine: simulation-engine.md
+  - Execution Backends: backends.md
   - Scenario Model: scenario-model.md
   - Model Semantics: model-semantics.md
   - Dashboard: dashboard.md
