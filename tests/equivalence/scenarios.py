@@ -101,10 +101,10 @@ def switching() -> Scenario:
 
 
 def polling() -> Scenario:
-    """Modbus TCP only, within the Rust engine's scope: two masters poll three
-    slaves, one behind a second switch. The learning core floods requests
-    until it learns a slave, so slaves also receive requests for others,
-    and drop them. Bulk traffic shares the uplink."""
+    """Modbus TCP only: two masters poll three slaves, one behind a second
+    switch. The learning core floods requests until it learns a slave, so
+    slaves also receive requests for others, and drop them. Bulk traffic
+    shares the uplink."""
     net = Network("polling")
     core = net.switch("core", ports=5)  # learning
     edge = net.switch("edge", ports=3)
@@ -134,10 +134,10 @@ def polling() -> Scenario:
 
 
 def messaging() -> Scenario:
-    """MQTT only, within the Rust engine's scope: two brokers, one behind a
-    FIFO edge switch, with QoS 0 and 1, one topic on both brokers, a topic
-    nobody subscribes to and non-ASCII topic names (their length counts
-    characters). Tagged bulk traffic shares the uplink."""
+    """MQTT only: two brokers, one behind a FIFO edge switch, with QoS 0 and
+    1, one topic on both brokers, a topic nobody subscribes to and non-ASCII
+    topic names (their length counts characters). Tagged bulk traffic shares
+    the uplink."""
     net = Network("messaging")
     core = net.switch("core", ports=5, mac_table="topology")
     edge = net.switch("edge", ports=4, qos="fifo")  # learning
@@ -173,6 +173,38 @@ def messaging() -> Scenario:
     net.observe("utilization", on=plant, every=4)
     net.observe("queue_depth", on=edge, every=0.05)  # fan-out copies queue briefly
     return net.to_scenario(duration=40)
+
+
+def cyclic() -> Scenario:
+    """PROFINET RT only: two controllers with three ARs of different cycles,
+    holds and start delays, one device behind a FIFO edge switch whose
+    uplink a camera loads, so its frames jitter and its watchdog of one
+    cycle expires in some cycles and not in others."""
+    net = Network("cyclic")
+    core = net.switch("core", ports=5, mac_table="topology")
+    edge = net.switch("edge", ports=3, qos="fifo")  # learning
+    plc = net.adapter("plc", ip="10.0.0.1")
+    robot = net.adapter("robot", ip="10.0.0.2")
+    drive = net.profinet_device("drive", ip="10.0.1.1")
+    valves = net.profinet_device("valves", ip="10.0.1.2")
+    axis = net.profinet_device("axis", ip="10.0.2.1")
+    cam = net.adapter("cam", ip="10.0.2.2")
+    for node in (plc, robot, drive, valves):
+        net.link(node, core, speed=100, length=10)
+    net.link(core, edge, speed=100, length=60)
+    net.link(axis, edge, speed=100, length=5)
+    net.link(cam, edge, speed=100, length=5)
+    plc.controls(drive, cycle=1, inputs=100, outputs=40, delay_ms=0.25)
+    plc.controls(valves, cycle=4, inputs=8, outputs=8, hold=2, delay_ms=1.5)
+    robot.controls(axis, cycle=2, inputs=200, outputs=200, hold=1)
+    cam.sends(robot, rate=2_900, size=1_500, delay_ms=0.1)  # shares the uplink with axis
+    for node in (plc, robot, axis):
+        net.observe("pn_latency", on=node, every=4)
+        net.observe("pn_jitter", on=node, every=4)
+        net.observe("pn_watchdog_expiries", on=node, every=4)
+    net.observe("pn_latency", on=valves, every=8)
+    net.observe("latency", on=robot, every=4)
+    return net.to_scenario(duration=60)
 
 
 def protocols() -> Scenario:
@@ -264,6 +296,7 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "switching": switching,
     "polling": polling,
     "messaging": messaging,
+    "cyclic": cyclic,
     "protocols": protocols,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {

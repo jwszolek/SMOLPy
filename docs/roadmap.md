@@ -145,7 +145,7 @@ Decided before the Rust engine, so that it implements the final model once:
 
 - Step 7: `rust-wheels.yml` builds abi3 wheels for Linux, macOS and Windows and smoke-tests them against SimPy. `publish.yml` publishes them with each release, and a manual run publishes to TestPyPI first.
 
-**Phase 4 is done.** v1.8.0 published `smolpy-engine-rs`, so `pip install smolpy[rust]` installs it. Next is Phase 5, protocol parity in Rust.
+**Phase 4 is done.** v1.8.0 published `smolpy-engine-rs`, so `pip install smolpy[rust]` installs it. Phase 5 then brought protocol parity.
 
 ## Phase 5: Rust protocol parity
 
@@ -153,14 +153,18 @@ Modbus TCP, MQTT and PROFINET RT in the Rust engine. These need no new architect
 
 **Exit criteria:** the Rust backend's capabilities equal SimPy's, apart from the live dashboard.
 
-**Status:** two of three protocols done.
-- **Modbus TCP: done.**
+**Status: done.** The exit criterion is met: the Rust backend's capabilities equal SimPy's, apart from the live dashboard.
+- **Modbus TCP.**
     - The Rust engine runs slaves, `polls()` and `modbus_latency`. It reproduces SimPy's poll generator and slave process, including requests flooded to other slaves and dropped there.
     - The new `polling` scenario is bit-exact with SimPy, down to the event count.
-- **MQTT: done.**
+- **MQTT.**
     - The Rust engine runs brokers, `publishes()` with QoS 0 and 1, `routes()` and `broker_queue`. It reproduces SimPy's publish generator and broker: copies keep the publisher's origin time, QoS 1 is acknowledged with a PUBACK, and a topic nobody subscribes to is only acknowledged.
     - The new `messaging` scenario (two brokers, non-ASCII topics) and the existing `protocols` scenario (Modbus and MQTT) are bit-exact with SimPy, down to the event count.
-- **PROFINET RT** is next. Its watchdog waits on "a frame or a timeout", a SimPy condition whose event ordering the engine has to reproduce. watchdog waits on "a frame or a timeout", a SimPy condition whose event ordering the engine has to reproduce.
+- **PROFINET RT.**
+    - The Rust engine runs devices, `controls()`, `pn_latency`, `pn_jitter` and `pn_watchdog_expiries`.
+    - The watchdog waits on "a frame or a timeout", a SimPy `AnyOf` condition. The engine reproduces it event by event: the condition is an event of its own, and only an arrival processed before it counts. So the watchdog expires exactly when SimPy's does, also when a frame arrives in the same nanosecond as the timeout.
+    - The new `cyclic` scenario (two controllers, three ARs, a watchdog that expires in some cycles) and the existing `priorities` scenario are bit-exact with SimPy, down to the event count.
+- **Benchmarks.** B2, the plant with PROFINET, Modbus and MQTT, now runs on Rust as well: all four benchmarks give SimPy's output and metric hashes and event counts at 200 k frames. B2 runs about 34× faster there.
 
 ## Phase 6: ns-3 high-fidelity backend ([ADR-0004](adr/0004-execution-backends.md), revised)
 

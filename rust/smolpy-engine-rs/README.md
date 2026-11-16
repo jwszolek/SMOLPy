@@ -14,12 +14,13 @@ result = net.simulate(duration=60_000, backend="rust")
 - **About 40x faster.**
     - B1 at 10 M frames runs in 4.9 s, against 200.8 s on SimPy.
     - A 10 201-node plant (B4) at 100 M frames runs in 5.2 min, against 106 min.
-- **Scope so far.**
+- **Scope: the whole model, headless.**
     - Adapters, switches (both QoS modes, learning and converged MAC tables), links, and flows with every pattern and IMIX sizes.
     - The metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth` and `utilization`.
     - Modbus TCP polling: slaves, polls and `modbus_latency`.
     - MQTT: brokers, publications with QoS 0 and 1, routes and `broker_queue`.
-    - PROFINET follows. A scenario that uses them is rejected before the run, with a message naming the element.
+    - PROFINET RT: devices, controllers' ARs, the watchdog, `pn_latency`, `pn_jitter` and `pn_watchdog_expiries`.
+    - The live and text dashboards need SimPy.
 - **Versions.** The package is released together with `smolpy`, with the same version. It checks that it reads the Scenario IR version that `smolpy` writes.
 
 One abi3 wheel per platform serves every Python from 3.10: Linux x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64.
