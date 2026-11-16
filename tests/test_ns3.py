@@ -5,6 +5,7 @@ NS3_HOME names a build."""
 
 from __future__ import annotations
 
+import dataclasses
 from fractions import Fraction
 
 import pytest
@@ -71,11 +72,11 @@ def test_lowering() -> None:
         "adapter 02:00:0a:00:00:01 10.0.0.1",
         "adapter 02:00:0a:00:00:02 10.0.0.2",
         "adapter 02:00:0a:00:00:03 10.0.0.3",
-        "link 1 0 100 1 50 960",  # 10 m: 50 ns; 12 B gap at 100 Mb/s
-        "link 2 0 5 2 15 38400",  # 2.5 Mb/s = 5/2
+        "link 1 0 100 1 50 960 1 1",  # 10 m: 50 ns; 12 B gap at 100 Mb/s; strict queues
+        "link 2 0 5 2 15 38400 1 1",  # 2.5 Mb/s = 5/2
         "static 0 02:00:0a:00:00:01 0",  # stations wired to the switch
         "static 0 02:00:0a:00:00:02 1",
-        "flow 1 10.0.0.2 466 250000 1000000 3",  # 512 - 46 B of UDP payload; T = 10^6/3 ns
+        "flow 1 10.0.0.2 466 0 250000 1000000 3",  # 512 - 46 B of UDP payload; T = 10^6/3 ns
         "sink 2",
         "observe latency 2 1500000 1",
         "observe utilization 0 2000000 1 0 2",  # the devices that send to the switch
@@ -106,13 +107,61 @@ def test_metrics_use_the_reference_formulas() -> None:
     assert metrics["throughput:c"] == []
 
 
+def test_random_flows_list_their_frames() -> None:
+    """Flows other than constant ones of fixed size list every frame, drawn
+    as the reference engine draws them; a FIFO switch has no strict queues."""
+    net = Network("random")
+    sw = net.switch("sw", ports=2, qos="fifo")
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    net.link(a, sw, speed=100, length=1)
+    net.link(b, sw, speed=100, length=1)
+    a.sends(b, rate=1_000, size=200, pattern="batch", batch=3, priority=4)
+    a.sends(b, rate=500, size="imix", delay_ms=1)
+    text, _ = ns3.lower(net.to_scenario(duration=100))
+    lines = text.splitlines()
+    assert lines[5] == "link 1 0 100 1 5 960 1 0"  # the switch's end is FIFO
+    batch, imix = (line.split() for line in lines if line.startswith("sends"))
+    assert batch[:4] == ["sends", "1", "10.0.0.2", "4"]
+    sends = list(zip(batch[5::2], batch[6::2], strict=True))
+    assert len(sends) == int(batch[4]) and len(sends) % 3 == 0  # groups of 3 frames
+    assert all(payload == str(200 - 46) for _, payload in sends)
+    assert sends[0][0] == sends[1][0] == sends[2][0]  # a group shares its instant
+    imix_sends = list(zip(imix[5::2], imix[6::2], strict=True))
+    assert [int(t) for t, _ in imix_sends[:3]] == [3_000_000, 5_000_000, 7_000_000]
+    assert len(imix_sends) == 49  # 3, 5, ... 99 ms
+    assert {int(p) + 46 for _, p in imix_sends} <= {64, 594, 1518}
+
+
 @pytest.fixture
 def fake_ns3(monkeypatch):
     """The ns3 backend as if ns-3 were installed, for its capability checks."""
     monkeypatch.setattr(ns3, "locate", lambda: None)
 
 
-def test_priorities_are_outside_its_capabilities(fake_ns3) -> None:
+def test_protocols_are_outside_its_capabilities(fake_ns3) -> None:
+    net = Network("prio")
+    sw = net.switch("sw", ports=2)
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    net.link(a, sw, speed=100, length=1)
+    net.link(b, sw, speed=100, length=1)
+    a.sends(b, rate=100, size="imix", pattern="bursty", priority=3)
+    backends.check(net.to_scenario(duration=10), "ns3")  # Ethernet: all of it
+    net.modbus_slave("m", ip="10.0.0.3", unit_id=1)
+    with pytest.raises(ScenarioError, match="Modbus slave \\(planned for Phase 6\\)"):
+        backends.check(net.to_scenario(duration=10), "ns3")
+
+
+def test_priorities_can_be_outside_a_backends_capabilities(monkeypatch) -> None:
+    """The check itself, with a backend that declares no priorities."""
+    monkeypatch.setattr(ns3, "locate", lambda: None)
+    caps = backends.REGISTRY["ns3"].capabilities()
+    monkeypatch.setattr(
+        backends.Ns3Backend,
+        "capabilities",
+        lambda self: dataclasses.replace(caps, priorities=False),
+    )
     net = Network("prio")
     sw = net.switch("sw", ports=2)
     a = net.adapter("a", ip="10.0.0.1")
@@ -121,7 +170,4 @@ def test_priorities_are_outside_its_capabilities(fake_ns3) -> None:
     net.link(b, sw, speed=100, length=1)
     a.sends(b, rate=100, size=100, priority=3)
     with pytest.raises(ScenarioError, match="flow a -> b: the ns3 backend does not support 802.1Q"):
-        backends.check(net.to_scenario(duration=10), "ns3")
-    with pytest.raises(ScenarioError, match="Modbus slave \\(planned for Phase 6\\)"):
-        net.modbus_slave("m", ip="10.0.0.3", unit_id=1)
         backends.check(net.to_scenario(duration=10), "ns3")

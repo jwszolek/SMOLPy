@@ -8,10 +8,15 @@
 //     duration <ns>
 //     adapter <mac> <ipv4>                   nodes, numbered from 0 in order
 //     switch
-//     link <a> <b> <speed num> <speed den> <propagation ns> <gap ns>
+//     link <a> <b> <speed num> <speed den> <propagation ns> <gap ns> <strict a> <strict b>
 //     static <switch> <mac> <port>          a switch's MAC table at the start
-//     flow <src> <dst ipv4> <udp payload> <delay ns> <period num> <period den>
+//     flow <src> <dst ipv4> <udp payload> <priority> <delay ns> <period num> <period den>
+//     sends <src> <dst ipv4> <priority> <n> <t ns> <udp payload> ...
 //     sink <node>                           a node that receives flows
+//
+// A flow is a constant one of fixed-size frames; "sends" lists every frame of
+// any other flow, its instant and size drawn by smolpy.ns3 from the flow's
+// random stream exactly as the reference engine draws them.
 //     observe <kind> <target> <period num> <period den> <device>...
 //
 // Link i has the devices 2i (on a) and 2i + 1 (on b); a node's ports are
@@ -25,9 +30,11 @@
 // What ns-3 contributes is its IPv4/UDP stack; the link and the switch are
 // SMOL's own, to give the same Ethernet as the other engines:
 // - SmolDevice: a full-duplex Ethernet port (ns-3's CSMA is half duplex).
-//   A frame is its IP packet plus header and FCS (18 B), at least 64 B; it
-//   occupies the wire for preamble, SFD and frame, and the next frame waits
-//   for the 12 B gap (ADR-0010). The egress queue is unbounded and FIFO.
+//   A frame is its IP packet plus header and FCS (18 B), at least 64 B, and
+//   an 802.1Q tag (4 B) with a priority above 0; it occupies the wire for
+//   preamble, SFD and frame, and the next frame waits for the 12 B gap
+//   (ADR-0010). The egress queue is unbounded and serves priorities strictly,
+//   FIFO within one, or is plain FIFO on a switch with qos=fifo.
 // - SmolSwitch: store-and-forward, learning, flooding unknown destinations to
 //   every port but the one a frame came in on, dropping hairpins.
 // - Neighbour caches start full: SMOL models no ARP.
@@ -37,6 +44,7 @@
 #include "ns3/network-module.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <fstream>
@@ -53,6 +61,7 @@ using namespace ns3;
 using u128 = unsigned __int128;
 
 constexpr uint64_t ETHERNET_BYTES = 14 + 4; // header and FCS
+constexpr uint64_t VLAN_TAG_BYTES = 4;
 constexpr uint64_t MIN_FRAME_BYTES = 64;
 constexpr uint64_t PREAMBLE_SFD_BYTES = 8;
 constexpr uint64_t WIRE_OVERHEAD_BITS = (8 + 12) * 8; // preamble, SFD and gap
@@ -157,6 +166,56 @@ class OriginTag : public Tag
     uint64_t m_created;
 };
 
+// The 802.1Q priority (PCP) of a flow's frames, above 0.
+class PriorityTag : public Tag
+{
+  public:
+    PriorityTag(uint8_t priority = 0)
+        : m_priority(priority)
+    {
+    }
+
+    static TypeId GetTypeId()
+    {
+        static TypeId tid =
+            TypeId("smol::PriorityTag").SetParent<Tag>().AddConstructor<PriorityTag>();
+        return tid;
+    }
+
+    TypeId GetInstanceTypeId() const override
+    {
+        return GetTypeId();
+    }
+
+    uint32_t GetSerializedSize() const override
+    {
+        return 1;
+    }
+
+    void Serialize(TagBuffer i) const override
+    {
+        i.WriteU8(m_priority);
+    }
+
+    void Deserialize(TagBuffer i) override
+    {
+        m_priority = i.ReadU8();
+    }
+
+    void Print(std::ostream& os) const override
+    {
+        os << "priority=" << int(m_priority);
+    }
+
+    uint8_t Priority() const
+    {
+        return m_priority;
+    }
+
+  private:
+    uint8_t m_priority;
+};
+
 struct Frame
 {
     Ptr<Packet> packet;
@@ -164,6 +223,7 @@ struct Frame
     Mac48Address dst;
     uint16_t protocol = 0;
     uint64_t bytes = 0;
+    uint8_t priority = 0;
 };
 
 struct Window
@@ -187,11 +247,16 @@ class SmolDevice : public NetDevice
         return tid;
     }
 
-    void Configure(uint64_t speedNum, uint64_t speedDen, uint64_t gapNs, Ptr<SmolChannel> channel)
+    void Configure(uint64_t speedNum,
+                   uint64_t speedDen,
+                   uint64_t gapNs,
+                   bool strict,
+                   Ptr<SmolChannel> channel)
     {
         m_speedNum = speedNum;
         m_speedDen = speedDen;
         m_gapNs = gapNs;
+        m_strict = strict;
         m_channel = channel;
     }
 
@@ -207,7 +272,8 @@ class SmolDevice : public NetDevice
     // A frame for the egress queue: sent now if the port is idle.
     void Enqueue(Frame frame)
     {
-        m_queue.push_back(std::move(frame));
+        m_queue[m_strict ? frame.priority : 0].push_back(std::move(frame));
+        ++m_queued;
         if (!m_busy)
         {
             StartNext();
@@ -216,7 +282,7 @@ class SmolDevice : public NetDevice
 
     uint64_t QueueLength() const
     {
-        return m_queue.size(); // the frame on the wire is not queued
+        return m_queued; // the frame on the wire is not queued
     }
 
     uint64_t bitsSent = 0;      // frame bits whose transmission has completed
@@ -313,7 +379,13 @@ class SmolDevice : public NetDevice
                   uint16_t protocol) override
     {
         Frame frame;
-        frame.bytes = std::max(MIN_FRAME_BYTES, packet->GetSize() + ETHERNET_BYTES);
+        PriorityTag tag;
+        if (packet->PeekPacketTag(tag))
+        {
+            frame.priority = tag.Priority();
+        }
+        frame.bytes = std::max(MIN_FRAME_BYTES, packet->GetSize() + ETHERNET_BYTES) +
+                      (frame.priority > 0 ? VLAN_TAG_BYTES : 0);
         frame.packet = packet;
         frame.src = Mac48Address::ConvertFrom(source);
         frame.dst = Mac48Address::ConvertFrom(dest);
@@ -357,7 +429,10 @@ class SmolDevice : public NetDevice
         m_channel = nullptr;
         m_node = nullptr;
         m_rx = MakeNullCallback<bool, Ptr<NetDevice>, Ptr<const Packet>, uint16_t, const Address&>();
-        m_queue.clear();
+        for (auto& q : m_queue)
+        {
+            q.clear();
+        }
         m_sending = Frame();
         NetDevice::DoDispose();
     }
@@ -380,8 +455,13 @@ class SmolDevice : public NetDevice
     void StartNext()
     {
         m_busy = true;
-        m_sending = std::move(m_queue.front());
-        m_queue.pop_front();
+        // the highest priority first, FIFO within one
+        auto q = std::find_if(m_queue.rbegin(), m_queue.rend(), [](const auto& c) {
+            return !c.empty();
+        });
+        m_sending = std::move(q->front());
+        q->pop_front();
+        --m_queued;
         uint64_t now = Simulator::Now().GetNanoSeconds();
         uint64_t gap = m_freeAt > now ? m_freeAt - now : 0; // the gap after the last frame
         Simulator::Schedule(NanoSeconds(gap + TransmissionNs(m_sending.bytes)),
@@ -402,7 +482,9 @@ class SmolDevice : public NetDevice
     uint64_t m_speedNum = 1;
     uint64_t m_speedDen = 1;
     uint64_t m_gapNs = 0;
-    std::deque<Frame> m_queue;
+    bool m_strict = true;
+    std::array<std::deque<Frame>, 8> m_queue; // by priority; all in 0 if not strict
+    uint64_t m_queued = 0;
     Frame m_sending;
     bool m_busy = false;
     uint64_t m_freeAt = 0; // the end of the gap after the last frame
@@ -478,7 +560,7 @@ SmolDevice::TransmitComplete()
     m_channel->Transmit(this, std::move(m_sending));
     m_sending = Frame();
     m_busy = false;
-    if (!m_queue.empty())
+    if (m_queued > 0)
     {
         StartNext();
     }
@@ -563,12 +645,29 @@ class SmolFlow : public Application
         return tid;
     }
 
-    void Configure(Ipv4Address dst, uint32_t payload, Instants instants, uint64_t stopNs)
+    // a constant flow of fixed-size frames
+    void Configure(Ipv4Address dst,
+                   uint8_t priority,
+                   uint32_t payload,
+                   Instants instants,
+                   uint64_t stopNs)
     {
         m_dst = dst;
+        m_priority = priority;
         m_payload = payload;
         m_instants = instants;
         m_stopNs = stopNs;
+    }
+
+    // any other flow: every frame, its instant and UDP payload
+    void Configure(Ipv4Address dst,
+                   uint8_t priority,
+                   std::vector<std::pair<uint64_t, uint32_t>> sends)
+    {
+        m_dst = dst;
+        m_priority = priority;
+        m_sends = std::move(sends);
+        m_listed = true;
     }
 
   private:
@@ -586,28 +685,66 @@ class SmolFlow : public Application
 
     void ScheduleNext()
     {
-        uint64_t t = m_instants.Next();
-        if (t < m_stopNs)
+        uint64_t t;
+        if (m_listed)
         {
-            Simulator::Schedule(NanoSeconds(t - Simulator::Now().GetNanoSeconds()),
-                                &SmolFlow::Send,
-                                this);
+            if (m_next == m_sends.size())
+            {
+                return;
+            }
+            t = m_sends[m_next].first;
         }
+        else
+        {
+            t = m_instants.Next();
+            if (t >= m_stopNs)
+            {
+                return;
+            }
+        }
+        Simulator::Schedule(NanoSeconds(t - Simulator::Now().GetNanoSeconds()),
+                            &SmolFlow::Send,
+                            this);
+    }
+
+    void SendOne(uint32_t payload)
+    {
+        Ptr<Packet> packet = Create<Packet>(payload);
+        packet->AddPacketTag(OriginTag(Simulator::Now().GetNanoSeconds()));
+        if (m_priority > 0)
+        {
+            packet->AddPacketTag(PriorityTag(m_priority));
+        }
+        m_socket->Send(packet);
     }
 
     void Send()
     {
-        Ptr<Packet> packet = Create<Packet>(m_payload);
-        packet->AddPacketTag(OriginTag(Simulator::Now().GetNanoSeconds()));
-        m_socket->Send(packet);
+        if (m_listed)
+        {
+            // a batch: every frame of this instant, back to back
+            uint64_t now = Simulator::Now().GetNanoSeconds();
+            while (m_next < m_sends.size() && m_sends[m_next].first == now)
+            {
+                SendOne(m_sends[m_next++].second);
+            }
+        }
+        else
+        {
+            SendOne(m_payload);
+        }
         ScheduleNext();
     }
 
     Ptr<Socket> m_socket;
     Ipv4Address m_dst;
+    uint8_t m_priority = 0;
     uint32_t m_payload = 0;
     Instants m_instants;
     uint64_t m_stopNs = 0;
+    bool m_listed = false;
+    std::vector<std::pair<uint64_t, uint32_t>> m_sends;
+    std::size_t m_next = 0;
 };
 
 NS_OBJECT_ENSURE_REGISTERED(SmolFlow);
@@ -750,7 +887,8 @@ Run(std::istream& in, std::ostream& out)
             uint64_t speedDen;
             uint64_t propagationNs;
             uint64_t gapNs;
-            s >> a >> b >> speedNum >> speedDen >> propagationNs >> gapNs;
+            int strict[2];
+            s >> a >> b >> speedNum >> speedDen >> propagationNs >> gapNs >> strict[0] >> strict[1];
             if (!s || a >= nodes.GetN() || b >= nodes.GetN())
             {
                 Fail("bad link: " + line);
@@ -761,7 +899,7 @@ Run(std::istream& in, std::ostream& out)
             for (int e = 0; e < 2; ++e)
             {
                 Ptr<SmolDevice> d = CreateObject<SmolDevice>();
-                d->Configure(speedNum, speedDen, gapNs, channel);
+                d->Configure(speedNum, speedDen, gapNs, strict[e] != 0, channel);
                 Ptr<Node> node = nodes.Get(at[e]);
                 if (isSwitch[at[e]])
                 {
@@ -798,7 +936,7 @@ Run(std::istream& in, std::ostream& out)
             s >> sw >> mac >> port;
             switches[switchOf[sw]].table[MacKey(Mac48Address(mac.c_str()))] = port;
         }
-        else if (word == "flow" || word == "sink" || word == "observe")
+        else if (word == "flow" || word == "sends" || word == "sink" || word == "observe")
         {
             break; // the network is complete: IPv4 and neighbour caches come first
         }
@@ -854,21 +992,40 @@ Run(std::istream& in, std::ostream& out)
         {
             continue;
         }
-        if (word == "flow")
+        if (word == "flow" || word == "sends")
         {
             uint32_t src;
             std::string dst;
-            uint32_t payload;
-            uint64_t delayNs;
-            uint64_t num;
-            uint64_t den;
-            s >> src >> dst >> payload >> delayNs >> num >> den;
-            if (!s || src >= nodes.GetN() || !portOf[src])
-            {
-                Fail("bad flow: " + line);
-            }
+            uint32_t priority;
             Ptr<SmolFlow> flow = CreateObject<SmolFlow>();
-            flow->Configure(Ipv4Address(dst.c_str()), payload, Instants(delayNs, num, den), durationNs);
+            if (word == "flow")
+            {
+                uint32_t payload;
+                uint64_t delayNs;
+                uint64_t num;
+                uint64_t den;
+                s >> src >> dst >> payload >> priority >> delayNs >> num >> den;
+                flow->Configure(Ipv4Address(dst.c_str()),
+                                priority,
+                                payload,
+                                Instants(delayNs, num, den),
+                                durationNs);
+            }
+            else
+            {
+                std::size_t n;
+                s >> src >> dst >> priority >> n;
+                std::vector<std::pair<uint64_t, uint32_t>> sends(n);
+                for (auto& send : sends)
+                {
+                    s >> send.first >> send.second;
+                }
+                flow->Configure(Ipv4Address(dst.c_str()), priority, std::move(sends));
+            }
+            if (!s || src >= nodes.GetN() || !portOf[src] || priority > 7)
+            {
+                Fail("bad " + word + ": " + line.substr(0, 200));
+            }
             nodes.Get(src)->AddApplication(flow);
             flow->SetStartTime(NanoSeconds(0));
         }

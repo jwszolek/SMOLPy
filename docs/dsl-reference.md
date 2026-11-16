@@ -165,7 +165,7 @@ result.export("out.csv", format="csv")   # explicit format override
 |---|---|
 | `"simpy"` | The reference implementation. It is the default, always installed, and runs the whole model, including the live and text dashboards. |
 | `"rust"` | The native engine of [ADR-0008](adr/0008-rust-des-engine-mvp.md), from the optional package `smolpy-engine-rs` (`pip install smolpy[rust]`). It runs headless. |
-| `"ns3"` | ns-3 ([ADR-0004](adr/0004-execution-backends.md)), in progress: so far adapters, switches and constant flows of fixed-size frames without 802.1Q priorities, with the Ethernet metrics, on ns-3's IPv4/UDP stack. It needs `NS3_HOME`, naming a built ns-3 3.49 tree, and a C++ compiler; the image `ghcr.io/jwszolek/smolpy-ns3-base:3.49` has both. It runs headless. |
+| `"ns3"` | ns-3 ([ADR-0004](adr/0004-execution-backends.md)), in progress: so far Ethernet (adapters, switches, flows with every pattern, IMIX and 802.1Q priorities, the Ethernet metrics) on ns-3's IPv4/UDP stack, with random traffic drawn from SimPy's streams. It needs `NS3_HOME`, naming a built ns-3 3.49 tree, and a C++ compiler; the image `ghcr.io/jwszolek/smolpy-ns3-base:3.49` has both. It runs headless. |
 
 - **What a backend can run is checked before the run.** Every backend declares what it supports: node kinds, traffic kinds, patterns and metrics. A scenario that uses anything else is rejected with a `ScenarioError` naming the element. A dashboard (`live=True` or `text=True`) on a headless backend is a `ValueError`.
 - **A missing backend is an error.** When a backend is not installed, selecting it raises `BackendUnavailable` with the install command.

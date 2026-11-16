@@ -20,10 +20,12 @@ from __future__ import annotations
 import glob
 import hashlib
 import os
+import random
 import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from fractions import Fraction
 from importlib import resources
@@ -33,6 +35,7 @@ from typing import TYPE_CHECKING
 from smolpy import model
 from smolpy.model import timebase as tb
 from smolpy.model.frames import IFG_BYTES
+from smolpy.model.streams import source_ids, stream_seed
 
 if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
@@ -142,6 +145,59 @@ class _Sampler:
     speed: Fraction = Fraction(0)  # utilization: Mb/s into the target
 
 
+def _strict(node: model.NodeSpec) -> bool:
+    """Whether a node's egress queues serve priorities strictly."""
+    return not (isinstance(node, model.SwitchNode) and node.qos == "fifo")
+
+
+def _sends(
+    flow: model.Flow, rng: random.Random, delay_ns: int, duration_ns: int
+) -> Iterator[tuple[int, int]]:
+    """Every frame of *flow* before *duration_ns*: its instant and size
+    (untagged, FCS included), drawn from *rng* in the order and with the
+    formulas of the reference engine's ``_traffic_gen``, so the frames are
+    the same as there."""
+    from smolpy.sim.engine import _resolve_size
+
+    def size() -> int:
+        return _resolve_size(flow.size, rng)
+
+    now = delay_ns
+    period = tb.interval_ns(flow.rate)
+    mean_ns = float(period)
+    if flow.pattern == "constant":
+        for at in tb.instants(delay_ns, period):
+            if at >= duration_ns:
+                return
+            yield at, size()
+    elif flow.pattern == "poisson":
+        while True:
+            now += tb.draw_ns(rng.expovariate(1.0 / mean_ns))
+            if now >= duration_ns:
+                return
+            yield now, size()
+    elif flow.pattern == "batch":
+        assert flow.batch is not None
+        group_ns = mean_ns * flow.batch.mean()
+        while True:
+            now += tb.draw_ns(rng.expovariate(1.0 / group_ns))
+            if now >= duration_ns:
+                return
+            for _ in range(flow.batch.draw(rng)):
+                yield now, size()
+    else:  # bursty
+        quarter = Fraction(period) / 4
+        while True:
+            burst_len = max(1, int(rng.paretovariate(1.5)))
+            in_burst = tb.instants(now, quarter)
+            for _ in range(burst_len):
+                now = next(in_burst)
+                if now >= duration_ns:
+                    return
+                yield now, size()
+            now += tb.draw_ns(mean_ns * burst_len * rng.uniform(0.3, 1.2))
+
+
 def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
     """The input of ``smol-ns3``, and the samplers its output feeds."""
     from smolpy.sim.engine import _topology_mac_table
@@ -173,6 +229,7 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
         lines.append(
             f"link {index[a.name]} {index[b.name]} {num} {den}"
             f" {tb.propagation_ns(link.length_m)} {tb.transmission_ns(IFG_BYTES, link.speed_mbps)}"
+            f" {int(_strict(a))} {int(_strict(b))}"
         )
         neighbours[a.name].append((port_a, b.name))
         neighbours[b.name].append((port_b, a.name))
@@ -192,18 +249,25 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
         lines.extend(f"static {index[name]} {mac} {port}" for mac, port in table.items())
 
     sinks: list[str] = []
-    for t in scenario.traffic:
+    duration_ns = tb.ms_to_ns(scenario.run.duration_ms)
+    for t, source_id in zip(scenario.traffic, source_ids(scenario), strict=True):
         if not isinstance(t, model.Flow):
             raise ValueError(f"the ns3 backend does not support {t.kind} traffic")
         if t.source not in has_link:
             continue
         dst = nodes[t.destination]
-        assert isinstance(dst, model.AdapterNode) and isinstance(t.size, int)
-        num, den = _ratio(tb.interval_ns(t.rate))
-        payload = t.size - ETHERNET_BYTES - UDP_IP_BYTES
-        lines.append(
-            f"flow {index[t.source]} {dst.ip} {payload} {tb.ms_to_ns(t.delay_ms)} {num} {den}"
-        )
+        assert isinstance(dst, model.AdapterNode)
+        delay_ns = tb.ms_to_ns(t.delay_ms)
+        ends = f"{index[t.source]} {dst.ip}"
+        if t.pattern == "constant" and isinstance(t.size, int):
+            num, den = _ratio(tb.interval_ns(t.rate))
+            payload = t.size - ETHERNET_BYTES - UDP_IP_BYTES
+            lines.append(f"flow {ends} {payload} {t.priority} {delay_ns} {num} {den}")
+        else:
+            rng = random.Random(stream_seed(scenario.run.seed, source_id))
+            sends = list(_sends(t, rng, delay_ns, duration_ns))
+            listed = " ".join(f"{at} {size - ETHERNET_BYTES - UDP_IP_BYTES}" for at, size in sends)
+            lines.append(f"sends {ends} {t.priority} {len(sends)} {listed}".rstrip())
         if dst.name not in sinks:
             sinks.append(dst.name)
     lines.extend(f"sink {index[name]}" for name in sinks)
