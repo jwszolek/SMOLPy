@@ -17,12 +17,15 @@
 //     poll <connection> <request B> <response B> <delay ns> <period num> <period den>
 //     publish <connection> <message B> <qos> <topic> <delay ns> <period num> <period den>
 //     route <broker> <topic> <connection>...  the subscribers' connections
+//     ar <controller> <device> <ar> <cycle ns> <hold> <delay ns> <output frame B> <input frame B>
 //     observe <kind> <target> <period num> <period den> <device>...
 //
 // A flow is a constant one of fixed-size frames; "sends" lists every frame of
 // any other flow, its instant and size drawn by smolpy.ns3 from the flow's
 // random stream exactly as the reference engine draws them. Modbus and MQTT
 // messages are sized in bytes of TCP payload, and topics are numbered.
+// PROFINET RT frames are layer 2 and sized as whole frames, 802.1Q tag and
+// padding included.
 //
 // Link i has the devices 2i (on a) and 2i + 1 (on b); a node's ports are
 // numbered in the order of its links. Speeds are exact rationals in Mb/s and
@@ -231,6 +234,9 @@ class PriorityTag : public Tag
     uint8_t m_priority;
 };
 
+constexpr uint16_t PN_ETHERTYPE = 0x8892;
+constexpr uint8_t PN_RT_PRIORITY = 6;
+
 struct Frame
 {
     Ptr<Packet> packet;
@@ -239,12 +245,84 @@ struct Frame
     uint16_t protocol = 0;
     uint64_t bytes = 0;
     uint8_t priority = 0;
+    int32_t ar = -1; // a PROFINET RT frame's AR
 };
 
 struct Window
 {
     uint64_t sum = 0;
     uint64_t count = 0;
+    uint64_t max = 0; // pn_jitter
+};
+
+// The consumer of PROFINET RT cyclic data on one node, across its ARs, as
+// smolpy.sim.engine._PnConsumer (Model Semantics §7).
+class PnConsumer
+{
+  public:
+    std::vector<Window*> latencyWindows;
+    std::vector<Window*> jitterWindows;
+    uint64_t expiries = 0;
+
+    void Expect(int32_t ar, uint64_t cycleNs, uint64_t hold)
+    {
+        Ar& a = m_ars[ar];
+        a.cycleNs = cycleNs;
+        a.timeoutNs = hold * cycleNs;
+    }
+
+    void Record(int32_t id, uint64_t origin)
+    {
+        auto it = m_ars.find(id);
+        if (it == m_ars.end())
+        {
+            return;
+        }
+        Ar& ar = it->second;
+        uint64_t now = Simulator::Now().GetNanoSeconds();
+        for (Window* w : latencyWindows)
+        {
+            w->sum += now - origin;
+            ++w->count;
+        }
+        if (ar.started)
+        {
+            int64_t delta = static_cast<int64_t>(now - ar.last) - static_cast<int64_t>(ar.cycleNs);
+            uint64_t jitter = static_cast<uint64_t>(delta < 0 ? -delta : delta);
+            for (Window* w : jitterWindows)
+            {
+                w->max = std::max(w->max, jitter);
+                ++w->count;
+            }
+        }
+        // Supervision starts with the first frame and restarts with each
+        // one. A frame that arrives exactly at the deadline is too late: its
+        // arrival was scheduled after the deadline, so the deadline comes
+        // first, as on SimPy, where the watchdog's timeout fires before the
+        // frame is delivered.
+        ar.started = true;
+        ar.last = now;
+        ar.watchdog.Cancel();
+        ar.watchdog = Simulator::Schedule(NanoSeconds(ar.timeoutNs), &PnConsumer::Expire, this);
+    }
+
+  private:
+    struct Ar
+    {
+        uint64_t cycleNs = 0;
+        uint64_t timeoutNs = 0; // hold x cycle
+        bool started = false;
+        uint64_t last = 0;
+        EventId watchdog;
+    };
+
+    // Counted once per gap; the exchange goes on (ADR-0005).
+    void Expire()
+    {
+        ++expiries;
+    }
+
+    std::unordered_map<int32_t, Ar> m_ars;
 };
 
 class SmolChannel;
@@ -304,6 +382,7 @@ class SmolDevice : public NetDevice
     uint64_t framesSent = 0;    // those frames
     uint64_t bytesReceived = 0; // frames addressed to this port
     std::vector<Window*> latencyWindows;
+    PnConsumer* pn = nullptr; // the node's PROFINET consumer
 
     // NetDevice
     void SetIfIndex(const uint32_t index) override
@@ -637,11 +716,11 @@ SmolDevice::Receive(Frame frame)
         return;
     }
     bytesReceived += frame.bytes;
-    // a UDP datagram's origin is a packet tag; TCP data carries it as a byte
-    // tag, the first one in a segment; segments without data have none
+    // a UDP datagram's or PROFINET frame's origin is a packet tag; TCP data
+    // carries it as a byte tag, the first one in a segment; segments without
+    // data have none
     OriginTag tag;
-    if (!latencyWindows.empty() &&
-        (frame.packet->PeekPacketTag(tag) || frame.packet->FindFirstMatchingByteTag(tag)))
+    if (frame.packet->PeekPacketTag(tag) || frame.packet->FindFirstMatchingByteTag(tag))
     {
         uint64_t latency = Simulator::Now().GetNanoSeconds() - tag.Created();
         for (Window* w : latencyWindows)
@@ -649,6 +728,14 @@ SmolDevice::Receive(Frame frame)
             w->sum += latency;
             ++w->count;
         }
+    }
+    if (frame.protocol == PN_ETHERTYPE)
+    {
+        if (pn) // PROFINET RT is layer 2: not for IP
+        {
+            pn->Record(frame.ar, tag.Created());
+        }
+        return;
     }
     m_rx(this, frame.packet, frame.protocol, frame.src);
 }
@@ -804,6 +891,7 @@ class Connection;
 // The protocol state of a node (an adapter, slave or broker).
 struct Host
 {
+    PnConsumer pn;
     std::vector<Window*> rttWindows;                               // modbus_latency
     std::unordered_map<uint32_t, std::vector<Connection*>> routes; // broker: topic -> subscribers
     uint64_t waiting = 0; // broker: messages waiting for a subscriber's connection
@@ -990,6 +1078,37 @@ class Listener
     std::unordered_map<uint32_t, Connection*> m_connections;
 };
 
+// A PROFINET RT provider: one cyclic frame each cycle from its start, as
+// smolpy.sim.engine._pn_provider. It is layer 2, handed to the device.
+struct PnProvider
+{
+    Ptr<SmolDevice> device;
+    Mac48Address dst;
+    int32_t ar;
+    uint64_t bytes;
+    uint64_t cycleNs;
+    uint64_t stopNs;
+
+    void Fire()
+    {
+        uint64_t now = Simulator::Now().GetNanoSeconds();
+        Frame frame;
+        frame.packet = Create<Packet>();
+        frame.packet->AddPacketTag(OriginTag(now));
+        frame.src = Mac48Address::ConvertFrom(device->GetAddress());
+        frame.dst = dst;
+        frame.protocol = PN_ETHERTYPE;
+        frame.bytes = bytes; // tagged and padded by the model's formula
+        frame.priority = PN_RT_PRIORITY;
+        frame.ar = ar;
+        device->Enqueue(std::move(frame));
+        if (now + cycleNs < stopNs)
+        {
+            Simulator::Schedule(NanoSeconds(cycleNs), &PnProvider::Fire, this);
+        }
+    }
+};
+
 // Modbus polls or MQTT PUBLISH messages at constant instants, as
 // smolpy.sim.engine._modbus_poll_gen and _mqtt_traffic_gen.
 struct Periodic
@@ -1029,6 +1148,9 @@ enum class Kind
     Utilization,
     ModbusLatency,
     BrokerQueue,
+    PnLatency,
+    PnJitter,
+    PnWatchdogExpiries,
 };
 
 struct Observation
@@ -1059,6 +1181,7 @@ Sample(Observation* o)
         break;
     case Kind::Latency:
     case Kind::ModbusLatency:
+    case Kind::PnLatency:
         a = o->window.sum;
         b = o->window.count;
         o->window = Window();
@@ -1077,6 +1200,14 @@ Sample(Observation* o)
         break;
     case Kind::BrokerQueue:
         a = o->host->waiting;
+        break;
+    case Kind::PnJitter:
+        a = o->window.max;
+        b = o->window.count;
+        o->window = Window();
+        break;
+    case Kind::PnWatchdogExpiries:
+        a = o->host->pn.expiries;
         break;
     }
     *o->out << o->index << ' ' << now << ' ' << a << ' ' << b << '\n';
@@ -1213,7 +1344,8 @@ Run(std::istream& in, std::ostream& out)
             switches[switchOf[sw]].table[MacKey(Mac48Address(mac.c_str()))] = port;
         }
         else if (word == "flow" || word == "sends" || word == "sink" || word == "connect" ||
-                 word == "poll" || word == "publish" || word == "route" || word == "observe")
+                 word == "poll" || word == "publish" || word == "route" || word == "ar" ||
+                 word == "observe")
         {
             break; // the network is complete: IPv4 and neighbour caches come first
         }
@@ -1262,6 +1394,14 @@ Run(std::istream& in, std::ostream& out)
     }
 
     std::vector<Host> hosts(nodes.GetN());
+    for (uint32_t i = 0; i < nodes.GetN(); ++i)
+    {
+        if (portOf[i])
+        {
+            portOf[i]->pn = &hosts[i].pn;
+        }
+    }
+    std::vector<std::unique_ptr<PnProvider>> providers;
     std::vector<std::unique_ptr<Connection>> connections;
     std::map<std::pair<uint32_t, uint16_t>, std::unique_ptr<Listener>> listeners;
     std::vector<std::unique_ptr<Periodic>> periodics;
@@ -1334,6 +1474,43 @@ Run(std::istream& in, std::ostream& out)
             periodics.push_back(std::make_unique<Periodic>(
                 Periodic{connection(c), message, Instants(delayNs, num, den), durationNs}));
             periodics.back()->Next();
+        }
+        else if (word == "ar")
+        {
+            uint32_t controller;
+            uint32_t device;
+            int32_t ar;
+            uint64_t cycleNs;
+            uint64_t hold;
+            uint64_t delayNs;
+            uint64_t outputs;
+            uint64_t inputs;
+            s >> controller >> device >> ar >> cycleNs >> hold >> delayNs >> outputs >> inputs;
+            if (!s || controller >= nodes.GetN() || device >= nodes.GetN() || !portOf[controller] ||
+                !portOf[device] || cycleNs == 0)
+            {
+                Fail("bad ar: " + line);
+            }
+            hosts[controller].pn.Expect(ar, cycleNs, hold); // inputs
+            hosts[device].pn.Expect(ar, cycleNs, hold);     // outputs
+            // the controller's provider first, as on the reference engine
+            uint32_t from[2] = {controller, device};
+            uint64_t bytes[2] = {outputs, inputs};
+            for (int i = 0; i < 2; ++i)
+            {
+                providers.push_back(std::make_unique<PnProvider>(PnProvider{portOf[from[i]],
+                                                                            macs[from[1 - i]],
+                                                                            ar,
+                                                                            bytes[i],
+                                                                            cycleNs,
+                                                                            durationNs}));
+                if (delayNs < durationNs)
+                {
+                    Simulator::Schedule(NanoSeconds(delayNs),
+                                        &PnProvider::Fire,
+                                        providers.back().get());
+                }
+            }
         }
         else if (word == "route")
         {
@@ -1452,6 +1629,21 @@ Run(std::istream& in, std::ostream& out)
             else if (kind == "broker_queue")
             {
                 o->kind = Kind::BrokerQueue;
+                o->host = &hosts.at(target);
+            }
+            else if (kind == "pn_latency")
+            {
+                o->kind = Kind::PnLatency;
+                hosts.at(target).pn.latencyWindows.push_back(&o->window);
+            }
+            else if (kind == "pn_jitter")
+            {
+                o->kind = Kind::PnJitter;
+                hosts.at(target).pn.jitterWindows.push_back(&o->window);
+            }
+            else if (kind == "pn_watchdog_expiries")
+            {
+                o->kind = Kind::PnWatchdogExpiries;
                 o->host = &hosts.at(target);
             }
             else

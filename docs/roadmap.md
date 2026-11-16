@@ -172,7 +172,7 @@ A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP st
 
 ns-3 cannot be installed with `pip`, so the backend ships as a container image, `ghcr.io/jwszolek/smolpy:<version>-ns3`. It holds the pinned ns-3 release built once, and CI runs the ns-3 equivalence suite in it ([ADR-0004 — Container images](adr/0004-execution-backends.md#container-images)). A lighter image with SMOLPy and the Rust engine, without ns-3, can be published from the first release of `smolpy-engine-rs`.
 
-**Status:** steps 1 and 2 of 3 done, and step 3 is under way.
+**Status:** steps 1 and 2 of 3 done. In step 3 the backend runs the whole model, and the `-ns3` image remains.
 1. **The image without ns-3: done.** `ghcr.io/jwszolek/smolpy:<version>` holds SMOLPy and the Rust engine, for `linux/amd64` and `linux/arm64`. It is built, tested and pushed at each release.
 2. **The ns-3 base image: done.** `ghcr.io/jwszolek/smolpy-ns3-base:3.49` holds ns-3.49, built once, for `linux/amd64`. `arm64` follows on a native runner.
 3. **The ns-3 backend.**
@@ -185,7 +185,10 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
         - Their frames have SMOL's sizes. What TCP adds is the handshake, acknowledgements and, under load, its flow and congestion control.
         - At low load, after the first messages, every Modbus round trip and MQTT delivery is SimPy's plus 2 ns. Tests check this to the nanosecond.
         - The suite checks that the TCP scenarios sample the same metrics at the same instants as SimPy, and reports how their values differ.
-    - **Next:** PROFINET.
+    - **PROFINET: done.** PROFINET RT runs on layer 2, on SMOL's Ethernet device, with the three PROFINET metrics.
+        - Every PROFINET scenario of the suite is bit-exact with SimPy, watchdog expiries included.
+        - A frame that arrives exactly at the watchdog's deadline is too late on both engines.
+    - **Next:** the `<version>-ns3` image, with CI running the ns-3 suite in it.
 
 **Exit criteria:**
 

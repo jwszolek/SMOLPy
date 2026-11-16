@@ -160,9 +160,9 @@ class RustBackend:
 class Ns3Backend:
     """ns-3 (ADR-0004, ``smolpy.ns3``), where ``NS3_HOME`` names an ns-3 build.
 
-    So far it runs Ethernet (adapters, switches and flows with every pattern,
-    IMIX and 802.1Q priorities) over UDP, and Modbus TCP and MQTT over ns-3's
-    TCP. PROFINET follows in Phase 6.
+    It runs the whole model, headless: Ethernet (adapters, switches and flows
+    with every pattern, IMIX and 802.1Q priorities) over UDP, Modbus TCP and
+    MQTT over ns-3's TCP, and PROFINET RT on layer 2.
     """
 
     name = "ns3"
@@ -190,10 +190,9 @@ class Ns3Backend:
 
     def capabilities(self) -> Capabilities:
         self._locate()
-        later = "planned for Phase 6"
         return Capabilities(
-            nodes=frozenset({"adapter", "switch", "mqtt_broker", "modbus_slave"}),
-            traffic=frozenset({"flow", "publish", "route", "poll"}),
+            nodes=_NODE_KINDS,
+            traffic=_TRAFFIC_KINDS,
             patterns=_PATTERNS,
             metrics=frozenset(
                 {
@@ -205,10 +204,12 @@ class Ns3Backend:
                     "utilization",
                     "modbus_latency",
                     "broker_queue",
+                    "pn_latency",
+                    "pn_jitter",
+                    "pn_watchdog_expiries",
                 }
             ),
             features=frozenset({"imix"}),
-            notes={kind: later for kind in ("profinet_device", "profinet_ar")},
         )
 
     def run(self, scenario: Scenario) -> SimulationResult:
