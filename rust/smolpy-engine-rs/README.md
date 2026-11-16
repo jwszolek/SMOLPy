@@ -18,7 +18,8 @@ result = net.simulate(duration=60_000, backend="rust")
     - Adapters, switches (both QoS modes, learning and converged MAC tables), links, and flows with every pattern and IMIX sizes.
     - The metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth` and `utilization`.
     - Modbus TCP polling: slaves, polls and `modbus_latency`.
-    - MQTT and PROFINET follow. A scenario that uses them is rejected before the run, with a message naming the element.
+    - MQTT: brokers, publications with QoS 0 and 1, routes and `broker_queue`.
+    - PROFINET follows. A scenario that uses them is rejected before the run, with a message naming the element.
 - **Versions.** The package is released together with `smolpy`, with the same version. It checks that it reads the Scenario IR version that `smolpy` writes.
 
 One abi3 wheel per platform serves every Python from 3.10: Linux x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64.

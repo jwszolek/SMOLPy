@@ -16,6 +16,7 @@ pub const VERSION: u64 = 2;
 pub enum NodeKind {
     Adapter { mac: String },
     ModbusSlave { mac: String, unit: u8 },
+    MqttBroker { mac: String },
     Switch { fifo: bool, topology: bool },
 }
 
@@ -69,6 +70,26 @@ pub struct Poll {
     pub delay_ms: Q,
 }
 
+/// MQTT PUBLISH messages to a broker at `rate` messages per second.
+#[derive(Debug, Clone)]
+pub struct Publish {
+    pub source: String,
+    pub broker: String,
+    pub topic: String,
+    pub rate: Q,
+    pub payload: u64,
+    pub qos: u8,
+    pub delay_ms: Q,
+}
+
+/// A broker's fan-out of one topic to its subscribers.
+#[derive(Debug, Clone)]
+pub struct Route {
+    pub broker: String,
+    pub topic: String,
+    pub subscribers: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metric {
     Throughput,
@@ -78,10 +99,11 @@ pub enum Metric {
     QueueDepth,
     Utilization,
     ModbusLatency,
+    BrokerQueue,
 }
 
 impl Metric {
-    pub const ALL: [(&'static str, Metric); 7] = [
+    pub const ALL: [(&'static str, Metric); 8] = [
         ("throughput", Metric::Throughput),
         ("latency", Metric::Latency),
         ("bytes_sent", Metric::BytesSent),
@@ -89,6 +111,7 @@ impl Metric {
         ("queue_depth", Metric::QueueDepth),
         ("utilization", Metric::Utilization),
         ("modbus_latency", Metric::ModbusLatency),
+        ("broker_queue", Metric::BrokerQueue),
     ];
 
     pub fn name(self) -> &'static str {
@@ -110,6 +133,8 @@ pub struct Scenario {
     pub links: Vec<Link>,
     pub flows: Vec<Flow>,
     pub polls: Vec<Poll>,
+    pub publishes: Vec<Publish>,
+    pub routes: Vec<Route>,
     pub observations: Vec<Observation>,
     pub duration_ms: Q,
     pub seed: u64,
@@ -126,8 +151,8 @@ pub struct Capabilities {
 }
 
 pub const CAPABILITIES: Capabilities = Capabilities {
-    nodes: &["adapter", "switch", "modbus_slave"],
-    traffic: &["flow", "poll"],
+    nodes: &["adapter", "switch", "modbus_slave", "mqtt_broker"],
+    traffic: &["flow", "poll", "publish", "route"],
     patterns: &["constant", "poisson", "bursty", "batch"],
     metrics: &[
         "throughput",
@@ -137,13 +162,11 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "queue_depth",
         "utilization",
         "modbus_latency",
+        "broker_queue",
     ],
     features: &["imix"],
     notes: &[
-        ("mqtt_broker", "planned for Phase 5"),
         ("profinet_device", "planned for Phase 5"),
-        ("publish", "planned for Phase 5"),
-        ("route", "planned for Phase 5"),
         ("profinet_ar", "planned for Phase 5"),
     ],
 };
@@ -269,7 +292,8 @@ pub fn parse(text: &str) -> Res<Scenario> {
         f.done()?;
         links.push(link);
     }
-    let (mut flows, mut polls) = (Vec::new(), Vec::new());
+    let (mut flows, mut polls, mut publishes, mut routes) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (i, v) in array(top.take_or("traffic"), "traffic")?
         .into_iter()
         .enumerate()
@@ -277,6 +301,8 @@ pub fn parse(text: &str) -> Res<Scenario> {
         match parse_traffic(v, i)? {
             Traffic::Flow(flow) => flows.push(flow),
             Traffic::Poll(poll) => polls.push(poll),
+            Traffic::Publish(publish) => publishes.push(publish),
+            Traffic::Route(route) => routes.push(route),
         }
     }
     let mut observations = Vec::new();
@@ -322,6 +348,8 @@ pub fn parse(text: &str) -> Res<Scenario> {
         links,
         flows,
         polls,
+        publishes,
+        routes,
         observations,
         duration_ms,
         seed,
@@ -383,9 +411,13 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 u8::try_from(unit).map_err(|_| format!("modbus_slave {name}: unit_id {unit}"))?;
             NodeKind::ModbusSlave { mac, unit }
         }
-        "mqtt_broker" | "profinet_device" => {
-            return Err(unsupported(&format!("{kind} nodes (Phase 5)")))
+        "mqtt_broker" => {
+            f.string("ip")?;
+            NodeKind::MqttBroker {
+                mac: f.string("mac")?,
+            }
         }
+        "profinet_device" => return Err(unsupported(&format!("{kind} nodes (Phase 5)"))),
         other => return Err(format!("unknown node kind {other:?}")),
     };
     f.done()?;
@@ -395,6 +427,8 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
 enum Traffic {
     Flow(Flow),
     Poll(Poll),
+    Publish(Publish),
+    Route(Route),
 }
 
 fn parse_traffic(value: Value, i: usize) -> Res<Traffic> {
@@ -423,9 +457,55 @@ fn parse_traffic(value: Value, i: usize) -> Res<Traffic> {
                 delay_ms,
             }))
         }
-        "publish" | "route" | "profinet_ar" => {
-            Err(unsupported(&format!("{kind} traffic (Phase 5)")))
+        "publish" => {
+            let source = f.string("source")?;
+            let broker = f.string("broker")?;
+            f.what = format!("publish {source} -> {broker}");
+            let topic = f.string("topic")?;
+            let rate = f.number("rate")?;
+            let payload = f.integer("payload")?;
+            let qos = f.integer("qos")?;
+            let qos = u8::try_from(qos)
+                .ok()
+                .filter(|q| *q <= 1)
+                .ok_or(format!("publish: qos {qos}"))?;
+            let delay_ms = match f.take_or("delay_ms") {
+                None => Q::int(0),
+                Some(v) => number(&v, "publish: delay_ms")?,
+            };
+            f.done()?;
+            Ok(Traffic::Publish(Publish {
+                source,
+                broker,
+                topic,
+                rate,
+                payload,
+                qos,
+                delay_ms,
+            }))
         }
+        "route" => {
+            let broker = f.string("broker")?;
+            let topic = f.string("topic")?;
+            f.what = format!("route {broker} topic {topic:?}");
+            let subscribers = match f.take("subscribers")? {
+                Value::Array(items) => items
+                    .into_iter()
+                    .map(|v| match v {
+                        Value::String(s) => Ok(s),
+                        other => Err(format!("route: subscriber must be a name, got {other}")),
+                    })
+                    .collect::<Res<Vec<String>>>()?,
+                other => return Err(format!("route: subscribers must be a list, got {other}")),
+            };
+            f.done()?;
+            Ok(Traffic::Route(Route {
+                broker,
+                topic,
+                subscribers,
+            }))
+        }
+        "profinet_ar" => Err(unsupported(&format!("{kind} traffic (Phase 5)"))),
         other => Err(format!("unknown traffic kind {other:?}")),
     }
 }
@@ -530,6 +610,14 @@ mod tests {
         assert!(parse(&B1.replace("\"constant\"", "\"batch\""))
             .unwrap_err()
             .contains("needs a batch size"));
+        let mqtt = parse(&B1.replace(
+            "\"traffic\": [",
+            "\"traffic\": [{\"kind\": \"publish\", \"source\": \"tx\", \"broker\": \"rx\", \"topic\": \"hala/temp\\u00b0C\", \"rate\": 10, \"payload\": 20, \"qos\": 1, \"delay_ms\": 0.0}, {\"kind\": \"route\", \"broker\": \"rx\", \"topic\": \"t\", \"subscribers\": [\"tx\"]}, ",
+        ))
+        .unwrap();
+        assert_eq!(mqtt.publishes[0].topic, "hala/temp°C");
+        assert_eq!(mqtt.publishes[0].qos, 1);
+        assert_eq!(mqtt.routes[0].subscribers, ["tx"]);
         assert!(parse(&B1.replace("\"throughput\"", "\"pn_jitter\""))
             .unwrap_err()
             .contains("metric \"pn_jitter\""));

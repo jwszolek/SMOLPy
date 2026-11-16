@@ -153,11 +153,14 @@ Modbus TCP, MQTT and PROFINET RT in the Rust engine. These need no new architect
 
 **Exit criteria:** the Rust backend's capabilities equal SimPy's, apart from the live dashboard.
 
-**Status:** one of three protocols done.
+**Status:** two of three protocols done.
 - **Modbus TCP: done.**
     - The Rust engine runs slaves, `polls()` and `modbus_latency`. It reproduces SimPy's poll generator and slave process, including requests flooded to other slaves and dropped there.
     - The new `polling` scenario is bit-exact with SimPy, down to the event count.
-- **MQTT and PROFINET RT** are next. PROFINET's watchdog waits on "a frame or a timeout", a SimPy condition whose event ordering the engine has to reproduce.
+- **MQTT: done.**
+    - The Rust engine runs brokers, `publishes()` with QoS 0 and 1, `routes()` and `broker_queue`. It reproduces SimPy's publish generator and broker: copies keep the publisher's origin time, QoS 1 is acknowledged with a PUBACK, and a topic nobody subscribes to is only acknowledged.
+    - The new `messaging` scenario (two brokers, non-ASCII topics) and the existing `protocols` scenario (Modbus and MQTT) are bit-exact with SimPy, down to the event count.
+- **PROFINET RT** is next. Its watchdog waits on "a frame or a timeout", a SimPy condition whose event ordering the engine has to reproduce. watchdog waits on "a frame or a timeout", a SimPy condition whose event ordering the engine has to reproduce.
 
 ## Phase 6: ns-3 high-fidelity backend ([ADR-0004](adr/0004-execution-backends.md), revised)
 

@@ -133,6 +133,48 @@ def polling() -> Scenario:
     return net.to_scenario(duration=40)
 
 
+def messaging() -> Scenario:
+    """MQTT only, within the Rust engine's scope: two brokers, one behind a
+    FIFO edge switch, with QoS 0 and 1, one topic on both brokers, a topic
+    nobody subscribes to and non-ASCII topic names (their length counts
+    characters). Tagged bulk traffic shares the uplink."""
+    net = Network("messaging")
+    core = net.switch("core", ports=5, mac_table="topology")
+    edge = net.switch("edge", ports=4, qos="fifo")  # learning
+    plant = net.mqtt_broker("plant", ip="10.0.1.1")
+    line = net.mqtt_broker("line", ip="10.0.2.1")
+    hall = net.adapter("hall", ip="10.0.1.10")
+    hmi = net.adapter("hmi", ip="10.0.1.20")
+    scada = net.adapter("scada", ip="10.0.1.21")
+    cell = net.adapter("cell", ip="10.0.2.10")
+    historian = net.adapter("historian", ip="10.0.2.20")
+    for node in (plant, hall, hmi, scada):
+        net.link(node, core, speed=100, length=10)
+    net.link(core, edge, speed=100, length=120)
+    for node in (cell, historian, line):
+        net.link(node, edge, speed=100, length=10)
+    hall.publishes(plant, topic="hala/temp°C", rate=400, payload=32, qos=1)
+    hall.publishes(plant, topic="hala/ciśnienie", rate=250, payload=200, delay_ms=0.4)
+    cell.publishes(plant, topic="linia/stan", rate=200, payload=0, qos=1)
+    cell.publishes(line, topic="linia/stan", rate=150, payload=900, delay_ms=1.1)
+    cell.publishes(line, topic="debug", rate=100, payload=50, qos=1)  # routed nowhere
+    plant.routes("hala/temp°C", to=[hmi, historian])
+    plant.routes("hala/ciśnienie", to=[scada])
+    plant.routes("linia/stan", to=[hmi])
+    line.routes("linia/stan", to=[historian, hmi, scada])
+    historian.sends(hmi, rate=2_000, size=1_400, priority=2, delay_ms=0.2)
+    for sub in (hmi, scada, historian):
+        net.observe("latency", on=sub, every=2)
+    for pub in (hall, cell):
+        net.observe("bytes_received", on=pub, every=4)  # their PUBACKs
+    net.observe("throughput", on=historian, every=4)
+    for broker in (plant, line):
+        net.observe("broker_queue", on=broker, every=1)
+    net.observe("utilization", on=plant, every=4)
+    net.observe("queue_depth", on=edge, every=0.05)  # fan-out copies queue briefly
+    return net.to_scenario(duration=40)
+
+
 def protocols() -> Scenario:
     """Modbus polling and MQTT publish/subscribe across a switch, with a
     FIFO switch."""
@@ -221,6 +263,7 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "priorities": priorities,
     "switching": switching,
     "polling": polling,
+    "messaging": messaging,
     "protocols": protocols,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
