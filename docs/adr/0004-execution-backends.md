@@ -114,7 +114,7 @@ smolpy backends                             # list backends and their capabiliti
 | `switch` (store-and-forward) | Node with a learning bridge over one device per port |
 | `switch mode=cut-through` | **unsupported** — capability error |
 | `hub` | Shared CSMA channel *(hubs and `collision_rate` were later removed; see [Model Semantics](../model-semantics.md#open-issues), open issue 3)* |
-| `link speed= length=` | Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`). *Since ADR-0010:* `InterframeGap` = the time of 20 B at `speed` (preamble, SFD and gap, which CSMA does not model otherwise); CSMA adds the Ethernet header and FCS itself |
+| `link speed= length=` | Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`). *Since ADR-0010:* inter-frame gap = the time of 20 B at `speed` (preamble, SFD and gap, which CSMA does not model otherwise); CSMA adds the Ethernet header and FCS itself. *In ns-3.49 the gap is not an attribute: `Attach()` sets 12 B, so the generator calls `CsmaNetDevice::SetInterframeGap()` on each device after installing it.* |
 | `flow` | UDP application; payload sized so the on-wire frame matches `size` (constant, Poisson, bursty patterns; `imix` sizes) |
 | `publish` / `route` | MQTT publisher / broker Applications over one persistent TCP connection per client; QoS 1 sends PUBACK |
 | `poll` | Modbus TCP master / slave Applications over one persistent TCP connection per master–slave pair (port 502), MBAP transaction IDs, Read Holding Registers (FC 03) |
@@ -202,6 +202,20 @@ docker run --rm -v "$PWD:/work" -w /work ghcr.io/jwszolek/smolpy:latest-ns3 run 
     - The image without ns-3 contains no GPL code.
 - **Not a replacement for pip.** `pip install smolpy smolpy-engine-rs` stays the main way to install SMOLPy. The images are for ns-3, for running without a Python setup, and for archiving.
 
+**The ns-3 base image, as built** *(2026-11-16)*:
+- `ghcr.io/jwszolek/smolpy-ns3-base:3.49`, built by `.github/workflows/ns3-base.yml` from `docker/ns3-base/Dockerfile`, for `linux/amd64` only for now. It is rebuilt when that Dockerfile changes, and pushed after the merge to `main`.
+- **Pinned release:** ns-3.49 (released 2026-10-07), as the git tag `ns-3.49` with its commit checked. Debian 12's g++ 12 and CMake 3.25 meet its minimums: g++ 11.1, C++23 and CMake 3.25.
+- **Build:**
+    - The `release` profile, without examples, tests or Python bindings.
+    - The modules `core`, `network`, `internet`, `applications`, `csma`, `bridge`, `traffic-control` and `stats`, plus what they need.
+    - Not the `optimized` profile: it compiles with `-march=native`, and a binary built for the CPU of the CI runner may not run on another one.
+    - A local build with 15 threads takes 80 s.
+- **Test:** each build compiles and runs `docker/ns3-base/smoke.cc` as a scratch program against the prebuilt modules. The program is two hosts on CSMA links to a bridge, with the SMOL wire model and a UDP echo.
+- **Findings for the generator** (step 3):
+    - **Scratch programs work.** A scenario placed in `scratch/` is built against the prebuilt modules, so no contrib module is needed.
+    - **The inter-frame gap** is set with `SetInterframeGap()`, as in the mapping table.
+    - **Neighbour caches must start full** (`NeighborCacheHelper::PopulateNeighborCache()`). SMOL models no ARP. Without the full caches, ns-3 delays its first ARP request by up to 10 ms (`ArpL3Protocol::RequestJitter`), and its queue of 3 pending packets drops the rest.
+
 ### Documentation
 
 - `docs/backends.md` — backend concept, installing ns-3, `--backend`, capability tables, known fidelity differences.
@@ -211,9 +225,9 @@ docker run --rm -v "$PWD:/work" -w /work ghcr.io/jwszolek/smolpy:latest-ns3 run 
 
 - Exact behaviour of ns-3's CSMA model versus SimPy's collision approximation, to decide whether `hub` support should be limited further. *(Resolved: hubs were removed.)*
 - How ns-3 queue lengths should be sampled so that `queue_depth` is comparable to SimPy's per-port frame count.
-- Whether the pinned ns-3 release's build tool supports building scratch programs with an extra module cleanly, or the module should be installed as a contrib module.
+- Whether the pinned ns-3 release's build tool supports building scratch programs with an extra module cleanly, or the module should be installed as a contrib module. *(Resolved: scratch programs build against the prebuilt modules; see the base image above.)*
 - The size of the `-ns3` image, and whether to build ns-3 in its `optimized` profile only, without examples and tests, to keep it small.
-- Whether GitHub's hosted runners can build the ns-3 base image for `linux/arm64` in reasonable time, or that platform needs a native arm64 runner or is offered for `amd64` only at first.
+- Whether GitHub's hosted runners can build the ns-3 base image for `linux/arm64` in reasonable time, or that platform needs a native arm64 runner or is offered for `amd64` only at first. *(Decided: `amd64` only at first; `arm64` on a native runner later.)*
 
 ---
 
