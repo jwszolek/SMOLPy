@@ -106,7 +106,9 @@ smolpy backends                             # list backends and their capabiliti
 
 **Results interchange.** ~~Samplers in the C++ module write the same long CSV format that `SimulationResult.export()` already produces (`time_ms,metric,value`).~~ *As built:* at each sample instant, the samplers write raw integer counters: bytes, bits and frames, the sum and count of latencies, and queue lengths. The Python side computes every metric from them with the reference engine's formulas, so each value is rounded once, as there. The backend loads the result into a regular `SimulationResult`, so `report()`, `export()` and `--output` work identically for both backends.
 
-**Seed.** The `simulate` statement's `seed` maps to ns-3's RNG seed/run configuration, so seeded runs are reproducible on both backends.
+**Seed.** ~~The `simulate` statement's `seed` maps to ns-3's RNG seed/run configuration, so seeded runs are reproducible on both backends.~~ *As built (2026-11-16):* random traffic is not drawn by ns-3's generators. The Python side draws every frame of a random flow from the flow's own stream, the one Model Semantics §6 seeds from the run seed and its source id. It uses the reference engine's generator, order of draws and formulas, so the instants and sizes are the same as SimPy's. ns-3 sends the listed frames.
+- **Why.** With the same seed, a stochastic scenario is the same run on SimPy and ns-3. Any difference is then the network's, not the traffic's, and the comparison is exact rather than statistical.
+- **Cost.** Constant flows of fixed-size frames are still generated in C++. Only random flows and IMIX sizes are listed, one pair of integers per frame.
 
 **Time.** *Added by the ADR-0007 revision of 2026-11-14.* The generator keeps ns-3's `Time` resolution at 1 ns and writes every time as integer nanoseconds, rounded by the rules of [Model Semantics §1](../model-semantics.md#1-time-and-units): delays, cycles, sampling instants and the end of the run. So ns-3 and the other engines share one clock. Timings that ns-3's own device and TCP/IP models compute are ns-3's, which is why ns-3 is compared under ADR-0009's high-fidelity rules.
 
@@ -221,7 +223,12 @@ ns-3.49's CSMA is a shared bus: the two ends of a link wait for each other, and 
     - **CSMA as planned.** Its differences from the other engines would come from half duplex.
     - **`SimpleNetDevice`.** It is full duplex, but it counts neither the Ethernet header and FCS nor the preamble and gap: about 38 B per frame too few.
 
-**First results** *(2026-11-16)*. Constant flows of fixed-size frames without priorities are in scope so far. The `line` and `bridging` scenarios, and `switching` with its priorities set to 0, give SimPy's results bit for bit, through ns-3's IPv4/UDP stack. `bridging` has a flooding learning core, a hairpin at a converged switch, jumbo frames and a saturated 10 Mb/s link. So the deterministic suite compares ns-3 exactly, like Rust. ADR-0009's high-fidelity rules remain for TCP.
+**First results** *(2026-11-16)*. Everything Ethernet is in scope: adapters, switches and flows with every pattern, IMIX sizes and 802.1Q priorities.
+- **Deterministic scenarios.** `line`, `switching` and `bridging` give SimPy's results bit for bit, through ns-3's IPv4/UDP stack. `bridging` has a flooding learning core, a hairpin at a converged switch, jumbo frames and a saturated 10 Mb/s link.
+- **Stochastic scenarios.** `random-load` and `groups`, with Poisson, bursty and batch arrivals, IMIX and priorities, are bit for bit the same as SimPy's with the same seed, because the frames are drawn from the same streams. With other seeds they agree statistically.
+- **Consequence.** The suite compares ns-3 exactly, like Rust. ADR-0009's high-fidelity rules remain for TCP.
+
+ns-3 adds a priority to a frame as a packet tag. Its device then adds the 802.1Q tag's 4 B and serves its egress queue strictly by priority, or FIFO on a switch with `qos="fifo"`.
 
 **The ns-3 base image, as built** *(2026-11-16)*:
 - `ghcr.io/jwszolek/smolpy-ns3-base:3.49`, built by `.github/workflows/ns3-base.yml` from `docker/ns3-base/Dockerfile`, for `linux/amd64` only for now. It is rebuilt when that Dockerfile changes, and pushed after the merge to `main`.

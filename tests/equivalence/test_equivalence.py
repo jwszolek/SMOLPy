@@ -62,6 +62,22 @@ def test_deterministic(name: str, backend: str) -> None:
     assert not mismatches, "\n".join(map(str, mismatches))
 
 
+# Backends that draw a scenario's random traffic from the reference engine's
+# own streams (smolpy.ns3 does): with the same seed, a stochastic scenario is
+# then the same run, and must agree bit for bit as well as statistically.
+SAME_STREAMS = [b for b in BACKENDS if b.values[0] == "ns3"]
+
+
+@pytest.mark.parametrize("backend", SAME_STREAMS)
+@pytest.mark.parametrize("name", STOCHASTIC)
+def test_same_streams_give_the_same_run(name: str, backend: str) -> None:
+    scenario = _supported(STOCHASTIC[name](), backend)
+    mismatches = harness.compare_runs(
+        harness.run_once(scenario, backend), harness.run_once(scenario, harness.REFERENCE)
+    )
+    assert not mismatches, "\n".join(map(str, mismatches))
+
+
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("name", STOCHASTIC)
 def test_stochastic(name: str, backend: str) -> None:

@@ -176,11 +176,12 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
 1. **The image without ns-3: done.** `ghcr.io/jwszolek/smolpy:<version>` holds SMOLPy and the Rust engine, for `linux/amd64` and `linux/arm64`. It is built, tested and pushed at each release.
 2. **The ns-3 base image: done.** `ghcr.io/jwszolek/smolpy-ns3-base:3.49` holds ns-3.49, built once, for `linux/amd64`. `arm64` follows on a native runner.
 3. **The ns-3 backend.**
-    - **Ethernet: done.** `backend="ns3"` runs adapters, switches and constant flows of fixed-size frames without priorities, with the six Ethernet metrics, on ns-3's IPv4/UDP stack.
+    - **Ethernet: done.** `backend="ns3"` runs adapters, switches and flows with every pattern, IMIX and 802.1Q priorities, with the six Ethernet metrics, on ns-3's IPv4/UDP stack.
         - It runs over SMOL's own full-duplex Ethernet device, because ns-3's CSMA is half duplex (ADR-0004).
-        - `line`, `bridging` and `switching` without priorities are bit-exact with SimPy.
+        - Random traffic is drawn from the reference engine's streams.
+        - Every Ethernet scenario of the suite is bit-exact with SimPy. For the stochastic ones that holds with the same seed.
         - CI runs the backend in the base image.
-    - **Next:** 802.1Q priorities, random patterns and IMIX, then Modbus and MQTT over TCP, then PROFINET.
+    - **Next:** Modbus and MQTT over ns-3's TCP, then PROFINET.
 
 **Exit criteria:**
 

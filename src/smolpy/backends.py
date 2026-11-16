@@ -160,8 +160,8 @@ class RustBackend:
 class Ns3Backend:
     """ns-3 (ADR-0004, ``smolpy.ns3``), where ``NS3_HOME`` names an ns-3 build.
 
-    So far it runs Ethernet with constant flows of fixed-size frames, without
-    802.1Q priorities; the protocols and random traffic follow in Phase 6.
+    So far it runs Ethernet: adapters, switches and flows with every pattern,
+    IMIX and 802.1Q priorities. The protocols follow in Phase 6.
     """
 
     name = "ns3"
@@ -193,7 +193,7 @@ class Ns3Backend:
         return Capabilities(
             nodes=frozenset({"adapter", "switch"}),
             traffic=frozenset({"flow"}),
-            patterns=frozenset({"constant"}),
+            patterns=_PATTERNS,
             metrics=frozenset(
                 {
                     "throughput",
@@ -204,7 +204,7 @@ class Ns3Backend:
                     "utilization",
                 }
             ),
-            priorities=False,
+            features=frozenset({"imix"}),
             notes={
                 kind: later
                 for kind in (
