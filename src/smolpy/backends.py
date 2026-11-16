@@ -12,6 +12,8 @@ silently.
   own capabilities, so this module never claims more than the engine
   supports, and the Scenario IR version it reads, which must be this
   smolpy's.
+- ``ns3``: ns-3's IPv4/UDP stack on SMOL's own full-duplex Ethernet
+  (ADR-0004, ``smolpy.ns3``), where ``NS3_HOME`` names an ns-3 build.
 
 The Rust module's contract is::
 
@@ -51,6 +53,7 @@ class Capabilities:
     patterns: frozenset[str]  # of flows
     metrics: frozenset[str]
     features: frozenset[str] = frozenset()  # "imix": IMIX frame sizes
+    priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
     dashboards: bool = False  # the live and text modes of simulate()
     notes: dict[str, str] = field(default_factory=dict)  # kind -> "not yet" detail
@@ -140,6 +143,7 @@ class RustBackend:
             patterns=frozenset(caps["patterns"]),
             metrics=frozenset(caps["metrics"]),
             features=frozenset(caps.get("features", ())),
+            priorities=bool(caps.get("priorities", True)),
             half_duplex=bool(caps.get("half_duplex", False)),
             dashboards=False,
             notes=dict(caps.get("notes", {})),
@@ -153,7 +157,75 @@ class RustBackend:
         return SimulationResult(dict(metrics), scenario, stats)
 
 
-REGISTRY: dict[str, Backend] = {b.name: b for b in (SimPyBackend(), RustBackend())}
+class Ns3Backend:
+    """ns-3 (ADR-0004, ``smolpy.ns3``), where ``NS3_HOME`` names an ns-3 build.
+
+    So far it runs Ethernet with constant flows of fixed-size frames, without
+    802.1Q priorities; the protocols and random traffic follow in Phase 6.
+    """
+
+    name = "ns3"
+    install = (
+        "set NS3_HOME to a built ns-3 3.49 tree, or run in the image"
+        " ghcr.io/jwszolek/smolpy-ns3-base"
+    )
+
+    def _locate(self) -> None:
+        from smolpy.ns3 import Ns3Unavailable, locate
+
+        try:
+            locate()
+        except Ns3Unavailable as exc:
+            raise BackendUnavailable(
+                f"the ns3 backend is not available: {exc} ({self.install})"
+            ) from exc
+
+    def available(self) -> bool:
+        try:
+            self._locate()
+        except BackendUnavailable:
+            return False
+        return True
+
+    def capabilities(self) -> Capabilities:
+        self._locate()
+        later = "planned for Phase 6"
+        return Capabilities(
+            nodes=frozenset({"adapter", "switch"}),
+            traffic=frozenset({"flow"}),
+            patterns=frozenset({"constant"}),
+            metrics=frozenset(
+                {
+                    "throughput",
+                    "latency",
+                    "bytes_sent",
+                    "bytes_received",
+                    "queue_depth",
+                    "utilization",
+                }
+            ),
+            priorities=False,
+            notes={
+                kind: later
+                for kind in (
+                    "mqtt_broker",
+                    "modbus_slave",
+                    "profinet_device",
+                    "publish",
+                    "route",
+                    "poll",
+                    "profinet_ar",
+                )
+            },
+        )
+
+    def run(self, scenario: Scenario) -> SimulationResult:
+        from smolpy import ns3
+
+        return ns3.run(scenario)
+
+
+REGISTRY: dict[str, Backend] = {b.name: b for b in (SimPyBackend(), RustBackend(), Ns3Backend())}
 
 
 def get(name: str) -> Backend:
@@ -221,6 +293,8 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
             raise unsupported(t, f"pattern {pattern!r}", ("traffic", i))
         if getattr(t, "size", None) == "imix" and "imix" not in caps.features:
             raise unsupported(t, "IMIX frame sizes", ("traffic", i))
+        if getattr(t, "priority", 0) > 0 and not caps.priorities:
+            raise unsupported(t, "802.1Q priorities", ("traffic", i))
     for i, o in enumerate(scenario.observations):
         if o.metric not in caps.metrics:
             raise unsupported(o, f"metric {o.metric!r}", ("observations", i))

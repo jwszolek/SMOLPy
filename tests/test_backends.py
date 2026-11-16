@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -63,10 +64,10 @@ def no_rust(monkeypatch) -> None:
 
 
 def test_registry() -> None:
-    assert list(backends.REGISTRY) == ["simpy", "rust"]
+    assert list(backends.REGISTRY) == ["simpy", "rust", "ns3"]
     assert "simpy" in backends.installed()
-    with pytest.raises(ValueError, match="unknown backend 'ns3', expected one of simpy, rust"):
-        backends.get("ns3")
+    with pytest.raises(ValueError, match="unknown backend 'omnet', expected one of simpy, rust"):
+        backends.get("omnet")
 
 
 def test_simpy_supports_the_whole_model() -> None:
@@ -172,6 +173,7 @@ def _smolpy(*args: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         timeout=120,
+        env={k: v for k, v in os.environ.items() if k != "NS3_HOME"},  # no ns-3 either
     )
 
 
@@ -201,7 +203,9 @@ def test_cli_backend(tmp_path) -> None:
     done = _smolpy(str(f), "--backend", "rust")
     assert done.returncode == 1 and "rust backend is not installed" in _flat(done)
     done = _smolpy(str(f), "--backend", "ns3")
-    assert done.returncode == 1 and "unknown backend 'ns3'" in _flat(done)
+    assert done.returncode == 1 and "ns3 backend is not available: NS3_HOME" in _flat(done)
+    done = _smolpy(str(f), "--backend", "omnet")
+    assert done.returncode == 1 and "unknown backend 'omnet'" in _flat(done)
     script = tmp_path / "s.py"
     script.write_text("print('hi')\n")
     done = _smolpy("--backend", "simpy", str(script))

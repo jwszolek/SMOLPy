@@ -100,3 +100,24 @@ jobs:
 
       - name: Equivalence with SimPy (bit for bit)
         run: uv run --no-sync pytest tests/equivalence tests/test_backends.py -v --tb=short
+
+  ns3:
+    name: ns-3 backend
+    runs-on: ubuntu-latest
+    # the pinned ns-3 build (ns3-base.yml): NS3_HOME is set, g++ is there
+    container: ghcr.io/jwszolek/smolpy-ns3-base:3.49
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # hatch-vcs reads the version from git
+
+      - name: Install smolpy
+        run: python -m pip install --quiet --root-user-action=ignore -e . pytest
+
+      # makes sure the tests below run the ns3 backend instead of skipping it
+      - name: Check that the ns3 backend is installed
+        run: python -c "from smolpy import backends; backends.get('ns3'); print(backends.installed())"
+
+      - name: Equivalence with SimPy
+        run: python -m pytest tests/equivalence tests/test_ns3.py -k ns3 -v --tb=short

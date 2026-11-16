@@ -101,7 +101,7 @@ def test_invalid_scenario_raises_before_any_run() -> None:
         ({"workers": 0}, "workers must be a positive integer, got 0"),
         ({"runs": 2, "seeds": [1]}, "1 seeds given for 2 runs"),
         ({"runs": 1, "seeds": [1.5]}, "seeds must be integers"),
-        ({"backend": "ns3"}, "unknown backend 'ns3', expected one of simpy, rust"),
+        ({"backend": "omnet"}, "unknown backend 'omnet', expected one of simpy, rust, ns3"),
     ],
 )
 def test_bad_arguments(kwargs: dict, message: str) -> None:
