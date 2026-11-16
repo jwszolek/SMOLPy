@@ -28,9 +28,15 @@ PN_RT_PRIORITY = 6  # 802.1Q PCP carried by PROFINET RT cyclic frames
 PN_CYCLES_MS = tuple(2**n for n in range(10))  # 1, 2, 4, ... 512 ms
 PN_MAX_IO_BYTES = 1440
 
-MQTT_PUBACK_BYTES = max(MIN_FRAME_BYTES, ETHERNET_IP_TCP_BYTES + 4)  # 62 B, padded to 64
+# The protocol messages below are the TCP payload of one frame each; their
+# frames add ETHERNET_IP_TCP_BYTES. The ns-3 backend sends the messages
+# themselves over TCP.
 
-MODBUS_REQUEST_BYTES = ETHERNET_IP_TCP_BYTES + 6 + 1 + 2 + 2  # 69: MBAP, FC, addr, quantity
+MQTT_PUBACK_MESSAGE_BYTES = 4
+MQTT_PUBACK_BYTES = max(MIN_FRAME_BYTES, ETHERNET_IP_TCP_BYTES + MQTT_PUBACK_MESSAGE_BYTES)  # 64
+
+MODBUS_REQUEST_MESSAGE_BYTES = 6 + 1 + 2 + 2  # MBAP, FC, address, quantity
+MODBUS_REQUEST_BYTES = ETHERNET_IP_TCP_BYTES + MODBUS_REQUEST_MESSAGE_BYTES  # 69
 
 
 def padded(frame_bytes: int) -> int:
@@ -44,16 +50,23 @@ def flow_frame_size(size: int, priority: int) -> int:
     return size + (VLAN_TAG_BYTES if priority > 0 else 0)
 
 
+def mqtt_publish_message_bytes(topic: str, payload_bytes: int, qos: int) -> int:
+    """MQTT PUBLISH: fixed header (2) + topic length (2) + topic + packet id (QoS > 0)
+    + payload. The topic's length counts characters."""
+    return 2 + 2 + len(topic) + (2 if qos > 0 else 0) + payload_bytes
+
+
 def mqtt_publish_frame_size(topic: str, payload_bytes: int, qos: int) -> int:
-    """MQTT PUBLISH: fixed header (2) + topic length (2) + topic + packet id (QoS > 0)."""
-    return padded(
-        ETHERNET_IP_TCP_BYTES + 2 + 2 + len(topic) + (2 if qos > 0 else 0) + payload_bytes
-    )
+    return padded(ETHERNET_IP_TCP_BYTES + mqtt_publish_message_bytes(topic, payload_bytes, qos))
+
+
+def modbus_response_message_bytes(count: int) -> int:
+    """Read Holding Registers response: MBAP (6) + FC (1) + byte count (1) + 2 B per register."""
+    return 6 + 1 + 1 + 2 * count
 
 
 def modbus_response_frame_size(count: int) -> int:
-    """Read Holding Registers response: MBAP (6) + FC (1) + byte count (1) + 2 B per register."""
-    return padded(ETHERNET_IP_TCP_BYTES + 6 + 1 + 1 + 2 * count)
+    return padded(ETHERNET_IP_TCP_BYTES + modbus_response_message_bytes(count))
 
 
 def pn_frame_size(io_bytes: int) -> int:

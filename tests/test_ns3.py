@@ -1,7 +1,7 @@
-"""The ns-3 backend's Python side (smolpy.ns3): locating ns-3, lowering a
-scenario for smol-ns3, and computing metrics from its counters. None of these
-tests need ns-3; the equivalence suite runs the backend itself where
-NS3_HOME names a build."""
+"""The ns-3 backend (smolpy.ns3): locating ns-3, lowering a scenario for
+smol-ns3, and computing metrics from its counters, which need no ns-3; and
+Modbus and MQTT over ns-3's TCP, against SimPy, where NS3_HOME names a build.
+The equivalence suite runs the backend on its scenarios."""
 
 from __future__ import annotations
 
@@ -133,23 +133,74 @@ def test_random_flows_list_their_frames() -> None:
     assert {int(p) + 46 for _, p in imix_sends} <= {64, 594, 1518}
 
 
+def test_lowering_modbus_and_mqtt() -> None:
+    """One TCP connection per client and server, opened by the master or MQTT
+    client; messages in bytes of TCP payload; topics numbered."""
+    net = Network("tcp")
+    sw = net.switch("sw", ports=5)
+    scada = net.adapter("scada", ip="10.0.0.1")
+    meter = net.modbus_slave("meter", ip="10.0.0.2", unit_id=3)
+    broker = net.mqtt_broker("broker", ip="10.0.0.3")
+    hmi = net.adapter("hmi", ip="10.0.0.4")
+    lonely = net.adapter("lonely", ip="10.0.0.5")  # no link: no connection
+    for node in (scada, meter, broker, hmi):
+        net.link(node, sw, speed=100, length=0)
+    scada.polls(meter, register=0, count=60, rate=400)
+    scada.polls(meter, register=100, count=1, rate=200, delay_ms=0.5)  # the same connection
+    broker.routes("plant/temp°C", to=[hmi, scada, lonely])
+    scada.publishes(broker, topic="plant/temp°C", rate=300, payload=64, qos=1)
+    hmi.publishes(broker, topic="other", rate=100, payload=16)
+    net.observe("modbus_latency", on=scada, every=5)
+    net.observe("broker_queue", on=broker, every=1)
+    text, samplers = ns3.lower(net.to_scenario(duration=10))
+    lines = text.splitlines()
+    assert lines[3:6] == [  # every node with an IP address is a host
+        "adapter 02:00:0a:00:00:01 10.0.0.1",
+        "adapter 02:00:0a:00:00:02 10.0.0.2",
+        "adapter 02:00:0a:00:00:03 10.0.0.3",
+    ]
+    assert "static 0 02:00:0a:00:00:03 2" in lines  # the broker, as on SimPy
+    assert lines[lines.index("connect 1 3 1883") :] == [
+        "connect 1 3 1883",  # scada, the MQTT client
+        "publish 0 82 1 0 0 10000000 3",  # 2 + 2 + 12 characters + 2 + 64 B
+        "connect 1 2 502",
+        "poll 1 11 128 0 2500000 1",  # MBAP, FC and count, and 60 registers
+        "poll 1 11 10 500000 5000000 1",  # the same connection
+        "connect 4 3 1883",  # hmi, a subscriber
+        "route 3 0 2 0",  # hmi's and scada's connections; lonely has none
+        "publish 2 25 0 1 0 10000000 1",
+        "observe modbus_latency 1 5000000 1",
+        "observe broker_queue 3 1000000 1",
+    ]
+    assert [s.metric for s in samplers] == ["modbus_latency", "broker_queue"]
+
+
 @pytest.fixture
 def fake_ns3(monkeypatch):
     """The ns3 backend as if ns-3 were installed, for its capability checks."""
     monkeypatch.setattr(ns3, "locate", lambda: None)
 
 
-def test_protocols_are_outside_its_capabilities(fake_ns3) -> None:
+def test_profinet_is_outside_its_capabilities(fake_ns3) -> None:
     net = Network("prio")
-    sw = net.switch("sw", ports=2)
+    sw = net.switch("sw", ports=4)
     a = net.adapter("a", ip="10.0.0.1")
     b = net.adapter("b", ip="10.0.0.2")
     net.link(a, sw, speed=100, length=1)
     net.link(b, sw, speed=100, length=1)
     a.sends(b, rate=100, size="imix", pattern="bursty", priority=3)
-    backends.check(net.to_scenario(duration=10), "ns3")  # Ethernet: all of it
-    net.modbus_slave("m", ip="10.0.0.3", unit_id=1)
-    with pytest.raises(ScenarioError, match="Modbus slave \\(planned for Phase 6\\)"):
+    slave = net.modbus_slave("m", ip="10.0.0.3", unit_id=1)
+    broker = net.mqtt_broker("mq", ip="10.0.0.4")
+    net.link(slave, sw, speed=100, length=1)
+    net.link(broker, sw, speed=100, length=1)
+    a.polls(slave, register=0, count=2)
+    a.publishes(broker, topic="t", qos=1)
+    broker.routes("t", to=[b])
+    for metric in ("modbus_latency", "broker_queue"):
+        net.observe(metric, on=broker if metric == "broker_queue" else a, every=1)
+    backends.check(net.to_scenario(duration=10), "ns3")  # Ethernet, Modbus and MQTT
+    net.profinet_device("io", ip="10.0.0.5")
+    with pytest.raises(ScenarioError, match="PROFINET device \\(planned for Phase 6\\)"):
         backends.check(net.to_scenario(duration=10), "ns3")
 
 
@@ -171,3 +222,98 @@ def test_priorities_can_be_outside_a_backends_capabilities(monkeypatch) -> None:
     a.sends(b, rate=100, size=100, priority=3)
     with pytest.raises(ScenarioError, match="flow a -> b: the ns3 backend does not support 802.1Q"):
         backends.check(net.to_scenario(duration=10), "ns3")
+
+
+# --- Modbus and MQTT over ns-3's TCP ---
+
+needs_ns3 = pytest.mark.skipif(
+    not backends.REGISTRY["ns3"].available(), reason="NS3_HOME names no ns-3 build"
+)
+
+# A frame of 64 B ahead on a 100 Mb/s link, with its gap: (8 + 64) B + 12 B.
+ACK_US = (8 + 64 + 12) * 8 / 100
+SYN_ACK = 66  # a SYN-ACK with ns-3's window scale and SACK options: 20 + 28 + 18 B
+
+
+def _run(net: Network, duration: float):
+    scenario = net.to_scenario(duration=duration)
+    return backends.get("simpy").run(scenario).metrics, backends.get("ns3").run(scenario).metrics
+
+
+def _values(samples) -> list[float]:
+    return [v for _, v in samples]
+
+
+def _bytes(samples) -> list[int]:
+    return [round(v * 1_000_000) for _, v in samples]
+
+
+@needs_ns3
+def test_modbus_over_tcp() -> None:
+    """Every round trip is SimPy's plus 1 ns per send, TCP's time step. The
+    first request is acknowledged at once, and its response waits behind the
+    acknowledgement (in which time its own step passes); later
+    acknowledgements travel with the next request."""
+    net = Network("modbus")
+    sw = net.switch("sw", ports=2)
+    master = net.adapter("master", ip="10.0.0.1")
+    slave = net.modbus_slave("slave", ip="10.0.0.2", unit_id=1)
+    net.link(master, sw, speed=100, length=0)
+    net.link(slave, sw, speed=100, length=0)
+    master.polls(slave, register=0, count=1, rate=100)
+    net.observe("modbus_latency", on=master, every=10)
+    net.observe("bytes_received", on=master, every=10)
+    simpy, ns3 = _run(net, 60)
+    rtt = _values(simpy["modbus_latency:master"])[0]
+    assert _values(ns3["modbus_latency:master"]) == pytest.approx(
+        [rtt + ACK_US + 0.001] + [rtt + 0.002] * 3, abs=1e-9
+    )
+    response = _bytes(simpy["bytes_received:master"])[1]
+    assert _bytes(ns3["bytes_received:master"]) == [
+        SYN_ACK + 64 * (k > 0) + response * k for k in range(5)
+    ]
+
+
+@needs_ns3
+@pytest.mark.parametrize("qos", [0, 1])
+def test_mqtt_over_tcp(qos: int) -> None:
+    """A PUBLISH reaches its subscriber 2 ns later than on SimPy: 1 ns per
+    send. With QoS 1, each PUBACK carries the broker's acknowledgement; with
+    QoS 0, the broker acknowledges every second PUBLISH with a frame of its
+    own, which the copy to the subscriber waits behind."""
+    net = Network("mqtt")
+    sw = net.switch("sw", ports=3)
+    sensor = net.adapter("sensor", ip="10.0.0.1")
+    broker = net.mqtt_broker("broker", ip="10.0.0.2")
+    hmi = net.adapter("hmi", ip="10.0.0.3")
+    for node in (sensor, broker, hmi):
+        net.link(node, sw, speed=100, length=0)
+    sensor.publishes(broker, topic="t", rate=100, payload=20, qos=qos)
+    broker.routes("t", to=[hmi])
+    net.observe("bytes_received", on=sensor, every=10)
+    net.observe("latency", on=sensor, every=10)
+    net.observe("bytes_received", on=hmi, every=10)
+    net.observe("latency", on=hmi, every=10)
+    net.observe("broker_queue", on=broker, every=10)
+    simpy, ns3 = _run(net, 60)
+    copy = _values(simpy["latency:hmi"])[0]
+    acked = [k % 2 == 0 for k in range(4)] if qos == 0 else [k == 0 for k in range(4)]
+    assert _values(ns3["latency:hmi"]) == pytest.approx(
+        [copy + (ACK_US + 0.001 if a else 0.002) for a in acked], abs=1e-9
+    )
+    if qos:
+        puback = _values(simpy["latency:sensor"])[0]
+        assert _values(ns3["latency:sensor"]) == pytest.approx(
+            [puback + ACK_US] + [puback + 0.001] * 3, abs=1e-9
+        )
+        assert _bytes(ns3["bytes_received:sensor"]) == [
+            SYN_ACK + 64 * (k > 0) + 64 * k for k in range(5)
+        ]
+    else:
+        assert _values(ns3["latency:sensor"]) == []  # acknowledgements carry no data
+        assert _bytes(ns3["bytes_received:sensor"]) == [
+            SYN_ACK + 64 * ((k + 1) // 2) for k in range(5)
+        ]
+    message = _bytes(simpy["bytes_received:hmi"])[1]
+    assert _bytes(ns3["bytes_received:hmi"]) == [SYN_ACK + message * k for k in range(5)]
+    assert _values(ns3["broker_queue:broker"]) == [0.0] * 5

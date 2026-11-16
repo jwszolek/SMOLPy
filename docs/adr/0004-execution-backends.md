@@ -122,8 +122,8 @@ smolpy backends                             # list backends and their capabiliti
 | `hub` | Shared CSMA channel *(hubs and `collision_rate` were later removed; see [Model Semantics](../model-semantics.md#open-issues), open issue 3)* |
 | `link speed= length=` | *Amended 2026-11-16: SMOL's own full-duplex Ethernet device and channel, not CSMA; see "Link model on ns-3" below.* Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`). *Since ADR-0010:* inter-frame gap = the time of 20 B at `speed` (preamble, SFD and gap, which CSMA does not model otherwise); CSMA adds the Ethernet header and FCS itself. *In ns-3.49 the gap is not an attribute: `Attach()` sets 12 B, so the generator calls `CsmaNetDevice::SetInterframeGap()` on each device after installing it.* |
 | `flow` | UDP application; payload sized so the on-wire frame matches `size` (constant, Poisson, bursty patterns; `imix` sizes). *As built:* the payload is `size` minus 46 B (Ethernet 18, IPv4 20, UDP 8), sent to port 9 of the destination, where a socket discards it. |
-| `publish` / `route` | MQTT publisher / broker Applications over one persistent TCP connection per client; QoS 1 sends PUBACK |
-| `poll` | Modbus TCP master / slave Applications over one persistent TCP connection per master–slave pair (port 502), MBAP transaction IDs, Read Holding Registers (FC 03) |
+| `publish` / `route` | MQTT publisher / broker Applications over one persistent TCP connection per client; QoS 1 sends PUBACK. *As built:* port 1883; subscribers connect to the broker as clients, and one connection carries all of a client's PUBLISH messages and copies (see "Modbus and MQTT over TCP" below). |
+| `poll` | Modbus TCP master / slave Applications over one persistent TCP connection per master–slave pair (port 502), MBAP transaction IDs, Read Holding Registers (FC 03). *As built:* without transaction IDs. Responses come back in order on the connection, so the master pairs them with its requests in that order. |
 | `observe` | Periodic sampler writing CSV rows |
 | `simulate mode=` | `headless` only; `text`/`live` are capability errors (results are post-processed after the run) |
 
@@ -150,11 +150,11 @@ smolpy backends                             # list backends and their capabiliti
 | `throughput`, `bytes_received` | frames addressed to the node, received by its device: frame bytes, header to FCS (`MacRx`) |
 | `bytes_sent` | frames whose transmission on the node's device has completed (`PhyTxEnd`), frame bytes |
 | `latency` | from the origin time, carried in a packet tag set when the data is created, to reception by the device. Queueing at the sender is included, as in SimPy. |
-| `modbus_latency` | the same, with the request's origin tag copied into the response |
+| `modbus_latency` | the same, with the request's origin tag copied into the response. *As built:* measured when the master has the whole response. |
 | `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` | the SMOL PROFINET consumer application, with the definitions of Model Semantics §7 |
 | `queue_depth` | frames waiting in the egress queues of the switch's devices, not counting the frame in transmission |
 | `utilization` | frame + 20 B per frame completed on the links into the node, as a share of their capacity (ADR-0010) |
-| `broker_queue` | the queue of the broker application |
+| `broker_queue` | the queue of the broker application. *As built:* messages waiting for a subscriber's connection, which the subscriber has not yet opened. The broker handles a message at once, as on SimPy, so the queue is otherwise empty. |
 
 - **How FlowMonitor differs.** This is for comparisons with ns-3 literature, and is to be checked against the pinned release. FlowMonitor's statistics:
     - are per flow (IP 5-tuple), not per node and window;
@@ -218,7 +218,7 @@ ns-3.49's CSMA is a shared bus: the two ends of a link wait for each other, and 
     - It occupies the wire for preamble, SFD and frame, and the next frame waits for the 12 B gap (ADR-0010).
     - Times are rounded as in Model Semantics §1.
 - **IP on top.** IPv4 runs on the device with a /32 address and every destination on the link. IPv6 is not installed, so there are no router solicitations or other IPv6 traffic. The neighbour caches start full, because SMOL models no ARP.
-- **What ns-3 contributes** is its IPv4/UDP stack now, and its TCP stack for Modbus and MQTT later. The differences that remain between engines are the protocol stack's, which is what the comparison is for.
+- **What ns-3 contributes** is its IPv4/UDP stack, and its TCP stack for Modbus and MQTT ("Modbus and MQTT over TCP" below). The differences that remain between engines are the protocol stack's, which is what the comparison is for.
 - **Options rejected.**
     - **CSMA as planned.** Its differences from the other engines would come from half duplex.
     - **`SimpleNetDevice`.** It is full duplex, but it counts neither the Ethernet header and FCS nor the preamble and gap: about 38 B per frame too few.
@@ -229,6 +229,55 @@ ns-3.49's CSMA is a shared bus: the two ends of a link wait for each other, and 
 - **Consequence.** The suite compares ns-3 exactly, like Rust. ADR-0009's high-fidelity rules remain for TCP.
 
 ns-3 adds a priority to a frame as a packet tag. Its device then adds the 802.1Q tag's 4 B and serves its egress queue strictly by priority, or FIFO on a switch with `qos="fifo"`.
+
+**Modbus and MQTT over TCP** *(decided and built 2026-11-16)*
+
+What ns-3 is there for is its TCP. The backend therefore keeps everything else as on the other engines, so that the differences that remain are TCP's.
+- **Connections.**
+    - One persistent connection per Modbus master and slave (port 502), and one per MQTT client and broker (port 1883).
+    - A client that publishes to a broker and subscribes to it uses one connection.
+    - Every connection is opened at the start of the run. The first messages come later.
+- **Messages, not bytes.**
+    - The applications send whole protocol messages, sized in TCP payload bytes with SMOL's formulas (`frames.py`: `mqtt_publish_message_bytes`, `modbus_response_message_bytes`, ...).
+    - The bytes carry nothing. Each connection keeps, per direction, the messages whose bytes are on the way. TCP delivers bytes in order, so a message has arrived when all of its bytes have.
+    - Each message's bytes carry its origin time as a byte tag. So `latency` is measured per frame for TCP data as for UDP. Segments without data, such as acknowledgements and the handshake, have no origin and do not count in `latency`.
+- **SMOL's frame sizes.**
+    - Every segment has a 20 B TCP header, as SMOL sizes Modbus and MQTT frames: the timestamp option is off. Window scaling and SACK stay on. They add 8 B to the SYN and SYN-ACK, and SACK blocks only to the acknowledgements of a loss, which SMOL's unbounded queues do not cause.
+    - The segment size is Ethernet's 1460 B, not ns-3's default of 536 B.
+- **ns-3's defaults otherwise.** Congestion control is CUBIC. Delayed acknowledgements are every second segment or after 200 ms. Nagle is off (`TcpNoDelay`). The minimum RTO is 1 s.
+- **Applications.**
+    - They act at the instant a message arrives, as on SimPy.
+    - They never block: the send buffer (1 GiB) holds what TCP cannot send yet.
+    - A broker sends its copies to subscribers first and then the PUBACK, as on SimPy.
+- **Options rejected.**
+    - **Parsing real MQTT and MBAP bytes in the stream.** SMOL's sizes are not real encodings: for example, MQTT's remaining length takes 2 B above 127 B. Real encodings would change the frame sizes.
+    - **ns-3's timestamp option.** It is on in Linux, but it would make every frame 12 B larger than SMOL's. That difference would come from sizing, not from TCP's behaviour.
+
+**What TCP changes, to the nanosecond** (tests in `tests/test_ns3.py`):
+- **1 ns per send.** ns-3 sends an application's data one time step after the call, which is 1 ns here. So a Modbus round trip and a PUBLISH from publisher to subscriber both take SimPy's time plus 2 ns. A broker's or slave's reply would otherwise leave at once, ahead of other data: `Send()` on the connection that has just received data is flushed in the same event. Replies are therefore scheduled as events of their own, in the order the application makes them.
+- **The handshake.** Each client receives a SYN-ACK of 66 B at the start, and switches learn the stations from it.
+- **The first data segment** of a connection is acknowledged at once. ns-3 counts the handshake as a full delayed-ACK count. The reply waits behind that frame, 6.72 µs at 100 Mb/s.
+- **Acknowledgements.**
+    - **Request and response (Modbus, MQTT QoS 1).** Each reply carries the acknowledgement of the request, and the next request carries the acknowledgement of the reply. No extra frames.
+    - **One-way PUBLISH (QoS 0, and copies to subscribers).** The receiver sends a 64 B acknowledgement for every second segment. At a broker, that frame leaves just before the copies and delays them by its transmission time.
+
+**First results over TCP** *(2026-11-16)*. The suite's TCP scenarios sample the same metrics at the same instants as SimPy (`test_over_tcp`). The table gives the means of their values over the run:
+
+| Scenario | Metric | SimPy | ns-3 | Why |
+|---|---|---|---|---|
+| `protocols` | `modbus_latency:scada` | 43.76 µs | 44.37 µs | +2 ns per round trip; +6.72 µs on the first one |
+| | `latency:hmi` | 47.12 µs | 49.26 µs | copies behind the broker's acknowledgements of the QoS 0 topic |
+| | `bytes_received:scada` | 3.19 kB | 3.38 kB | SYN-ACKs and the first acknowledgements |
+| `polling` | `modbus_latency:scada` | 123.21 µs | 131.05 µs | the first window: the handshakes on the 10 Mb/s link; then +2 ns |
+| | `bytes_received:plc` | 1.06 kB | 1.30 kB | SYN-ACKs and the first acknowledgements |
+| | `utilization:edge` | 0.40 % | 0.48 % | the handshakes, in the first windows |
+| `messaging` (loaded uplink) | `bytes_received:hall`, `:cell` | 0.48 kB, 0.31 kB | 0.86 kB, 0.61 kB | a 64 B acknowledgement for every second QoS 0 PUBLISH |
+| | `utilization:plant` | 1.07 % | 1.67 % | the acknowledgements sent to the broker |
+| | `latency:hmi`, `:scada`, `:historian` | 291, 266, 119 µs | 289, 259, 115 µs | acknowledgements change the order of frames in the FIFO queues, both ways |
+| | `queue_depth:edge` | 0.0175 | 0.0063 | the same |
+
+- **Low load.** After the first messages, ns-3 is SimPy plus 2 ns per message. The remaining differences are the handshake, the first acknowledgement, and the acknowledgements of one-way traffic.
+- **Loaded.** The acknowledgements reorder frames in shared queues, so differences remain throughout the run. They are reported, not asserted (ADR-0009). Quantifying them under heavier load, where TCP's flow and congestion control act, is the next part of this research.
 
 **The ns-3 base image, as built** *(2026-11-16)*:
 - `ghcr.io/jwszolek/smolpy-ns3-base:3.49`, built by `.github/workflows/ns3-base.yml` from `docker/ns3-base/Dockerfile`, for `linux/amd64` only for now. It is rebuilt when that Dockerfile changes, and pushed after the merge to `main`.
