@@ -1,0 +1,152 @@
+name: Docker image
+
+# The image without ns-3, ghcr.io/jwszolek/smolpy (ADR-0004, Container
+# images): Python, smolpy and smolpy-engine-rs for linux/amd64 and
+# linux/arm64, installed from the wheels of one version. Every image is tested
+# before anything is pushed: the wheel smoke test (bit-exact with SimPy) and a
+# .smol run through the CLI.
+#
+# - Called by publish.yml at a release, once both packages are on PyPI: uses
+#   the files of the same run and pushes <version> and latest.
+# - On a pull request that touches the image: builds the wheels here, for
+#   linux/amd64 only, tests that image and pushes nothing.
+
+on:
+  pull_request:
+    paths:
+      - "docker/**"
+      - ".github/workflows/docker-image.yml"
+  workflow_call:
+    inputs:
+      version:
+        description: The release version, e.g. 1.9.0
+        required: true
+        type: string
+      ref:
+        description: The release tag, e.g. v1.9.0
+        required: true
+        type: string
+
+jobs:
+  image:
+    name: ${{ inputs.version && format('Image {0}', inputs.version) || 'Image (test build)' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push to ghcr.io
+
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/smolpy
+      RELEASE: ${{ inputs.version && 'true' || 'false' }}  # no inputs on a pull request
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0  # hatch-vcs numbers a test build from git
+
+      # --- a release: the files the calling run has published ---
+
+      - name: Download smolpy
+        if: ${{ env.RELEASE == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Download smolpy-engine-rs
+        if: ${{ env.RELEASE == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          merge-multiple: true
+          path: dist/
+
+      # --- a pull request: both wheels built here, with one version ---
+
+      - name: Install uv
+        if: ${{ env.RELEASE != 'true' }}
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Build smolpy and number the engine alike
+        if: ${{ env.RELEASE != 'true' }}
+        run: |
+          uv build --wheel
+          wheels=(dist/smolpy-*.whl)  # smolpy-<version>-py3-none-any.whl
+          VERSION=$(basename "${wheels[0]}" | cut -d- -f2)
+          CARGO_VERSION=$(echo "$VERSION" | sed -E 's/\.dev([0-9]+)$/-dev.\1/')
+          sed -i "s/^dynamic = \[\"version\"\]$/version = \"$VERSION\"/" rust/smolpy-engine-rs/pyproject.toml
+          sed -i "s/^version = \"[^\"]*\"$/version = \"$CARGO_VERSION\"/" rust/Cargo.toml
+          echo "Test build of version $VERSION"
+
+      - name: Build smolpy-engine-rs
+        if: ${{ env.RELEASE != 'true' }}
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          manylinux: auto
+          args: --release --out dist -m rust/smolpy-engine-rs/Cargo.toml
+
+      # --- the image ---
+
+      - name: Version
+        id: v
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -z "$VERSION" ]; then
+            wheels=(dist/smolpy-*.whl)
+            VERSION=$(basename "${wheels[0]}" | cut -d- -f2)
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          ls dist/
+
+      - name: Set up QEMU, for linux/arm64
+        if: ${{ env.RELEASE == 'true' }}
+        uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and test each platform
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          PLATFORMS: ${{ env.RELEASE == 'true' && 'linux/amd64 linux/arm64' || 'linux/amd64' }}
+        run: |
+          for platform in $PLATFORMS; do
+            echo "::group::$platform"
+            docker buildx build --platform "$platform" --load \
+              --build-arg VERSION="$VERSION" -f docker/Dockerfile -t smolpy:test .
+            docker run --rm --platform "$platform" smolpy:test --help
+            # the wheel smoke test: bit-exact with SimPy on this platform
+            docker run --rm --platform "$platform" -v "$PWD/rust/smolpy-engine-rs:/test:ro" \
+              --entrypoint python smolpy:test /test/smoke_test.py
+            # the CLI, as a user runs it, writing to the mounted directory
+            mkdir -p out && chmod 777 out
+            cp docker/smoke.smol out/
+            docker run --rm --platform "$platform" -v "$PWD/out:/work" \
+              smolpy:test run smoke.smol --backend rust -o results.csv
+            grep -q "pn_latency:plc" out/results.csv
+            rm -rf out
+            echo "::endgroup::"
+          done
+
+      - name: Log in to ghcr.io
+        if: ${{ env.RELEASE == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # the platforms tested above, rebuilt from the build cache
+      - name: Push
+        if: ${{ env.RELEASE == 'true' }}
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            --build-arg VERSION="$VERSION" -f docker/Dockerfile \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
+          echo "Pushed $IMAGE:$VERSION and $IMAGE:latest" >> "$GITHUB_STEP_SUMMARY"

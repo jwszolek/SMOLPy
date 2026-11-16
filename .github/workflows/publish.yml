@@ -4,7 +4,8 @@ name: Publish to PyPI
 #
 # - Release (a pushed tag v*, or release.yml passing its tag): publishes
 #   smolpy and the smolpy-engine-rs wheels and sdist to PyPI with the tag's
-#   version, then the GitHub Release with every file.
+#   version, then the GitHub Release with every file and the Docker image
+#   ghcr.io/jwszolek/smolpy:<version> (docker-image.yml).
 # - Development build (dev-build.yml, dev: true, after a merge to main):
 #   publishes both to PyPI as X.Y.(Z+1).devN, N commits after the latest tag,
 #   a pre-release that pip installs only with --pre, and replaces the GitHub
@@ -191,6 +192,19 @@ jobs:
     with:
       tag: ${{ needs.version.outputs.tag }}
       engine: ${{ needs.publish-engine.result == 'success' }}
+
+  image:
+    name: Docker image
+    needs: [version, publish, publish-engine]
+    # from the files just published, so only once both packages are on PyPI
+    if: ${{ needs.version.outputs.mode == 'release' }}
+    permissions:
+      contents: read
+      packages: write  # push to ghcr.io
+    uses: ./.github/workflows/docker-image.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      ref: ${{ needs.version.outputs.tag }}
 
   dev-release:
     name: GitHub pre-release "Development build"

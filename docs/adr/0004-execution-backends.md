@@ -174,6 +174,8 @@ The ns-3 suite is skipped automatically when ns-3 is not available, and runs in 
 
 ns-3 is the one backend that cannot be installed with `pip`. It is a C++ code base that must be built from source with its own toolchain, which takes tens of minutes, and SMOLPy supports exactly one pinned release. The ns-3 backend is therefore shipped, run in CI and archived as a **container image**. A lighter image without ns-3 serves users who want SMOLPy without installing Python.
 
+*As built (2026-11-16):* the image without ns-3 is `docker/Dockerfile`, built by `.github/workflows/docker-image.yml`. Each release, `publish.yml` calls it once both packages are on PyPI. It tests the image of each platform with the wheel smoke test and a `.smol` run through the CLI before it pushes `<version>` and `latest`. A pull request that changes the image builds and tests it for `linux/amd64` and pushes nothing. The image runs as uid 1000, not as root.
+
 **Registry and images.** The images are published to the GitHub Container Registry, `ghcr.io/jwszolek/smolpy`, public, for `linux/amd64` and `linux/arm64`:
 
 | Tag | Contents | Size | From |
