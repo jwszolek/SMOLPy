@@ -14,7 +14,8 @@ name: Docker image
 on:
   pull_request:
     paths:
-      - "docker/**"
+      - "docker/Dockerfile*"
+      - "docker/smoke.smol"
       - ".github/workflows/docker-image.yml"
   workflow_call:
     inputs:
