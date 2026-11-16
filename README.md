@@ -20,7 +20,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 > result = net.simulate(duration=60_000, backend="rust")
 > ```
 >
-> The Rust engine covers Ethernet and Modbus TCP for now: adapters, switches, links, flows and Modbus polling. MQTT and PROFINET follow. See [Simulation engine](#simulation-engine) and [ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/).
+> The Rust engine covers Ethernet, Modbus TCP and MQTT for now: adapters, switches, links, flows, Modbus polling and MQTT publish/subscribe. PROFINET follows. See [Simulation engine](#simulation-engine) and [ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/).
 
 📖 **Full documentation:** [jwszolek.github.io/SMOLPy](https://jwszolek.github.io/SMOLPy/)
 

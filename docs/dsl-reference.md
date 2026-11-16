@@ -166,13 +166,13 @@ result.export("out.csv", format="csv")   # explicit format override
 | `"simpy"` | The reference implementation. It is the default, always installed, and runs the whole model, including the live and text dashboards. |
 | `"rust"` | The native engine of [ADR-0008](adr/0008-rust-des-engine-mvp.md), from the optional package `smolpy-engine-rs` (`pip install smolpy[rust]`). It runs headless. |
 
-- **What a backend can run is checked before the run.** Every backend declares what it supports: node kinds, traffic kinds, patterns and metrics. A scenario that uses anything else is rejected with a `ScenarioError` naming the element, for example `poll a -> meter: the rust backend does not support poll (Modbus TCP)`.
+- **What a backend can run is checked before the run.** Every backend declares what it supports: node kinds, traffic kinds, patterns and metrics. A scenario that uses anything else is rejected with a `ScenarioError` naming the element, for example `ProfinetDevice 'io': the rust backend does not support PROFINET device (planned for Phase 5)`.
 - **A missing backend is an error.** When a backend is not installed, selecting it raises `BackendUnavailable` with the install command.
 - **`smolpy.backends.installed()`** lists the backends that can run here.
 
-**The Rust backend so far** runs adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes. It also runs Modbus TCP: slaves, `polls()` and `modbus_latency`. It covers the metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth`, `utilization` and `modbus_latency`.
+**The Rust backend so far** runs adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes. It also runs Modbus TCP (slaves, `polls()` and `modbus_latency`) and MQTT (brokers, `publishes()` with QoS 0 and 1, `routes()` and `broker_queue`). It covers every metric except the PROFINET ones.
 - **Same results as SimPy.** Deterministic scenarios give SimPy's results bit for bit. Random traffic uses the same streams and distributions with the engine's own generator, so there the results agree statistically.
-- **Not in it yet.** MQTT and PROFINET come in Phase 5 of the [roadmap](roadmap.md).
+- **Not in it yet.** PROFINET comes in Phase 5 of the [roadmap](roadmap.md).
 - **Install** it with `pip install smolpy[rust]`, or `pip install smolpy-engine-rs` next to an installed `smolpy`. It is released together with `smolpy`, with the same version, since v1.8.0. Wheels exist for Linux x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64. To build it from the repository instead, with a Rust toolchain:
 
 ```bash

@@ -17,8 +17,8 @@
 //! - the run stops before the first event at `t = duration`.
 
 use crate::frames::{
-    flow_frame_size, modbus_response_frame_size, IFG_BYTES, MODBUS_REQUEST_BYTES,
-    PREAMBLE_SFD_BYTES, WIRE_OVERHEAD_BYTES,
+    flow_frame_size, modbus_response_frame_size, mqtt_publish_frame_size, IFG_BYTES,
+    MODBUS_REQUEST_BYTES, MQTT_PUBACK_BYTES, PREAMBLE_SFD_BYTES, WIRE_OVERHEAD_BYTES,
 };
 use crate::rng::{stream_seed, Rng};
 use crate::scenario::{Metric, NodeKind, Pattern, Scenario, Size};
@@ -49,6 +49,7 @@ struct Frame {
     priority: u8,
     in_port: i32,
     modbus: Modbus,
+    mqtt: Mqtt,
 }
 
 /// The Modbus TCP fields of a frame; `unit < 0` on any other frame.
@@ -64,6 +65,32 @@ const NOT_MODBUS: Modbus = Modbus {
     count: 0,
     response: false,
 };
+
+/// The MQTT fields of a PUBLISH frame; `topic < 0` on any other frame,
+/// a PUBACK included. Topics are numbered in order of first mention.
+#[derive(Clone, Copy)]
+struct Mqtt {
+    topic: i32,
+    qos: u8,
+}
+
+const NOT_MQTT: Mqtt = Mqtt { topic: -1, qos: 0 };
+
+impl Frame {
+    /// A frame an end station sends now, outside 802.1Q priorities.
+    fn new(src: u32, dst: u32, size: u64, created: u64) -> Frame {
+        Frame {
+            src,
+            dst,
+            size,
+            created,
+            priority: 0,
+            in_port: -1,
+            modbus: NOT_MODBUS,
+            mqtt: NOT_MQTT,
+        }
+    }
+}
 
 enum Items {
     Fifo(VecDeque<u32>),
@@ -125,12 +152,19 @@ struct Slave {
     out: Option<u32>,
 }
 
-/// A Modbus TCP master's polls of one slave, at constant instants.
-struct PollGen {
-    src: u32,
-    dst: u32,
-    unit: u8,
-    count: u16,
+/// An MQTT broker: forwards a PUBLISH to the topic's subscribers and
+/// acknowledges QoS 1.
+struct Broker {
+    mac: u32,
+    inbound: u32,
+    out: Option<u32>,
+    routes: Vec<Vec<u32>>, // topic -> subscriber MACs
+}
+
+/// Modbus polls and MQTT publications: the same frame at constant instants,
+/// after an optional delay, as `_modbus_poll_gen` and `_mqtt_traffic_gen`.
+struct Periodic {
+    frame: Frame, // its `created` is set when it is sent
     chan: u32,
     delay_ns: u64,
     delayed: bool,
@@ -181,6 +215,7 @@ enum Sampled {
     BytesReceived(u32),
     QueueDepth(u32),
     Utilization(Vec<u32>, Q),
+    BrokerQueue(u32),
 }
 
 struct Sampler {
@@ -198,7 +233,8 @@ enum Proc {
     Flow(u32),
     Sampler(u32),
     Slave(u32),
-    Poll(u32),
+    Broker(u32),
+    Periodic(u32),
 }
 
 pub struct Outcome {
@@ -221,7 +257,8 @@ struct Engine {
     switches: Vec<Switch>,
     flows: Vec<FlowGen>,
     slaves: Vec<Slave>,
-    polls: Vec<PollGen>,
+    brokers: Vec<Broker>,
+    periodic: Vec<Periodic>,
     samplers: Vec<Sampler>,
     windows: Vec<Vec<u64>>,
     procs: Vec<Proc>,
@@ -340,8 +377,12 @@ impl Engine {
                 let s = self.slaves[i as usize].inbound;
                 self.get(s, proc);
             }
-            Proc::Poll(i) => {
-                let pg = &mut self.polls[i as usize];
+            Proc::Broker(i) => {
+                let s = self.brokers[i as usize].inbound;
+                self.get(s, proc);
+            }
+            Proc::Periodic(i) => {
+                let pg = &mut self.periodic[i as usize];
                 let delay = if pg.delay_ns > 0 {
                     pg.delayed = true;
                     pg.delay_ns
@@ -421,17 +462,18 @@ impl Engine {
                 // a flooded frame for another station, or not for this unit: dropped
                 if fr.dst == sl.mac && fr.modbus.unit == sl.unit as i16 {
                     let response = Frame {
-                        src: sl.mac,
-                        dst: fr.src,
-                        size: modbus_response_frame_size(fr.modbus.count),
-                        created: fr.created, // the request's: modbus_latency is a round trip
-                        priority: 0,
-                        in_port: -1,
                         modbus: Modbus {
                             unit: fr.modbus.unit,
                             count: fr.modbus.count,
                             response: true,
                         },
+                        // the request's origin time: modbus_latency is a round trip
+                        ..Frame::new(
+                            sl.mac,
+                            fr.src,
+                            modbus_response_frame_size(fr.modbus.count),
+                            fr.created,
+                        )
                     };
                     let chan = sl.out.expect("a slave process has a link");
                     let r = self.alloc(response);
@@ -440,7 +482,37 @@ impl Engine {
                 self.release(f);
                 self.get(store, proc);
             }
-            Proc::Flow(_) | Proc::Sampler(_) | Proc::Poll(_) => {
+            Proc::Broker(i) => {
+                let fr = self.frames[f as usize];
+                let (mac, chan) = {
+                    let b = &self.brokers[i as usize];
+                    (b.mac, b.out.expect("a broker process has a link"))
+                };
+                // a flooded frame for another station, or not a PUBLISH: dropped
+                if fr.dst == mac && fr.mqtt.topic >= 0 {
+                    let topic = fr.mqtt.topic as usize;
+                    for k in 0..self.brokers[i as usize].routes[topic].len() {
+                        let sub = self.brokers[i as usize].routes[topic][k];
+                        let copy = Frame {
+                            mqtt: Mqtt {
+                                topic: fr.mqtt.topic,
+                                qos: 0,
+                            },
+                            // the publisher's origin time: latency is end to end
+                            ..Frame::new(mac, sub, fr.size, fr.created)
+                        };
+                        let c = self.alloc(copy);
+                        self.enqueue(chan, c);
+                    }
+                    if fr.mqtt.qos >= 1 {
+                        let ack = self.alloc(Frame::new(mac, fr.src, MQTT_PUBACK_BYTES, self.now));
+                        self.enqueue(chan, ack);
+                    }
+                }
+                self.release(f);
+                self.get(store, proc);
+            }
+            Proc::Flow(_) | Proc::Sampler(_) | Proc::Periodic(_) => {
                 unreachable!("these processes do not get")
             }
         }
@@ -465,32 +537,23 @@ impl Engine {
                 let t = self.samplers[i as usize].ticks.next().unwrap();
                 self.schedule(Ev::Timeout(proc), NORMAL, t - self.now);
             }
-            Proc::Poll(i) => {
-                let pg = &mut self.polls[i as usize];
+            Proc::Periodic(i) => {
+                let pg = &mut self.periodic[i as usize];
                 if pg.delayed {
                     pg.delayed = false;
                 } else {
-                    let request = Frame {
-                        src: pg.src,
-                        dst: pg.dst,
-                        size: MODBUS_REQUEST_BYTES,
+                    let frame = Frame {
                         created: self.now,
-                        priority: 0,
-                        in_port: -1,
-                        modbus: Modbus {
-                            unit: pg.unit as i16,
-                            count: pg.count,
-                            response: false,
-                        },
+                        ..pg.frame
                     };
                     let chan = pg.chan;
-                    let r = self.alloc(request);
-                    self.enqueue(chan, r);
+                    let f = self.alloc(frame);
+                    self.enqueue(chan, f);
                 }
-                let t = self.polls[i as usize].instants.next().unwrap();
+                let t = self.periodic[i as usize].instants.next().unwrap();
                 self.schedule(Ev::Timeout(proc), NORMAL, t - self.now);
             }
-            Proc::AdapterRx(_) | Proc::Switch(_) | Proc::Slave(_) => {
+            Proc::AdapterRx(_) | Proc::Switch(_) | Proc::Slave(_) | Proc::Broker(_) => {
                 unreachable!("these processes do not time out")
             }
         }
@@ -592,13 +655,8 @@ impl Engine {
             }
         };
         let frame = Frame {
-            src: fl.src,
-            dst: fl.dst,
-            size: flow_frame_size(size, fl.priority),
-            created: self.now,
             priority: fl.priority,
-            in_port: -1,
-            modbus: NOT_MODBUS,
+            ..Frame::new(fl.src, fl.dst, flow_frame_size(size, fl.priority), self.now)
         };
         let chan = fl.chan;
         let f = self.alloc(frame);
@@ -665,6 +723,7 @@ impl Engine {
                 let v = tb::ratio_f64((bits - s.last) * 100_000 * speed.den, speed.num * window);
                 (Some(v), bits)
             }
+            Sampled::BrokerQueue(store) => (Some(self.stores[*store as usize].len() as f64), 0),
         };
         let s = &mut self.samplers[i as usize];
         s.last_t = now;
@@ -692,7 +751,8 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         switches: Vec::new(),
         flows: Vec::new(),
         slaves: Vec::new(),
-        polls: Vec::new(),
+        brokers: Vec::new(),
+        periodic: Vec::new(),
         samplers: Vec::new(),
         windows: Vec::new(),
         procs: Vec::new(),
@@ -746,6 +806,16 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 });
                 role.push(e.slaves.len() - 1);
             }
+            NodeKind::MqttBroker { mac } => {
+                let mac = intern(mac);
+                e.brokers.push(Broker {
+                    mac,
+                    inbound: s,
+                    out: None,
+                    routes: Vec::new(),
+                });
+                role.push(e.brokers.len() - 1);
+            }
             NodeKind::Switch { .. } => {
                 e.switches.push(Switch {
                     inbound: s,
@@ -760,7 +830,9 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
     let strict = |i: usize| !matches!(sc.nodes[i].kind, NodeKind::Switch { fifo: true, .. });
     // every node but a switch is an end station with a MAC address
     let mac_of = |i: usize| match &sc.nodes[i].kind {
-        NodeKind::Adapter { mac } | NodeKind::ModbusSlave { mac, .. } => Some(mac.clone()),
+        NodeKind::Adapter { mac }
+        | NodeKind::ModbusSlave { mac, .. }
+        | NodeKind::MqttBroker { mac } => Some(mac.clone()),
         NodeKind::Switch { .. } => None,
     };
     let is_adapter = |i: usize| matches!(sc.nodes[i].kind, NodeKind::Adapter { .. });
@@ -821,6 +893,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 match &sc.nodes[node].kind {
                     NodeKind::Adapter { .. } => e.adapters[role[node]].out = Some(ch),
                     NodeKind::ModbusSlave { .. } => e.slaves[role[node]].out = Some(ch),
+                    NodeKind::MqttBroker { .. } => e.brokers[role[node]].out = Some(ch),
                     NodeKind::Switch { .. } => unreachable!(),
                 }
                 if is_switch(other) {
@@ -868,6 +941,18 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         }
     }
 
+    // MQTT topics, numbered in order of first mention
+    let mut topics: HashMap<&str, i32> = HashMap::new();
+    for topic in sc
+        .publishes
+        .iter()
+        .map(|p| p.topic.as_str())
+        .chain(sc.routes.iter().map(|r| r.topic.as_str()))
+    {
+        let n = topics.len() as i32;
+        topics.entry(topic).or_insert(n);
+    }
+
     // node processes, in node order: an adapter's receiver, then its flows
     for (i, node) in sc.nodes.iter().enumerate() {
         match &node.kind {
@@ -907,7 +992,38 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                         });
                         e.process(Proc::Flow((e.flows.len() - 1) as u32));
                     }
-                    // then its Modbus polls, as the reference engine starts them
+                    // then its MQTT publications and its Modbus polls, as the
+                    // reference engine starts them
+                    for publish in sc.publishes.iter().filter(|p| p.source == node.name) {
+                        let broker = lookup(&publish.broker)?;
+                        let NodeKind::MqttBroker { mac } = &sc.nodes[broker].kind else {
+                            return Err(format!(
+                                "publish {} -> {}: not an MQTT broker",
+                                publish.source, publish.broker
+                            ));
+                        };
+                        // len(topic) in the reference engine counts characters
+                        let size = mqtt_publish_frame_size(
+                            publish.topic.chars().count() as u64,
+                            publish.payload,
+                            publish.qos,
+                        );
+                        let delay_ns = tb::ms_to_ns(publish.delay_ms)?;
+                        e.periodic.push(Periodic {
+                            frame: Frame {
+                                mqtt: Mqtt {
+                                    topic: topics[publish.topic.as_str()],
+                                    qos: publish.qos,
+                                },
+                                ..Frame::new(e.adapters[a as usize].mac, intern(mac), size, 0)
+                            },
+                            chan,
+                            delay_ns,
+                            delayed: false,
+                            instants: Instants::new(delay_ns, tb::interval_ns(publish.rate)?),
+                        });
+                        e.process(Proc::Periodic((e.periodic.len() - 1) as u32));
+                    }
                     for poll in sc.polls.iter().filter(|p| p.source == node.name) {
                         let slave = lookup(&poll.slave)?;
                         let NodeKind::ModbusSlave { mac, unit } = &sc.nodes[slave].kind else {
@@ -917,17 +1033,26 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                             ));
                         };
                         let delay_ns = tb::ms_to_ns(poll.delay_ms)?;
-                        e.polls.push(PollGen {
-                            src: e.adapters[a as usize].mac,
-                            dst: intern(mac),
-                            unit: *unit,
-                            count: poll.count,
+                        e.periodic.push(Periodic {
+                            frame: Frame {
+                                modbus: Modbus {
+                                    unit: *unit as i16,
+                                    count: poll.count,
+                                    response: false,
+                                },
+                                ..Frame::new(
+                                    e.adapters[a as usize].mac,
+                                    intern(mac),
+                                    MODBUS_REQUEST_BYTES,
+                                    0,
+                                )
+                            },
                             chan,
                             delay_ns,
                             delayed: false,
                             instants: Instants::new(delay_ns, tb::interval_ns(poll.rate)?),
                         });
-                        e.process(Proc::Poll((e.polls.len() - 1) as u32));
+                        e.process(Proc::Periodic((e.periodic.len() - 1) as u32));
                     }
                 }
             }
@@ -935,6 +1060,23 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 let w = role[i];
                 if e.slaves[w].out.is_some() {
                     e.process(Proc::Slave(w as u32));
+                }
+            }
+            NodeKind::MqttBroker { .. } => {
+                let b = role[i];
+                if e.brokers[b].out.is_some() {
+                    let mut routes = vec![Vec::new(); topics.len()];
+                    for route in sc.routes.iter().filter(|r| r.broker == node.name) {
+                        let mut subs = Vec::new();
+                        for name in &route.subscribers {
+                            let sub = lookup(name)?;
+                            let mac = mac_of(sub).ok_or("a route goes to adapters")?;
+                            subs.push(intern(&mac));
+                        }
+                        routes[topics[route.topic.as_str()] as usize] = subs;
+                    }
+                    e.brokers[b].routes = routes;
+                    e.process(Proc::Broker(b as u32));
                 }
             }
             NodeKind::Switch { .. } => {
@@ -982,6 +1124,9 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     speed = speed.checked_add(speeds[*c as usize])?;
                 }
                 Some(Sampled::Utilization(chans, speed))
+            }
+            Metric::BrokerQueue if matches!(sc.nodes[target].kind, NodeKind::MqttBroker { .. }) => {
+                Some(Sampled::BrokerQueue(inbound[target]))
             }
             Metric::BytesReceived if adapter => Some(Sampled::BytesReceived(role[target] as u32)),
             Metric::BytesSent if adapter => e.adapters[role[target]].out.map(Sampled::BytesSent),
