@@ -1,0 +1,504 @@
+{
+ "format": "smolpy-load",
+ "version": 1,
+ "label": "tcp-under-load",
+ "created": "2026-11-16T18:39:41",
+ "environment": {
+  "host": "jaws-zbook",
+  "os": "Linux-7.0.0-43-generic-x86_64-with-glibc2.43",
+  "cpu": "Intel(R) Core(TM) Ultra 7 255H",
+  "cpu_count": 16,
+  "memory": "31745644 kB",
+  "python": "3.14.4",
+  "simpy": "4.1.2",
+  "smolpy": "0.5.1.dev0+ga618933df.d20260918",
+  "git_commit": "d2971ef",
+  "git_dirty": true
+ },
+ "scenario": "L1",
+ "duration_ms": 20000,
+ "uplink_mbps": 10,
+ "protocol_load": 0.12592,
+ "runs": [
+  {
+   "rho": 0.5,
+   "backend": "simpy",
+   "events": 954405,
+   "wall_s": 2.0220777969807386,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 885.639658841042,
+     "last": 863.03834
+    },
+    "latency:hmi": {
+     "mean": 476.91401832319497,
+     "last": 477.684145
+    },
+    "bytes_received:scada": {
+     "mean": 0.663336,
+     "last": 1.260936
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749625,
+     "last": 1.424625
+    }
+   }
+  },
+  {
+   "rho": 0.5,
+   "backend": "ns3",
+   "events": 539800,
+   "wall_s": 0.37224019900895655,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 885.7295991440724,
+     "last": 863.03899
+    },
+    "latency:hmi": {
+     "mean": 478.5967273234594,
+     "last": 479.365525
+    },
+    "bytes_received:scada": {
+     "mean": 0.663856,
+     "last": 1.261456
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749691,
+     "last": 1.424691
+    }
+   }
+  },
+  {
+   "rho": 0.8,
+   "backend": "simpy",
+   "events": 1225775,
+   "wall_s": 2.6264786329702474,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1139.9319592876132,
+     "last": 1138.41178
+    },
+    "latency:hmi": {
+     "mean": 669.0637605712774,
+     "last": 664.618455
+    },
+    "bytes_received:scada": {
+     "mean": 0.663336,
+     "last": 1.260936
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749625,
+     "last": 1.424625
+    }
+   }
+  },
+  {
+   "rho": 0.8,
+   "backend": "ns3",
+   "events": 633546,
+   "wall_s": 0.3931045360513963,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1140.02159943647,
+     "last": 1138.41211
+    },
+    "latency:hmi": {
+     "mean": 670.7461697553557,
+     "last": 666.29953
+    },
+    "bytes_received:scada": {
+     "mean": 0.663856,
+     "last": 1.261456
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749691,
+     "last": 1.424691
+    }
+   }
+  },
+  {
+   "rho": 0.9,
+   "backend": "simpy",
+   "events": 1316240,
+   "wall_s": 2.865383361990098,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1225.6573873950026,
+     "last": 1221.29349
+    },
+    "latency:hmi": {
+     "mean": 733.619524173499,
+     "last": 731.629065
+    },
+    "bytes_received:scada": {
+     "mean": 0.663336,
+     "last": 1.260936
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749625,
+     "last": 1.424625
+    }
+   }
+  },
+  {
+   "rho": 0.9,
+   "backend": "ns3",
+   "events": 664797,
+   "wall_s": 0.4243000420392491,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1225.7469248644338,
+     "last": 1221.2937
+    },
+    "latency:hmi": {
+     "mean": 735.3365601295953,
+     "last": 733.310035
+    },
+    "bytes_received:scada": {
+     "mean": 0.663856,
+     "last": 1.261456
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749691,
+     "last": 1.424691
+    }
+   }
+  },
+  {
+   "rho": 0.95,
+   "backend": "simpy",
+   "events": 1361456,
+   "wall_s": 2.8962583239772357,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1283.0135477352471,
+     "last": 1282.58887
+    },
+    "latency:hmi": {
+     "mean": 805.5782497738694,
+     "last": 810.43559
+    },
+    "bytes_received:scada": {
+     "mean": 0.663336,
+     "last": 1.260936
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749625,
+     "last": 1.424625
+    }
+   }
+  },
+  {
+   "rho": 0.95,
+   "backend": "ns3",
+   "events": 680417,
+   "wall_s": 0.42020486999535933,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1283.103036757044,
+     "last": 1282.58904
+    },
+    "latency:hmi": {
+     "mean": 807.3022050370272,
+     "last": 812.116505
+    },
+    "bytes_received:scada": {
+     "mean": 0.663856,
+     "last": 1.261456
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749691,
+     "last": 1.424691
+    }
+   }
+  },
+  {
+   "rho": 1.0,
+   "backend": "simpy",
+   "events": 1406715,
+   "wall_s": 3.000769263948314,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1376.6086368952685,
+     "last": 1376.22
+    },
+    "latency:hmi": {
+     "mean": 1022.6549492197831,
+     "last": 1019.36
+    },
+    "bytes_received:scada": {
+     "mean": 0.663336,
+     "last": 1.260936
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749625,
+     "last": 1.424625
+    }
+   }
+  },
+  {
+   "rho": 1.0,
+   "backend": "ns3",
+   "events": 696050,
+   "wall_s": 0.4240949309896678,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1626.5995103668263,
+     "last": 1626.119
+    },
+    "latency:hmi": {
+     "mean": 1274.2435773604866,
+     "last": 1270.93975
+    },
+    "bytes_received:scada": {
+     "mean": 0.663856,
+     "last": 1.261456
+    },
+    "bytes_received:hmi": {
+     "mean": 0.749691,
+     "last": 1.424691
+    }
+   }
+  },
+  {
+   "rho": 1.05,
+   "backend": "simpy",
+   "events": 1427628,
+   "wall_s": 3.241953847988043,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 453185.6382789149,
+     "last": 881844.484
+    },
+    "latency:hmi": {
+     "mean": 452848.2681849827,
+     "last": 881443.6478743455
+    },
+    "bytes_received:scada": {
+     "mean": 0.631996947368421,
+     "last": 1.201176
+    },
+    "bytes_received:hmi": {
+     "mean": 0.7140844736842106,
+     "last": 1.357125
+    }
+   }
+  },
+  {
+   "rho": 1.05,
+   "backend": "ns3",
+   "events": 673309,
+   "wall_s": 0.4632296540075913,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 454143.29381662793,
+     "last": 883543.5829473684
+    },
+    "latency:hmi": {
+     "mean": 453780.1296537584,
+     "last": 883020.3026447368
+    },
+    "bytes_received:scada": {
+     "mean": 0.632482,
+     "last": 1.201696
+    },
+    "bytes_received:hmi": {
+     "mean": 0.714066,
+     "last": 1.356816
+    }
+   }
+  },
+  {
+   "rho": 1.1,
+   "backend": "simpy",
+   "events": 1449926,
+   "wall_s": 3.3294683970161714,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 864156.1698189062,
+     "last": 1682568.6232087913
+    },
+    "latency:hmi": {
+     "mean": 863806.3891199207,
+     "last": 1681930.2616703296
+    },
+    "bytes_received:scada": {
+     "mean": 0.6032614736842105,
+     "last": 1.146728
+    },
+    "bytes_received:hmi": {
+     "mean": 0.6815976315789474,
+     "last": 1.29525
+    }
+   }
+  },
+  {
+   "rho": 1.1,
+   "backend": "ns3",
+   "events": 663740,
+   "wall_s": 0.520270397013519,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 846906.3968808755,
+     "last": 1652352.4298021977
+    },
+    "latency:hmi": {
+     "mean": 850627.9479854009,
+     "last": 1651722.4303324176
+    },
+    "bytes_received:scada": {
+     "mean": 0.6049347368421053,
+     "last": 1.14924
+    },
+    "bytes_received:hmi": {
+     "mean": 0.6663096315789474,
+     "last": 1.270422
+    }
+   }
+  },
+  {
+   "rho": 1.2,
+   "backend": "simpy",
+   "events": 1497950,
+   "wall_s": 3.4959979460109025,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1583535.4972567288,
+     "last": 3083396.5300952382
+    },
+    "latency:hmi": {
+     "mean": 1583325.7290558238,
+     "last": 3083007.061461078
+    },
+    "bytes_received:scada": {
+     "mean": 0.5529285263157895,
+     "last": 1.051112
+    },
+    "bytes_received:hmi": {
+     "mean": 0.624795,
+     "last": 1.18725
+    }
+   }
+  },
+  {
+   "rho": 1.2,
+   "backend": "ns3",
+   "events": 646777,
+   "wall_s": 0.5885245199897327,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 1557266.82424309,
+     "last": 3020249.8425376345
+    },
+    "latency:hmi": {
+     "mean": 1585989.1737750478,
+     "last": 2998849.224761682
+    },
+    "bytes_received:scada": {
+     "mean": 0.5538364210526316,
+     "last": 1.042144
+    },
+    "bytes_received:hmi": {
+     "mean": 0.582828052631579,
+     "last": 1.12741
+    }
+   }
+  },
+  {
+   "rho": 1.35,
+   "backend": "simpy",
+   "events": 1576726,
+   "wall_s": 3.6824936689808965,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 2463408.6159788803,
+     "last": 4797041.521162163
+    },
+    "latency:hmi": {
+     "mean": 2462938.719047935,
+     "last": 4795730.377918919
+    },
+    "bytes_received:scada": {
+     "mean": 0.49154347368421053,
+     "last": 0.934248
+    },
+    "bytes_received:hmi": {
+     "mean": 0.5553805263157895,
+     "last": 1.05525
+    }
+   }
+  },
+  {
+   "rho": 1.35,
+   "backend": "ns3",
+   "events": 612560,
+   "wall_s": 0.5697290200041607,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 2454915.492068396,
+     "last": 4718330.968756097
+    },
+    "latency:hmi": {
+     "mean": 3057104.1649635066,
+     "last": 7002049.10602
+    },
+    "bytes_received:scada": {
+     "mean": 0.4837608421052632,
+     "last": 0.895796
+    },
+    "bytes_received:hmi": {
+     "mean": 0.4264774210526316,
+     "last": 0.778148
+    }
+   }
+  },
+  {
+   "rho": 1.5,
+   "backend": "simpy",
+   "events": 1661512,
+   "wall_s": 3.9091424539801665,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 3166496.82335165,
+     "last": 6165799.226112359
+    },
+    "latency:hmi": {
+     "mean": 3166832.249746582,
+     "last": 6167233.677654135
+    },
+    "bytes_received:scada": {
+     "mean": 0.4422764210526316,
+     "last": 0.840624
+    },
+    "bytes_received:hmi": {
+     "mean": 0.49987499999999996,
+     "last": 0.949875
+    }
+   }
+  },
+  {
+   "rho": 1.5,
+   "backend": "ns3",
+   "events": 606215,
+   "wall_s": 0.5791900489712134,
+   "metrics": {
+    "modbus_latency:scada": {
+     "mean": 3355546.131270082,
+     "last": 6869560.652470589
+    },
+    "latency:hmi": {
+     "mean": 4528282.85026569,
+     "last": 10930877.319297297
+    },
+    "bytes_received:scada": {
+     "mean": 0.4206637894736842,
+     "last": 0.756816
+    },
+    "bytes_received:hmi": {
+     "mean": 0.3355935789473684,
+     "last": 0.564843
+    }
+   }
+  }
+ ]
+}

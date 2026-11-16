@@ -298,6 +298,15 @@ PROFINET RT is a layer 2 protocol (EtherType 0x8892), without IP, so ns-3's stac
 - **The deadline comes first.** A frame that arrives exactly at the deadline was scheduled after the watchdog, at the end of its transmission. ns-3 runs events of one instant in the order they were scheduled, so the expiry counts, and the frame then restarts supervision. That is SimPy's outcome, where the watchdog's timeout fires before the frame is delivered.
 - **Results.** `priorities`, `cyclic` and `batches` (with the same seed) give SimPy's results bit for bit. That includes watchdog expiries under load, and a hold of one cycle with no jitter, where every frame arrives at its deadline (`test_a_frame_at_the_watchdogs_deadline_is_too_late`).
 
+**Results under load** *(2026-11-16)*. `python -m benchmarks load` (`benchmarks/load.py`) runs scenario L1 on SimPy and ns-3. L1 is a plant cell whose Modbus and MQTT traffic shares a 10 Mb/s uplink with a UDP camera. The camera's rate sets the uplink's offered load ρ from 0.5 to 1.5. The table and the explanations are in [Execution backends](../backends.md#modbus-and-mqtt-over-tcp). In short:
+- **ρ ≤ 0.95:** within 0.4 %.
+- **ρ = 1.00:** +18 % on the Modbus round trip and +25 % on MQTT latency. TCP's acknowledgements add about 0.7 % to a link that is exactly full on SimPy.
+- **1.05 ≤ ρ ≤ 1.2:** both engines overloaded, within a few percent.
+- **ρ ≥ 1.35:** the MQTT connections are limited by their windows (window / RTT), as the RTT reaches seconds. Their messages wait in the senders' TCP buffers, while the UDP camera takes more of the link. MQTT latency is +24 % and +43 %, and the HMI receives 26 % and 41 % less.
+- **How the cause was established.** A run with ns-3's minimum RTO raised from 1 s to 100 s, and one with a 64 MiB receive buffer, gave the same results to the digit. Tracing the connections showed no losses or retransmissions, and every MQTT connection's bytes in flight at its congestion or receive window.
+
+This meets Phase 6's exit criterion that differences under load are quantified and documented.
+
 **The ns-3 base image, as built** *(2026-11-16)*:
 - `ghcr.io/jwszolek/smolpy-ns3-base:3.49`, built by `.github/workflows/ns3-base.yml` from `docker/ns3-base/Dockerfile`, for `linux/amd64` only for now. It is rebuilt when that Dockerfile changes, and pushed after the merge to `main`.
 - **Pinned release:** ns-3.49 (released 2026-10-07), as the git tag `ns-3.49` with its commit checked. Debian 12's g++ 12 and CMake 3.25 meet its minimums: g++ 11.1, C++23 and CMake 3.25.
