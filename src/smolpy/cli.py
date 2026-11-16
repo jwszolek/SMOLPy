@@ -294,7 +294,7 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
         "--backend",
         default=None,
         metavar="NAME",
-        help="Run a .smol file on backend NAME: simpy (default) or rust",
+        help="Run a .smol file on backend NAME: simpy (default), rust or ns3",
     )
 
 

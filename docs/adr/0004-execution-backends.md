@@ -100,7 +100,11 @@ smolpy backends                             # list backends and their capabiliti
 
 **Execution.** The backend locates an ns-3 source tree via `--ns3-home` or the `NS3_HOME` environment variable, places the generated scenario and the SMOL C++ module under ns-3's `scratch/` area, builds and runs it with ns-3's build tool, and reads the results. A missing or incompatible ns-3 installation produces a clear error, not a traceback. The supported ns-3 release is pinned and documented; generated scenarios are kept on request (`--keep-generated`) for inspection and archiving.
 
-**Results interchange.** Samplers in the C++ module write the same long CSV format that `SimulationResult.export()` already produces (`time_ms,metric,value`). The backend loads that file into a regular `SimulationResult`, so `report()`, `export()` and `--output` work identically for both backends.
+*Amended 2026-11-16 (as built):* the scenario is not code-generated. `smol-ns3`, one C++ program (`src/smolpy/ns3/cpp/smol-ns3.cc`), is compiled once per ns-3 build and kept in the user's cache. For each run, the Python side lowers the scenario to plain lines of integers: every time in integer nanoseconds, every speed and period as an exact rational. The program reads them and runs.
+- **Why.** A run does not build anything or write into the ns-3 tree. So runs are parallel and fast, and the images can run as an ordinary user.
+- **Archiving.** The scenario JSON, the lowered input and the program's source, all in the repository, fix a run as exactly as generated code would.
+
+**Results interchange.** ~~Samplers in the C++ module write the same long CSV format that `SimulationResult.export()` already produces (`time_ms,metric,value`).~~ *As built:* at each sample instant, the samplers write raw integer counters: bytes, bits and frames, the sum and count of latencies, and queue lengths. The Python side computes every metric from them with the reference engine's formulas, so each value is rounded once, as there. The backend loads the result into a regular `SimulationResult`, so `report()`, `export()` and `--output` work identically for both backends.
 
 **Seed.** The `simulate` statement's `seed` maps to ns-3's RNG seed/run configuration, so seeded runs are reproducible on both backends.
 
@@ -111,11 +115,11 @@ smolpy backends                             # list backends and their capabiliti
 | SMOL | ns-3 |
 |---|---|
 | `adapter`, `mqtt_broker`, `modbus_slave` | Node with Internet stack (IPv4 address from `ip`) |
-| `switch` (store-and-forward) | Node with a learning bridge over one device per port |
+| `switch` (store-and-forward) | ~~Node with a learning bridge over one device per port~~ *As built:* a node with one SMOL Ethernet device per port and SMOL's switch, which learns, floods unknown destinations and drops hairpins. ns-3's `BridgeNetDevice` floods a hairpin instead of dropping it. |
 | `switch mode=cut-through` | **unsupported** — capability error |
 | `hub` | Shared CSMA channel *(hubs and `collision_rate` were later removed; see [Model Semantics](../model-semantics.md#open-issues), open issue 3)* |
-| `link speed= length=` | Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`). *Since ADR-0010:* inter-frame gap = the time of 20 B at `speed` (preamble, SFD and gap, which CSMA does not model otherwise); CSMA adds the Ethernet header and FCS itself. *In ns-3.49 the gap is not an attribute: `Attach()` sets 12 B, so the generator calls `CsmaNetDevice::SetInterframeGap()` on each device after installing it.* |
-| `flow` | UDP application; payload sized so the on-wire frame matches `size` (constant, Poisson, bursty patterns; `imix` sizes) |
+| `link speed= length=` | *Amended 2026-11-16: SMOL's own full-duplex Ethernet device and channel, not CSMA; see "Link model on ns-3" below.* Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`). *Since ADR-0010:* inter-frame gap = the time of 20 B at `speed` (preamble, SFD and gap, which CSMA does not model otherwise); CSMA adds the Ethernet header and FCS itself. *In ns-3.49 the gap is not an attribute: `Attach()` sets 12 B, so the generator calls `CsmaNetDevice::SetInterframeGap()` on each device after installing it.* |
+| `flow` | UDP application; payload sized so the on-wire frame matches `size` (constant, Poisson, bursty patterns; `imix` sizes). *As built:* the payload is `size` minus 46 B (Ethernet 18, IPv4 20, UDP 8), sent to port 9 of the destination, where a socket discards it. |
 | `publish` / `route` | MQTT publisher / broker Applications over one persistent TCP connection per client; QoS 1 sends PUBACK |
 | `poll` | Modbus TCP master / slave Applications over one persistent TCP connection per master–slave pair (port 502), MBAP transaction IDs, Read Holding Registers (FC 03) |
 | `observe` | Periodic sampler writing CSV rows |
@@ -201,6 +205,23 @@ docker run --rm -v "$PWD:/work" -w /work ghcr.io/jwszolek/smolpy:latest-ns3 run 
     - MIT is compatible with GPLv2, so the MIT code needs no change.
     - The image without ns-3 contains no GPL code.
 - **Not a replacement for pip.** `pip install smolpy smolpy-engine-rs` stays the main way to install SMOLPy. The images are for ns-3, for running without a Python setup, and for archiving.
+
+**Link model on ns-3** *(decided 2026-11-16)*
+
+ns-3.49's CSMA is a shared bus: the two ends of a link wait for each other, and a busy link backs off. SMOLPy's links are full duplex. With CSMA, ns-3 would differ from the other engines because of the link model, not because of the TCP/IP stack it is there to bring.
+
+- **Decision.** The ns-3 backend uses SMOL's own Ethernet device and channel, from the SMOL C++ module.
+    - The device is full duplex, with one unbounded egress queue per port.
+    - A frame is its IP packet plus 18 B, at least 64 B.
+    - It occupies the wire for preamble, SFD and frame, and the next frame waits for the 12 B gap (ADR-0010).
+    - Times are rounded as in Model Semantics §1.
+- **IP on top.** IPv4 runs on the device with a /32 address and every destination on the link. IPv6 is not installed, so there are no router solicitations or other IPv6 traffic. The neighbour caches start full, because SMOL models no ARP.
+- **What ns-3 contributes** is its IPv4/UDP stack now, and its TCP stack for Modbus and MQTT later. The differences that remain between engines are the protocol stack's, which is what the comparison is for.
+- **Options rejected.**
+    - **CSMA as planned.** Its differences from the other engines would come from half duplex.
+    - **`SimpleNetDevice`.** It is full duplex, but it counts neither the Ethernet header and FCS nor the preamble and gap: about 38 B per frame too few.
+
+**First results** *(2026-11-16)*. Constant flows of fixed-size frames without priorities are in scope so far. The `line` and `bridging` scenarios, and `switching` with its priorities set to 0, give SimPy's results bit for bit, through ns-3's IPv4/UDP stack. `bridging` has a flooding learning core, a hairpin at a converged switch, jumbo frames and a saturated 10 Mb/s link. So the deterministic suite compares ns-3 exactly, like Rust. ADR-0009's high-fidelity rules remain for TCP.
 
 **The ns-3 base image, as built** *(2026-11-16)*:
 - `ghcr.io/jwszolek/smolpy-ns3-base:3.49`, built by `.github/workflows/ns3-base.yml` from `docker/ns3-base/Dockerfile`, for `linux/amd64` only for now. It is rebuilt when that Dockerfile changes, and pushed after the merge to `main`.

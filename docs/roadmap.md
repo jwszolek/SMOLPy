@@ -172,10 +172,15 @@ A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP st
 
 ns-3 cannot be installed with `pip`, so the backend ships as a container image, `ghcr.io/jwszolek/smolpy:<version>-ns3`. It holds the pinned ns-3 release built once, and CI runs the ns-3 equivalence suite in it ([ADR-0004 — Container images](adr/0004-execution-backends.md#container-images)). A lighter image with SMOLPy and the Rust engine, without ns-3, can be published from the first release of `smolpy-engine-rs`.
 
-**Status:** steps 1 and 2 of 3 done.
+**Status:** steps 1 and 2 of 3 done, and step 3 has begun.
 1. **The image without ns-3: done.** `ghcr.io/jwszolek/smolpy:<version>` holds SMOLPy and the Rust engine, for `linux/amd64` and `linux/arm64`. It is built, tested and pushed at each release.
 2. **The ns-3 base image: done.** `ghcr.io/jwszolek/smolpy-ns3-base:3.49` holds ns-3.49, built once, for `linux/amd64`. `arm64` follows on a native runner.
-3. **The ns-3 backend.** It generates the scenario, adds the SMOL C++ module and runs the equivalence suite in CI.
+3. **The ns-3 backend.**
+    - **Ethernet: done.** `backend="ns3"` runs adapters, switches and constant flows of fixed-size frames without priorities, with the six Ethernet metrics, on ns-3's IPv4/UDP stack.
+        - It runs over SMOL's own full-duplex Ethernet device, because ns-3's CSMA is half duplex (ADR-0004).
+        - `line`, `bridging` and `switching` without priorities are bit-exact with SimPy.
+        - CI runs the backend in the base image.
+    - **Next:** 802.1Q priorities, random patterns and IMIX, then Modbus and MQTT over TCP, then PROFINET.
 
 **Exit criteria:**
 

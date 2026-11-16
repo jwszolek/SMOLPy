@@ -100,6 +100,45 @@ def switching() -> Scenario:
     return net.to_scenario(duration=40)
 
 
+def bridging() -> Scenario:
+    """Ethernet without 802.1Q priorities, within the ns-3 backend's scope:
+    three switches, mixed link speeds, a silent station whose frames the
+    learning core floods for the whole run, so the converged edge switch
+    receives them on the port they belong to and drops them (a hairpin),
+    jumbo frames, and a 10 Mb/s link loaded close to saturation."""
+    net = Network("bridging")
+    core = net.switch("core", ports=4)  # learning
+    edge = net.switch("edge", ports=3, qos="fifo", mac_table="topology")
+    far = net.switch("far", ports=3)  # learning
+    x = net.adapter("x", ip="10.0.0.1")
+    y = net.adapter("y", ip="10.0.1.1")
+    z = net.adapter("z", ip="10.0.1.2")
+    d = net.adapter("d", ip="10.0.2.1")
+    e = net.adapter("e", ip="10.0.2.2")
+    net.link(x, core, speed=100, length=10)
+    net.link(core, edge, speed=1000, length=100)
+    net.link(core, far, speed=100, length=30)
+    net.link(y, edge, speed=10, length=5)
+    net.link(z, edge, speed=100, length=5)
+    net.link(d, far, speed=100, length=5)
+    net.link(e, far, speed=1000, length=5)
+    x.sends(d, rate=2_000, size=1_200)  # d never sends: flooded, a hairpin at edge
+    y.sends(x, rate=500, size=64)
+    z.sends(e, rate=3_000, size=9_000, delay_ms=0.3)  # jumbo frames
+    e.sends(y, rate=800, size=1_518)  # 9.7 Mb/s into a 10 Mb/s link
+    x.sends(z, rate=4_000, size=512, delay_ms=1)
+    for node in (d, x, y):
+        net.observe("throughput", on=node, every=2)
+        net.observe("latency", on=node, every=2)
+    net.observe("bytes_sent", on=z, every=4)
+    net.observe("bytes_received", on=e, every=4)
+    net.observe("queue_depth", on=edge, every=0.5)
+    net.observe("queue_depth", on=core, every=0.5)
+    net.observe("utilization", on=far, every=4)
+    net.observe("utilization", on=y, every=4)
+    return net.to_scenario(duration=40)
+
+
 def polling() -> Scenario:
     """Modbus TCP only: two masters poll three slaves, one behind a second
     switch. The learning core floods requests until it learns a slave, so
@@ -294,6 +333,7 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "line": line,
     "priorities": priorities,
     "switching": switching,
+    "bridging": bridging,
     "polling": polling,
     "messaging": messaging,
     "cyclic": cyclic,
