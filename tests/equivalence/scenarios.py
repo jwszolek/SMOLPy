@@ -100,6 +100,39 @@ def switching() -> Scenario:
     return net.to_scenario(duration=40)
 
 
+def polling() -> Scenario:
+    """Modbus TCP only, within the Rust engine's scope: two masters poll three
+    slaves, one behind a second switch. The learning core floods requests
+    until it learns a slave, so slaves also receive requests for others,
+    and drop them. Bulk traffic shares the uplink."""
+    net = Network("polling")
+    core = net.switch("core", ports=5)  # learning
+    edge = net.switch("edge", ports=3)
+    scada = net.adapter("scada", ip="10.0.0.1")
+    plc = net.adapter("plc", ip="10.0.0.2")
+    meter = net.modbus_slave("meter", ip="10.0.0.10", unit_id=1)
+    drive = net.modbus_slave("drive", ip="10.0.0.11", unit_id=7)
+    valve = net.modbus_slave("valve", ip="10.0.0.12", unit_id=3)
+    net.link(scada, core, speed=100, length=10)
+    net.link(plc, core, speed=100, length=10)
+    net.link(meter, core, speed=10, length=5)
+    net.link(core, edge, speed=100, length=80)
+    net.link(drive, edge, speed=100, length=5)
+    net.link(valve, edge, speed=100, length=5)
+    scada.polls(meter, register=0, count=2, rate=250)
+    scada.polls(drive, register=100, count=60, rate=125, delay_ms=0.3)
+    plc.polls(valve, register=10, count=1, rate=500, delay_ms=1)
+    plc.polls(drive, register=0, count=125, rate=100)
+    plc.sends(scada, rate=3_000, size=1_200, delay_ms=0.5)  # shares the core with responses
+    for master in (scada, plc):
+        net.observe("modbus_latency", on=master, every=2)
+        net.observe("bytes_received", on=master, every=2)
+    net.observe("latency", on=scada, every=4)
+    net.observe("queue_depth", on=core, every=1)
+    net.observe("utilization", on=edge, every=4)
+    return net.to_scenario(duration=40)
+
+
 def protocols() -> Scenario:
     """Modbus polling and MQTT publish/subscribe across a switch, with a
     FIFO switch."""
@@ -187,6 +220,7 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "line": line,
     "priorities": priorities,
     "switching": switching,
+    "polling": polling,
     "protocols": protocols,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {

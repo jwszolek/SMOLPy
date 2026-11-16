@@ -16,7 +16,10 @@
 //!   processes in node order, then metric samplers in observation order;
 //! - the run stops before the first event at `t = duration`.
 
-use crate::frames::{flow_frame_size, IFG_BYTES, PREAMBLE_SFD_BYTES, WIRE_OVERHEAD_BYTES};
+use crate::frames::{
+    flow_frame_size, modbus_response_frame_size, IFG_BYTES, MODBUS_REQUEST_BYTES,
+    PREAMBLE_SFD_BYTES, WIRE_OVERHEAD_BYTES,
+};
 use crate::rng::{stream_seed, Rng};
 use crate::scenario::{Metric, NodeKind, Pattern, Scenario, Size};
 use crate::timebase::{self as tb, Instants, Q};
@@ -45,7 +48,22 @@ struct Frame {
     created: u64,
     priority: u8,
     in_port: i32,
+    modbus: Modbus,
 }
+
+/// The Modbus TCP fields of a frame; `unit < 0` on any other frame.
+#[derive(Clone, Copy)]
+struct Modbus {
+    unit: i16,
+    count: u16,
+    response: bool,
+}
+
+const NOT_MODBUS: Modbus = Modbus {
+    unit: -1,
+    count: 0,
+    response: false,
+};
 
 enum Items {
     Fifo(VecDeque<u32>),
@@ -96,6 +114,27 @@ struct Adapter {
     out: Option<u32>,
     bytes_received: u128,
     latency_windows: Vec<u32>,
+    modbus_windows: Vec<u32>, // round-trip times of Modbus responses
+}
+
+/// A Modbus TCP slave: answers Read Holding Registers for its unit id.
+struct Slave {
+    mac: u32,
+    unit: u8,
+    inbound: u32,
+    out: Option<u32>,
+}
+
+/// A Modbus TCP master's polls of one slave, at constant instants.
+struct PollGen {
+    src: u32,
+    dst: u32,
+    unit: u8,
+    count: u16,
+    chan: u32,
+    delay_ns: u64,
+    delayed: bool,
+    instants: Instants,
 }
 
 struct Switch {
@@ -158,6 +197,8 @@ enum Proc {
     Switch(u32),
     Flow(u32),
     Sampler(u32),
+    Slave(u32),
+    Poll(u32),
 }
 
 pub struct Outcome {
@@ -179,6 +220,8 @@ struct Engine {
     adapters: Vec<Adapter>,
     switches: Vec<Switch>,
     flows: Vec<FlowGen>,
+    slaves: Vec<Slave>,
+    polls: Vec<PollGen>,
     samplers: Vec<Sampler>,
     windows: Vec<Vec<u64>>,
     procs: Vec<Proc>,
@@ -293,6 +336,20 @@ impl Engine {
                 let t = self.samplers[i as usize].ticks.next().unwrap();
                 self.schedule(Ev::Timeout(proc), NORMAL, t - self.now);
             }
+            Proc::Slave(i) => {
+                let s = self.slaves[i as usize].inbound;
+                self.get(s, proc);
+            }
+            Proc::Poll(i) => {
+                let pg = &mut self.polls[i as usize];
+                let delay = if pg.delay_ns > 0 {
+                    pg.delayed = true;
+                    pg.delay_ns
+                } else {
+                    pg.instants.next().unwrap() - self.now
+                };
+                self.schedule(Ev::Timeout(proc), NORMAL, delay);
+            }
         }
     }
 
@@ -324,6 +381,11 @@ impl Engine {
                     for w in &ad.latency_windows {
                         self.windows[*w as usize].push(self.now - fr.created);
                     }
+                    if fr.modbus.response {
+                        for w in &ad.modbus_windows {
+                            self.windows[*w as usize].push(self.now - fr.created);
+                        }
+                    }
                 }
                 self.release(f);
                 self.get(store, proc);
@@ -353,7 +415,34 @@ impl Engine {
                 }
                 self.get(store, proc);
             }
-            Proc::Flow(_) | Proc::Sampler(_) => unreachable!("these processes do not get"),
+            Proc::Slave(i) => {
+                let fr = self.frames[f as usize];
+                let sl = &self.slaves[i as usize];
+                // a flooded frame for another station, or not for this unit: dropped
+                if fr.dst == sl.mac && fr.modbus.unit == sl.unit as i16 {
+                    let response = Frame {
+                        src: sl.mac,
+                        dst: fr.src,
+                        size: modbus_response_frame_size(fr.modbus.count),
+                        created: fr.created, // the request's: modbus_latency is a round trip
+                        priority: 0,
+                        in_port: -1,
+                        modbus: Modbus {
+                            unit: fr.modbus.unit,
+                            count: fr.modbus.count,
+                            response: true,
+                        },
+                    };
+                    let chan = sl.out.expect("a slave process has a link");
+                    let r = self.alloc(response);
+                    self.enqueue(chan, r);
+                }
+                self.release(f);
+                self.get(store, proc);
+            }
+            Proc::Flow(_) | Proc::Sampler(_) | Proc::Poll(_) => {
+                unreachable!("these processes do not get")
+            }
         }
     }
 
@@ -376,7 +465,34 @@ impl Engine {
                 let t = self.samplers[i as usize].ticks.next().unwrap();
                 self.schedule(Ev::Timeout(proc), NORMAL, t - self.now);
             }
-            Proc::AdapterRx(_) | Proc::Switch(_) => unreachable!("these processes do not time out"),
+            Proc::Poll(i) => {
+                let pg = &mut self.polls[i as usize];
+                if pg.delayed {
+                    pg.delayed = false;
+                } else {
+                    let request = Frame {
+                        src: pg.src,
+                        dst: pg.dst,
+                        size: MODBUS_REQUEST_BYTES,
+                        created: self.now,
+                        priority: 0,
+                        in_port: -1,
+                        modbus: Modbus {
+                            unit: pg.unit as i16,
+                            count: pg.count,
+                            response: false,
+                        },
+                    };
+                    let chan = pg.chan;
+                    let r = self.alloc(request);
+                    self.enqueue(chan, r);
+                }
+                let t = self.polls[i as usize].instants.next().unwrap();
+                self.schedule(Ev::Timeout(proc), NORMAL, t - self.now);
+            }
+            Proc::AdapterRx(_) | Proc::Switch(_) | Proc::Slave(_) => {
+                unreachable!("these processes do not time out")
+            }
         }
     }
 
@@ -482,6 +598,7 @@ impl Engine {
             created: self.now,
             priority: fl.priority,
             in_port: -1,
+            modbus: NOT_MODBUS,
         };
         let chan = fl.chan;
         let f = self.alloc(frame);
@@ -574,6 +691,8 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         adapters: Vec::new(),
         switches: Vec::new(),
         flows: Vec::new(),
+        slaves: Vec::new(),
+        polls: Vec::new(),
         samplers: Vec::new(),
         windows: Vec::new(),
         procs: Vec::new(),
@@ -613,8 +732,19 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     out: None,
                     bytes_received: 0,
                     latency_windows: Vec::new(),
+                    modbus_windows: Vec::new(),
                 });
                 role.push(e.adapters.len() - 1);
+            }
+            NodeKind::ModbusSlave { mac, unit } => {
+                let mac = intern(mac);
+                e.slaves.push(Slave {
+                    mac,
+                    unit: *unit,
+                    inbound: s,
+                    out: None,
+                });
+                role.push(e.slaves.len() - 1);
             }
             NodeKind::Switch { .. } => {
                 e.switches.push(Switch {
@@ -628,10 +758,12 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
     }
     let is_switch = |i: usize| matches!(sc.nodes[i].kind, NodeKind::Switch { .. });
     let strict = |i: usize| !matches!(sc.nodes[i].kind, NodeKind::Switch { fifo: true, .. });
+    // every node but a switch is an end station with a MAC address
     let mac_of = |i: usize| match &sc.nodes[i].kind {
-        NodeKind::Adapter { mac } => Some(mac.clone()),
+        NodeKind::Adapter { mac } | NodeKind::ModbusSlave { mac, .. } => Some(mac.clone()),
         NodeKind::Switch { .. } => None,
     };
+    let is_adapter = |i: usize| matches!(sc.nodes[i].kind, NodeKind::Adapter { .. });
 
     let mut next_port = vec![0i32; sc.nodes.len()];
     let mut in_channels: Vec<Vec<u32>> = vec![Vec::new(); sc.nodes.len()];
@@ -683,16 +815,17 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         in_channels[a].push(ch_ba);
         neighbours[a].push((port_a, b));
         neighbours[b].push((port_b, a));
-        if let Some(mac) = mac_of(a) {
-            e.adapters[role[a]].out = Some(ch_ab);
-            if is_switch(b) {
-                static_macs[b].insert(intern(&mac), port_b);
-            }
-        }
-        if let Some(mac) = mac_of(b) {
-            e.adapters[role[b]].out = Some(ch_ba);
-            if is_switch(a) {
-                static_macs[a].insert(intern(&mac), port_a);
+        // an end station's single link is its way out (the model allows one)
+        for (node, other, ch, port) in [(a, b, ch_ab, port_b), (b, a, ch_ba, port_a)] {
+            if let Some(mac) = mac_of(node) {
+                match &sc.nodes[node].kind {
+                    NodeKind::Adapter { .. } => e.adapters[role[node]].out = Some(ch),
+                    NodeKind::ModbusSlave { .. } => e.slaves[role[node]].out = Some(ch),
+                    NodeKind::Switch { .. } => unreachable!(),
+                }
+                if is_switch(other) {
+                    static_macs[other].insert(intern(&mac), port);
+                }
             }
         }
     }
@@ -774,6 +907,34 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                         });
                         e.process(Proc::Flow((e.flows.len() - 1) as u32));
                     }
+                    // then its Modbus polls, as the reference engine starts them
+                    for poll in sc.polls.iter().filter(|p| p.source == node.name) {
+                        let slave = lookup(&poll.slave)?;
+                        let NodeKind::ModbusSlave { mac, unit } = &sc.nodes[slave].kind else {
+                            return Err(format!(
+                                "poll {} -> {}: not a Modbus slave",
+                                poll.source, poll.slave
+                            ));
+                        };
+                        let delay_ns = tb::ms_to_ns(poll.delay_ms)?;
+                        e.polls.push(PollGen {
+                            src: e.adapters[a as usize].mac,
+                            dst: intern(mac),
+                            unit: *unit,
+                            count: poll.count,
+                            chan,
+                            delay_ns,
+                            delayed: false,
+                            instants: Instants::new(delay_ns, tb::interval_ns(poll.rate)?),
+                        });
+                        e.process(Proc::Poll((e.polls.len() - 1) as u32));
+                    }
+                }
+            }
+            NodeKind::ModbusSlave { .. } => {
+                let w = role[i];
+                if e.slaves[w].out.is_some() {
+                    e.process(Proc::Slave(w as u32));
                 }
             }
             NodeKind::Switch { .. } => {
@@ -795,7 +956,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 e.out.len() - 1
             }
         };
-        let adapter = mac_of(target).is_some();
+        let adapter = is_adapter(target);
         let what = match obs.metric {
             Metric::Throughput if adapter => Some(Sampled::Throughput(role[target] as u32)),
             Metric::Latency if adapter => {
@@ -804,7 +965,16 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 e.adapters[role[target]].latency_windows.push(w);
                 Some(Sampled::Latency(w))
             }
-            Metric::QueueDepth if !adapter => Some(Sampled::QueueDepth(role[target] as u32)),
+            Metric::QueueDepth if is_switch(target) => {
+                Some(Sampled::QueueDepth(role[target] as u32))
+            }
+            Metric::ModbusLatency if adapter => {
+                // the window mean of round-trip times, as latency
+                e.windows.push(Vec::new());
+                let w = (e.windows.len() - 1) as u32;
+                e.adapters[role[target]].modbus_windows.push(w);
+                Some(Sampled::Latency(w))
+            }
             Metric::Utilization if !in_channels[target].is_empty() => {
                 let chans = in_channels[target].clone();
                 let mut speed = Q::int(0);

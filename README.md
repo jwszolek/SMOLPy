@@ -20,7 +20,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 > result = net.simulate(duration=60_000, backend="rust")
 > ```
 >
-> The Rust engine covers Ethernet for now: adapters, switches, links and flows. MQTT, Modbus TCP and PROFINET follow. See [Simulation engine](#simulation-engine) and [ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/).
+> The Rust engine covers Ethernet and Modbus TCP for now: adapters, switches, links, flows and Modbus polling. MQTT and PROFINET follow. See [Simulation engine](#simulation-engine) and [ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/).
 
 📖 **Full documentation:** [jwszolek.github.io/SMOLPy](https://jwszolek.github.io/SMOLPy/)
 
@@ -443,7 +443,7 @@ Every simulation goes through the same path. The Python API and `.smol` files bu
 | Backend | Language | What it runs | Speed | Install |
 |---|---|---|---|---|
 | `simpy` (default) | Python, SimPy | the whole model, the live and text dashboards | reference | included |
-| `rust` | Rust, through PyO3 | Ethernet: adapters, switches, links, flows (constant, Poisson, bursty, batch, IMIX), six metrics | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy[rust]` (since v1.8.0) |
+| `rust` | Rust, through PyO3 | Ethernet: adapters, switches, links, flows (constant, Poisson, bursty, batch, IMIX); Modbus TCP polling; seven metrics | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy[rust]` (since v1.8.0) |
 
 ```python
 result = net.simulate(duration=60_000, backend="rust")       # one run

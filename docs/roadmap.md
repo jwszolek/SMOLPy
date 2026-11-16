@@ -153,6 +153,12 @@ Modbus TCP, MQTT and PROFINET RT in the Rust engine. These need no new architect
 
 **Exit criteria:** the Rust backend's capabilities equal SimPy's, apart from the live dashboard.
 
+**Status:** one of three protocols done.
+- **Modbus TCP: done.**
+    - The Rust engine runs slaves, `polls()` and `modbus_latency`. It reproduces SimPy's poll generator and slave process, including requests flooded to other slaves and dropped there.
+    - The new `polling` scenario is bit-exact with SimPy, down to the event count.
+- **MQTT and PROFINET RT** are next. PROFINET's watchdog waits on "a frame or a timeout", a SimPy condition whose event ordering the engine has to reproduce.
+
 ## Phase 6: ns-3 high-fidelity backend ([ADR-0004](adr/0004-execution-backends.md), revised)
 
 A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP stack for Modbus and MQTT.

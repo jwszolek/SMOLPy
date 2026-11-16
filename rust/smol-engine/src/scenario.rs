@@ -15,6 +15,7 @@ pub const VERSION: u64 = 2;
 #[derive(Debug, Clone)]
 pub enum NodeKind {
     Adapter { mac: String },
+    ModbusSlave { mac: String, unit: u8 },
     Switch { fifo: bool, topology: bool },
 }
 
@@ -58,6 +59,16 @@ pub struct Flow {
     pub priority: u8,
 }
 
+/// Modbus TCP polling (FC 03): `count` registers at `rate` polls per second.
+#[derive(Debug, Clone)]
+pub struct Poll {
+    pub source: String,
+    pub slave: String,
+    pub count: u16,
+    pub rate: Q,
+    pub delay_ms: Q,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metric {
     Throughput,
@@ -66,16 +77,18 @@ pub enum Metric {
     BytesReceived,
     QueueDepth,
     Utilization,
+    ModbusLatency,
 }
 
 impl Metric {
-    pub const ALL: [(&'static str, Metric); 6] = [
+    pub const ALL: [(&'static str, Metric); 7] = [
         ("throughput", Metric::Throughput),
         ("latency", Metric::Latency),
         ("bytes_sent", Metric::BytesSent),
         ("bytes_received", Metric::BytesReceived),
         ("queue_depth", Metric::QueueDepth),
         ("utilization", Metric::Utilization),
+        ("modbus_latency", Metric::ModbusLatency),
     ];
 
     pub fn name(self) -> &'static str {
@@ -96,6 +109,7 @@ pub struct Scenario {
     pub nodes: Vec<Node>,
     pub links: Vec<Link>,
     pub flows: Vec<Flow>,
+    pub polls: Vec<Poll>,
     pub observations: Vec<Observation>,
     pub duration_ms: Q,
     pub seed: u64,
@@ -112,8 +126,8 @@ pub struct Capabilities {
 }
 
 pub const CAPABILITIES: Capabilities = Capabilities {
-    nodes: &["adapter", "switch"],
-    traffic: &["flow"],
+    nodes: &["adapter", "switch", "modbus_slave"],
+    traffic: &["flow", "poll"],
     patterns: &["constant", "poisson", "bursty", "batch"],
     metrics: &[
         "throughput",
@@ -122,15 +136,14 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "bytes_received",
         "queue_depth",
         "utilization",
+        "modbus_latency",
     ],
     features: &["imix"],
     notes: &[
         ("mqtt_broker", "planned for Phase 5"),
-        ("modbus_slave", "planned for Phase 5"),
         ("profinet_device", "planned for Phase 5"),
         ("publish", "planned for Phase 5"),
         ("route", "planned for Phase 5"),
-        ("poll", "planned for Phase 5"),
         ("profinet_ar", "planned for Phase 5"),
     ],
 };
@@ -256,12 +269,15 @@ pub fn parse(text: &str) -> Res<Scenario> {
         f.done()?;
         links.push(link);
     }
-    let mut flows = Vec::new();
+    let (mut flows, mut polls) = (Vec::new(), Vec::new());
     for (i, v) in array(top.take_or("traffic"), "traffic")?
         .into_iter()
         .enumerate()
     {
-        flows.push(parse_traffic(v, i)?);
+        match parse_traffic(v, i)? {
+            Traffic::Flow(flow) => flows.push(flow),
+            Traffic::Poll(poll) => polls.push(poll),
+        }
     }
     let mut observations = Vec::new();
     for (i, v) in array(top.take_or("observations"), "observations")?
@@ -305,6 +321,7 @@ pub fn parse(text: &str) -> Res<Scenario> {
         nodes,
         links,
         flows,
+        polls,
         observations,
         duration_ms,
         seed,
@@ -358,7 +375,15 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
             };
             NodeKind::Switch { fifo, topology }
         }
-        "mqtt_broker" | "modbus_slave" | "profinet_device" => {
+        "modbus_slave" => {
+            f.string("ip")?;
+            let mac = f.string("mac")?;
+            let unit = f.integer("unit_id")?;
+            let unit =
+                u8::try_from(unit).map_err(|_| format!("modbus_slave {name}: unit_id {unit}"))?;
+            NodeKind::ModbusSlave { mac, unit }
+        }
+        "mqtt_broker" | "profinet_device" => {
             return Err(unsupported(&format!("{kind} nodes (Phase 5)")))
         }
         other => return Err(format!("unknown node kind {other:?}")),
@@ -367,17 +392,45 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
     Ok(Node { name, kind })
 }
 
-fn parse_traffic(value: Value, i: usize) -> Res<Flow> {
+enum Traffic {
+    Flow(Flow),
+    Poll(Poll),
+}
+
+fn parse_traffic(value: Value, i: usize) -> Res<Traffic> {
     let mut f = Fields::new(value, format!("traffic {i}"))?;
     let kind = f.string("kind")?;
-    if kind != "flow" {
-        return match kind.as_str() {
-            "publish" | "route" | "poll" | "profinet_ar" => {
-                Err(unsupported(&format!("{kind} traffic (Phase 5)")))
-            }
-            other => Err(format!("unknown traffic kind {other:?}")),
-        };
+    match kind.as_str() {
+        "flow" => parse_flow(f).map(Traffic::Flow),
+        "poll" => {
+            let source = f.string("source")?;
+            let slave = f.string("slave")?;
+            f.what = format!("poll {source} -> {slave}");
+            f.integer("register")?; // the register address does not change the frames
+            let count = f.integer("count")?;
+            let count = u16::try_from(count).map_err(|_| format!("poll: count {count}"))?;
+            let rate = f.number("rate")?;
+            let delay_ms = match f.take_or("delay_ms") {
+                None => Q::int(0),
+                Some(v) => number(&v, "poll: delay_ms")?,
+            };
+            f.done()?;
+            Ok(Traffic::Poll(Poll {
+                source,
+                slave,
+                count,
+                rate,
+                delay_ms,
+            }))
+        }
+        "publish" | "route" | "profinet_ar" => {
+            Err(unsupported(&format!("{kind} traffic (Phase 5)")))
+        }
+        other => Err(format!("unknown traffic kind {other:?}")),
     }
+}
+
+fn parse_flow(mut f: Fields<'_>) -> Res<Flow> {
     let source = f.string("source")?;
     let destination = f.string("destination")?;
     f.what = format!("flow {source} -> {destination}");

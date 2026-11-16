@@ -170,9 +170,9 @@ result.export("out.csv", format="csv")   # explicit format override
 - **A missing backend is an error.** When a backend is not installed, selecting it raises `BackendUnavailable` with the install command.
 - **`smolpy.backends.installed()`** lists the backends that can run here.
 
-**The Rust backend so far** runs adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes. It covers the metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth` and `utilization`.
+**The Rust backend so far** runs adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes. It also runs Modbus TCP: slaves, `polls()` and `modbus_latency`. It covers the metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth`, `utilization` and `modbus_latency`.
 - **Same results as SimPy.** Deterministic scenarios give SimPy's results bit for bit. Random traffic uses the same streams and distributions with the engine's own generator, so there the results agree statistically.
-- **Not in it yet.** MQTT, Modbus and PROFINET come in Phase 5 of the [roadmap](roadmap.md).
+- **Not in it yet.** MQTT and PROFINET come in Phase 5 of the [roadmap](roadmap.md).
 - **Install** it with `pip install smolpy[rust]`, or `pip install smolpy-engine-rs` next to an installed `smolpy`. It is released together with `smolpy`, with the same version, since v1.8.0. Wheels exist for Linux x86_64 and aarch64, macOS arm64 and x86_64, and Windows x86_64. To build it from the repository instead, with a Rust toolchain:
 
 ```bash
