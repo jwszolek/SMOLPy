@@ -454,7 +454,7 @@ Every simulation goes through the same path. The Python API and `.smol` files bu
 |---|---|---|---|---|
 | `simpy` (default) | Python, SimPy | the whole model, the live and text dashboards | reference | included |
 | `rust` | Rust, through PyO3 | the whole model, headless: Ethernet, Modbus TCP, MQTT and PROFINET RT, every metric | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy[rust]` (since v1.8.0) |
-| `ns3` (in progress) | ns-3's IPv4/UDP stack, from C++ | Ethernet so far: adapters, switches, every traffic pattern, IMIX, priorities; bit-exact with SimPy there | slower: each run is an ns-3 process | an ns-3 3.49 build in `NS3_HOME`, e.g. the image `ghcr.io/jwszolek/smolpy-ns3-base:3.49` |
+| `ns3` (in progress) | ns-3's IPv4 stack, from C++ | Ethernet over UDP, bit-exact with SimPy: adapters, switches, every traffic pattern, IMIX, priorities. Modbus TCP and MQTT over ns-3's TCP, which adds connection setup and acknowledgements. PROFINET not yet | slower: each run is an ns-3 process | an ns-3 3.49 build in `NS3_HOME`, e.g. the image `ghcr.io/jwszolek/smolpy-ns3-base:3.49` |
 
 ```python
 result = net.simulate(duration=60_000, backend="rust")       # one run

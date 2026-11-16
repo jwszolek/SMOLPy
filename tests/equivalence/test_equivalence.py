@@ -15,7 +15,7 @@ import pytest
 
 from smolpy.batch import BatchResult
 from smolpy.core.network import SimulationResult
-from smolpy.model import Flow
+from smolpy.model import Flow, Poll, Publish
 from smolpy.stats import diff_ci, mean_ci
 
 from . import harness
@@ -54,12 +54,39 @@ def _supported(scenario, backend: str):
     return scenario
 
 
+# Backends that run Modbus and MQTT over a real TCP stack: connection setup,
+# acknowledgements and congestion control make their results differ from the
+# reference's, which is what they are for (ADR-0004). They are compared by
+# test_over_tcp.
+OVER_TCP = [b for b in BACKENDS if b.values[0] == "ns3"]
+
+
+def _over_tcp(scenario) -> bool:
+    return any(isinstance(t, Poll | Publish) for t in scenario.traffic)
+
+
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("name", DETERMINISTIC)
 def test_deterministic(name: str, backend: str) -> None:
-    candidate = harness.run_once(_supported(DETERMINISTIC[name](), backend), backend)
+    scenario = _supported(DETERMINISTIC[name](), backend)
+    if backend in [b.values[0] for b in OVER_TCP] and _over_tcp(scenario):
+        pytest.skip(f"the {backend} backend runs Modbus and MQTT over TCP: see test_over_tcp")
+    candidate = harness.run_once(scenario, backend)
     mismatches = harness.compare_runs(candidate, _reference_run(name))
     assert not mismatches, "\n".join(map(str, mismatches))
+
+
+@pytest.mark.parametrize("backend", OVER_TCP)
+@pytest.mark.parametrize("name", [n for n, make in DETERMINISTIC.items() if _over_tcp(make())])
+def test_over_tcp(name: str, backend: str, record_property) -> None:
+    """Over TCP, the same metrics at the same instants; the differences in
+    their values are reported, not asserted (ADR-0009, high-fidelity rules)."""
+    candidate = harness.run_once(_supported(DETERMINISTIC[name](), backend), backend)
+    reference = _reference_run(name)
+    mismatches = harness.compare_sampling(candidate, reference)
+    assert not mismatches, "\n".join(map(str, mismatches))
+    for key, (want, got) in harness.mean_differences(candidate, reference).items():
+        record_property(key, f"{want:.6g} on {harness.REFERENCE}, {got:.6g} on {backend}")
 
 
 # Backends that draw a scenario's random traffic from the reference engine's

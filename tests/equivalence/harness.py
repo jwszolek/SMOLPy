@@ -84,6 +84,33 @@ def compare_runs(candidate: SimulationResult, reference: SimulationResult) -> li
     return out
 
 
+def compare_sampling(candidate: SimulationResult, reference: SimulationResult) -> list[Mismatch]:
+    """The same metrics, sampled at the same instants; the values may differ.
+    For a backend whose protocol stack is meant to differ from the reference's
+    (ns-3's TCP), whose differences are reported, not asserted (ADR-0009)."""
+    out = _compare_keys(set(candidate.metrics), set(reference.metrics))
+    for key in sorted(set(candidate.metrics) & set(reference.metrics)):
+        got = [t for t, _ in candidate.metrics[key]]
+        want = [t for t, _ in reference.metrics[key]]
+        if got != want:
+            out.append(Mismatch(key, f"sampled at {got}, the reference at {want}"))
+    return out
+
+
+def mean_differences(
+    candidate: SimulationResult, reference: SimulationResult
+) -> dict[str, tuple[float, float]]:
+    """Each metric's mean over the run, the reference's and the candidate's."""
+
+    def mean(samples: list[tuple[float, float]]) -> float:
+        return sum(v for _, v in samples) / len(samples) if samples else float("nan")
+
+    return {
+        key: (mean(reference.metrics[key]), mean(candidate.metrics[key]))
+        for key in sorted(set(candidate.metrics) & set(reference.metrics))
+    }
+
+
 # --- stochastic ---
 
 

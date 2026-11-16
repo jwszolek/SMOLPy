@@ -13,11 +13,16 @@
 //     flow <src> <dst ipv4> <udp payload> <priority> <delay ns> <period num> <period den>
 //     sends <src> <dst ipv4> <priority> <n> <t ns> <udp payload> ...
 //     sink <node>                           a node that receives flows
+//     connect <client> <server> <port>      a TCP connection, numbered from 0
+//     poll <connection> <request B> <response B> <delay ns> <period num> <period den>
+//     publish <connection> <message B> <qos> <topic> <delay ns> <period num> <period den>
+//     route <broker> <topic> <connection>...  the subscribers' connections
+//     observe <kind> <target> <period num> <period den> <device>...
 //
 // A flow is a constant one of fixed-size frames; "sends" lists every frame of
 // any other flow, its instant and size drawn by smolpy.ns3 from the flow's
-// random stream exactly as the reference engine draws them.
-//     observe <kind> <target> <period num> <period den> <device>...
+// random stream exactly as the reference engine draws them. Modbus and MQTT
+// messages are sized in bytes of TCP payload, and topics are numbered.
 //
 // Link i has the devices 2i (on a) and 2i + 1 (on b); a node's ports are
 // numbered in the order of its links. Speeds are exact rationals in Mb/s and
@@ -27,8 +32,9 @@
 // raw integer counters; smolpy.ns3 computes each metric from them with the
 // reference engine's formulas, so that every value is rounded once, as there.
 //
-// What ns-3 contributes is its IPv4/UDP stack; the link and the switch are
-// SMOL's own, to give the same Ethernet as the other engines:
+// What ns-3 contributes is its IPv4 stack, with UDP for flows and TCP for
+// Modbus and MQTT; the link and the switch are SMOL's own, to give the same
+// Ethernet as the other engines:
 // - SmolDevice: a full-duplex Ethernet port (ns-3's CSMA is half duplex).
 //   A frame is its IP packet plus header and FCS (18 B), at least 64 B, and
 //   an 802.1Q tag (4 B) with a priority above 0; it occupies the wire for
@@ -49,6 +55,8 @@
 #include <deque>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -65,6 +73,13 @@ constexpr uint64_t VLAN_TAG_BYTES = 4;
 constexpr uint64_t MIN_FRAME_BYTES = 64;
 constexpr uint64_t PREAMBLE_SFD_BYTES = 8;
 constexpr uint64_t WIRE_OVERHEAD_BITS = (8 + 12) * 8; // preamble, SFD and gap
+
+[[noreturn]] void
+Fail(const std::string& what)
+{
+    std::cerr << "smol-ns3: " << what << std::endl;
+    std::exit(2);
+}
 
 // round(num / den), ties to even (timebase._round_ratio)
 uint64_t
@@ -622,8 +637,11 @@ SmolDevice::Receive(Frame frame)
         return;
     }
     bytesReceived += frame.bytes;
+    // a UDP datagram's origin is a packet tag; TCP data carries it as a byte
+    // tag, the first one in a segment; segments without data have none
     OriginTag tag;
-    if (!latencyWindows.empty() && frame.packet->PeekPacketTag(tag))
+    if (!latencyWindows.empty() &&
+        (frame.packet->PeekPacketTag(tag) || frame.packet->FindFirstMatchingByteTag(tag)))
     {
         uint64_t latency = Simulator::Now().GetNanoSeconds() - tag.Created();
         for (Window* w : latencyWindows)
@@ -749,6 +767,258 @@ class SmolFlow : public Application
 
 NS_OBJECT_ENSURE_REGISTERED(SmolFlow);
 
+// --- Modbus TCP and MQTT over ns-3's TCP ---
+//
+// Each master-slave or client-broker pair has one persistent TCP connection,
+// opened at the start. The applications send whole protocol messages; the
+// bytes themselves carry nothing, and each connection keeps, per direction,
+// the messages whose bytes are on the way, in order. TCP delivers the bytes
+// in order, so a message has arrived when all of its bytes have. Each
+// message's bytes carry its origin time as a byte tag, for the latency of
+// the frames that carry them.
+
+constexpr uint16_t MODBUS_PORT = 502;
+constexpr uint16_t MQTT_PORT = 1883;
+constexpr uint32_t MQTT_PUBACK_MESSAGE_BYTES = 4;
+
+enum class Message : uint8_t
+{
+    ModbusRequest,
+    ModbusResponse,
+    Publish,
+    Forward, // a PUBLISH from a broker to a subscriber
+    Puback,
+};
+
+struct Sent
+{
+    Message kind;
+    uint32_t bytes;
+    uint64_t origin;
+    uint32_t reply = 0; // a request's response bytes, or a PUBLISH's topic
+    uint8_t qos = 0;
+};
+
+class Connection;
+
+// The protocol state of a node (an adapter, slave or broker).
+struct Host
+{
+    std::vector<Window*> rttWindows;                               // modbus_latency
+    std::unordered_map<uint32_t, std::vector<Connection*>> routes; // broker: topic -> subscribers
+    uint64_t waiting = 0; // broker: messages waiting for a subscriber's connection
+};
+
+class Connection
+{
+  public:
+    enum End
+    {
+        Client = 0,
+        Server = 1,
+    };
+
+    Connection(Ptr<Node> client, Ipv4Address server, uint16_t port, Host* clientHost, Host* serverHost)
+        : m_client(client),
+          m_server(server),
+          m_port(port)
+    {
+        m_hosts[Client] = clientHost;
+        m_hosts[Server] = serverHost;
+    }
+
+    void Open()
+    {
+        Ptr<Socket> s = Socket::CreateSocket(m_client, TcpSocketFactory::GetTypeId());
+        s->Bind();
+        s->SetRecvCallback(MakeCallback(&Connection::ReceiveAtClient, this));
+        s->Connect(InetSocketAddress(m_server, m_port));
+        Attach(Client, s); // data may be sent while the handshake runs
+    }
+
+    // The server's end, accepted.
+    void Accepted(Ptr<Socket> s)
+    {
+        s->SetRecvCallback(MakeCallback(&Connection::ReceiveAtServer, this));
+        Attach(Server, s);
+    }
+
+    void Send(End from, Sent message)
+    {
+        if (!m_sockets[from])
+        {
+            m_waiting[from].push_back(message);
+            ++m_hosts[from]->waiting;
+            return;
+        }
+        Ptr<Packet> packet = Create<Packet>(message.bytes);
+        packet->AddByteTag(OriginTag(message.origin));
+        if (m_sockets[from]->Send(packet) < 0)
+        {
+            Fail("a TCP send buffer overflowed");
+        }
+        m_inFlight[1 - from].push_back(message);
+    }
+
+  private:
+    void Attach(End end, Ptr<Socket> s)
+    {
+        m_sockets[end] = s;
+        std::deque<Sent> waiting;
+        std::swap(waiting, m_waiting[end]);
+        m_hosts[end]->waiting -= waiting.size();
+        for (const Sent& message : waiting)
+        {
+            Send(end, message);
+        }
+    }
+
+    void ReceiveAtClient(Ptr<Socket> s)
+    {
+        Receive(Client, s);
+    }
+
+    void ReceiveAtServer(Ptr<Socket> s)
+    {
+        Receive(Server, s);
+    }
+
+    void Receive(End at, Ptr<Socket> s)
+    {
+        while (Ptr<Packet> p = s->Recv())
+        {
+            m_received[at] += p->GetSize();
+        }
+        std::deque<Sent>& coming = m_inFlight[at];
+        while (!coming.empty() && m_received[at] >= coming.front().bytes)
+        {
+            Sent message = coming.front();
+            coming.pop_front();
+            m_received[at] -= message.bytes;
+            Arrived(at, message);
+        }
+    }
+
+    // A reply, sent at this instant once TCP has handled the segment that
+    // completed the message. TCP sends what one end has received data to
+    // send at once, and other data one time step (1 ns) later; going
+    // through the event queue, every reply takes the second way, in the
+    // order the application makes them, as on the reference engine.
+    static void Reply(Connection* c, End from, Sent message)
+    {
+        Simulator::ScheduleNow(&Connection::Send, c, from, message);
+    }
+
+    // A whole message has arrived at one end: the application acts at once.
+    void Arrived(End at, const Sent& message)
+    {
+        uint64_t now = Simulator::Now().GetNanoSeconds();
+        Host* host = m_hosts[at];
+        switch (message.kind)
+        {
+        case Message::ModbusRequest:
+            // the response carries the request's origin, for the round trip
+            Reply(this, Server, {Message::ModbusResponse, message.reply, message.origin});
+            break;
+        case Message::ModbusResponse:
+            for (Window* w : host->rttWindows)
+            {
+                w->sum += now - message.origin;
+                ++w->count;
+            }
+            break;
+        case Message::Publish:
+            if (auto route = host->routes.find(message.reply); route != host->routes.end())
+            {
+                for (Connection* subscriber : route->second)
+                {
+                    Reply(subscriber, Server, {Message::Forward, message.bytes, message.origin});
+                }
+            }
+            if (message.qos > 0)
+            {
+                Reply(this, Server, {Message::Puback, MQTT_PUBACK_MESSAGE_BYTES, now});
+            }
+            break;
+        case Message::Forward:
+        case Message::Puback:
+            break;
+        }
+    }
+
+    Ptr<Node> m_client;
+    Ipv4Address m_server;
+    uint16_t m_port;
+    Host* m_hosts[2];
+    Ptr<Socket> m_sockets[2];
+    std::deque<Sent> m_waiting[2];  // to send from an end whose socket is not there yet
+    std::deque<Sent> m_inFlight[2]; // on the way to an end, in order
+    uint64_t m_received[2] = {0, 0}; // bytes of the first message there that have arrived
+};
+
+// The listening socket of a slave or broker, which hands each accepted
+// connection to its Connection by the client's address.
+class Listener
+{
+  public:
+    Listener(Ptr<Node> node, uint16_t port)
+    {
+        m_socket = Socket::CreateSocket(node, TcpSocketFactory::GetTypeId());
+        m_socket->Bind(InetSocketAddress(Ipv4Address::GetAny(), port));
+        m_socket->Listen();
+        m_socket->SetAcceptCallback(MakeNullCallback<bool, Ptr<Socket>, const Address&>(),
+                                    MakeCallback(&Listener::Accept, this));
+    }
+
+    void Expect(Ipv4Address client, Connection* connection)
+    {
+        m_connections[client.Get()] = connection;
+    }
+
+  private:
+    void Accept(Ptr<Socket> s, const Address& from)
+    {
+        uint32_t client = InetSocketAddress::ConvertFrom(from).GetIpv4().Get();
+        auto it = m_connections.find(client);
+        if (it != m_connections.end())
+        {
+            it->second->Accepted(s);
+        }
+    }
+
+    Ptr<Socket> m_socket;
+    std::unordered_map<uint32_t, Connection*> m_connections;
+};
+
+// Modbus polls or MQTT PUBLISH messages at constant instants, as
+// smolpy.sim.engine._modbus_poll_gen and _mqtt_traffic_gen.
+struct Periodic
+{
+    Connection* connection;
+    Sent message;
+    Instants instants;
+    uint64_t stopNs;
+
+    void Next()
+    {
+        uint64_t t = instants.Next();
+        if (t < stopNs)
+        {
+            Simulator::Schedule(NanoSeconds(t - Simulator::Now().GetNanoSeconds()),
+                                &Periodic::Fire,
+                                this);
+        }
+    }
+
+    void Fire()
+    {
+        Sent m = message;
+        m.origin = Simulator::Now().GetNanoSeconds();
+        connection->Send(Connection::Client, m);
+        Next();
+    }
+};
+
 enum class Kind
 {
     Throughput,
@@ -757,6 +1027,8 @@ enum class Kind
     BytesReceived,
     QueueDepth,
     Utilization,
+    ModbusLatency,
+    BrokerQueue,
 };
 
 struct Observation
@@ -766,7 +1038,8 @@ struct Observation
     Ptr<SmolDevice> device;          // an adapter's port
     SmolSwitch* sw = nullptr;        // queue_depth
     std::vector<Ptr<SmolDevice>> in; // utilization: the ports that send to the target
-    Window window;                   // latency
+    Host* host = nullptr;            // broker_queue
+    Window window;                   // latency, modbus_latency
     Instants ticks;
     uint64_t stopNs;
     std::ostream* out;
@@ -785,6 +1058,7 @@ Sample(Observation* o)
         a = o->device->bytesReceived;
         break;
     case Kind::Latency:
+    case Kind::ModbusLatency:
         a = o->window.sum;
         b = o->window.count;
         o->window = Window();
@@ -801,6 +1075,9 @@ Sample(Observation* o)
             a += d->bitsSent + d->framesSent * WIRE_OVERHEAD_BITS;
         }
         break;
+    case Kind::BrokerQueue:
+        a = o->host->waiting;
+        break;
     }
     *o->out << o->index << ' ' << now << ' ' << a << ' ' << b << '\n';
     uint64_t next = o->ticks.Next();
@@ -810,17 +1087,16 @@ Sample(Observation* o)
     }
 }
 
-[[noreturn]] void
-Fail(const std::string& what)
-{
-    std::cerr << "smol-ns3: " << what << std::endl;
-    std::exit(2);
-}
-
 int
 Run(std::istream& in, std::ostream& out)
 {
     Time::SetResolution(Time::NS);
+    // TCP for Modbus and MQTT: Ethernet's MSS, and a 20 B header on every
+    // segment, as SMOL sizes their frames (no timestamp option). The
+    // applications never block: the send buffer holds what TCP cannot send yet.
+    Config::SetDefault("ns3::TcpSocket::SegmentSize", UintegerValue(1460));
+    Config::SetDefault("ns3::TcpSocket::SndBufSize", UintegerValue(1U << 30));
+    Config::SetDefault("ns3::TcpSocketBase::Timestamp", BooleanValue(false));
 
     std::string word;
     uint32_t version = 0;
@@ -936,7 +1212,8 @@ Run(std::istream& in, std::ostream& out)
             s >> sw >> mac >> port;
             switches[switchOf[sw]].table[MacKey(Mac48Address(mac.c_str()))] = port;
         }
-        else if (word == "flow" || word == "sends" || word == "sink" || word == "observe")
+        else if (word == "flow" || word == "sends" || word == "sink" || word == "connect" ||
+                 word == "poll" || word == "publish" || word == "route" || word == "observe")
         {
             break; // the network is complete: IPv4 and neighbour caches come first
         }
@@ -984,6 +1261,18 @@ Run(std::istream& in, std::ostream& out)
         }
     }
 
+    std::vector<Host> hosts(nodes.GetN());
+    std::vector<std::unique_ptr<Connection>> connections;
+    std::map<std::pair<uint32_t, uint16_t>, std::unique_ptr<Listener>> listeners;
+    std::vector<std::unique_ptr<Periodic>> periodics;
+    auto connection = [&](std::size_t c) {
+        if (c >= connections.size())
+        {
+            Fail("bad connection: " + line);
+        }
+        return connections[c].get();
+    };
+
     // traffic and observations: the line that ended the network is first
     do
     {
@@ -992,7 +1281,77 @@ Run(std::istream& in, std::ostream& out)
         {
             continue;
         }
-        if (word == "flow" || word == "sends")
+        if (word == "connect")
+        {
+            uint32_t client;
+            uint32_t server;
+            uint16_t port;
+            s >> client >> server >> port;
+            if (!s || client >= nodes.GetN() || server >= nodes.GetN() || !portOf[client])
+            {
+                Fail("bad connect: " + line);
+            }
+            connections.push_back(std::make_unique<Connection>(nodes.Get(client),
+                                                               ips[server],
+                                                               port,
+                                                               &hosts[client],
+                                                               &hosts[server]));
+            Connection* c = connections.back().get();
+            if (portOf[server]) // a server without a link never answers
+            {
+                auto& listener = listeners[{server, port}];
+                if (!listener)
+                {
+                    listener = std::make_unique<Listener>(nodes.Get(server), port);
+                }
+                listener->Expect(ips[client], c);
+            }
+            Simulator::Schedule(NanoSeconds(0), &Connection::Open, c);
+        }
+        else if (word == "poll" || word == "publish")
+        {
+            std::size_t c;
+            Sent message{};
+            uint32_t qos = 0;
+            uint64_t delayNs;
+            uint64_t num;
+            uint64_t den;
+            if (word == "poll")
+            {
+                message.kind = Message::ModbusRequest;
+                s >> c >> message.bytes >> message.reply >> delayNs >> num >> den;
+            }
+            else
+            {
+                message.kind = Message::Publish;
+                s >> c >> message.bytes >> qos >> message.reply >> delayNs >> num >> den;
+                message.qos = qos;
+            }
+            if (!s)
+            {
+                Fail("bad " + word + ": " + line);
+            }
+            periodics.push_back(std::make_unique<Periodic>(
+                Periodic{connection(c), message, Instants(delayNs, num, den), durationNs}));
+            periodics.back()->Next();
+        }
+        else if (word == "route")
+        {
+            uint32_t broker;
+            uint32_t topic;
+            s >> broker >> topic;
+            if (!s || broker >= nodes.GetN())
+            {
+                Fail("bad route: " + line);
+            }
+            std::vector<Connection*>& subscribers = hosts[broker].routes[topic];
+            std::size_t c;
+            while (s >> c)
+            {
+                subscribers.push_back(connection(c));
+            }
+        }
+        else if (word == "flow" || word == "sends")
         {
             uint32_t src;
             std::string dst;
@@ -1084,6 +1443,16 @@ Run(std::istream& in, std::ostream& out)
                 {
                     o->in.push_back(devices.at(d));
                 }
+            }
+            else if (kind == "modbus_latency")
+            {
+                o->kind = Kind::ModbusLatency;
+                hosts.at(target).rttWindows.push_back(&o->window);
+            }
+            else if (kind == "broker_queue")
+            {
+                o->kind = Kind::BrokerQueue;
+                o->host = &hosts.at(target);
             }
             else
             {

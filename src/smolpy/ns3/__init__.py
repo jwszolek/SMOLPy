@@ -1,4 +1,5 @@
-"""The ns-3 backend (ADR-0004): SMOLPy scenarios on ns-3's IPv4/UDP stack.
+"""The ns-3 backend (ADR-0004): SMOLPy scenarios on ns-3's IPv4 stack, with
+UDP for flows and TCP for Modbus and MQTT.
 
 A scenario is lowered to plain lines of integers (every time in integer
 nanoseconds, every speed and period an exact rational) and run by
@@ -34,7 +35,12 @@ from typing import TYPE_CHECKING
 
 from smolpy import model
 from smolpy.model import timebase as tb
-from smolpy.model.frames import IFG_BYTES
+from smolpy.model.frames import (
+    IFG_BYTES,
+    MODBUS_REQUEST_MESSAGE_BYTES,
+    modbus_response_message_bytes,
+    mqtt_publish_message_bytes,
+)
 from smolpy.model.streams import source_ids, stream_seed
 
 if TYPE_CHECKING:
@@ -44,6 +50,8 @@ FORMAT_VERSION = 1
 UDP_IP_BYTES = 8 + 20
 ETHERNET_BYTES = 14 + 4  # header and FCS
 PROGRAM = "smol-ns3"
+MODBUS_PORT = 502
+MQTT_PORT = 1883
 
 
 class Ns3Unavailable(RuntimeError):
@@ -207,8 +215,8 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
     index = {n.name: i for i, n in enumerate(scenario.nodes)}
     lines = [f"smol-ns3 {FORMAT_VERSION}", f"duration {tb.ms_to_ns(scenario.run.duration_ms)}"]
     for n in scenario.nodes:
-        if isinstance(n, model.AdapterNode):
-            lines.append(f"adapter {n.mac} {n.ip}")
+        if isinstance(n, model.AdapterNode | model.MqttBrokerNode | model.ModbusSlaveNode):
+            lines.append(f"adapter {n.mac} {n.ip}")  # an IPv4 host
         elif isinstance(n, model.SwitchNode):
             lines.append("switch")
         else:  # the capabilities exclude it
@@ -238,7 +246,7 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
         into.setdefault(b.name, []).append((2 * i, speed))
         # a switch knows the stations wired to it from the start
         for end, other, port in ((a, b, port_b), (b, a, port_a)):
-            if isinstance(end, model.AdapterNode) and isinstance(other, model.SwitchNode):
+            if not isinstance(end, model.SwitchNode) and isinstance(other, model.SwitchNode):
                 static.setdefault(other.name, {})[end.mac] = port
     for n in scenario.nodes:
         if isinstance(n, model.SwitchNode) and n.mac_table == "topology":
@@ -250,7 +258,46 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
 
     sinks: list[str] = []
     duration_ns = tb.ms_to_ns(scenario.run.duration_ms)
+    connections: dict[tuple[str, str], int] = {}  # one per client and server
+    topics: dict[str, int] = {}
+
+    def connection(client: str, server: str, port: int) -> int:
+        if (client, server) not in connections:
+            connections[client, server] = len(connections)
+            lines.append(f"connect {index[client]} {index[server]} {port}")
+        return connections[client, server]
+
+    def periodic(rate: float, delay_ms: float) -> str:
+        num, den = _ratio(tb.interval_ns(rate))
+        return f"{tb.ms_to_ns(delay_ms)} {num} {den}"
+
     for t, source_id in zip(scenario.traffic, source_ids(scenario), strict=True):
+        if isinstance(t, model.Poll):
+            if t.source in has_link:
+                c = connection(t.source, t.slave, MODBUS_PORT)
+                response = modbus_response_message_bytes(t.count)
+                lines.append(
+                    f"poll {c} {MODBUS_REQUEST_MESSAGE_BYTES} {response}"
+                    f" {periodic(t.rate, t.delay_ms)}"
+                )
+            continue
+        if isinstance(t, model.Publish):
+            if t.source in has_link:
+                c = connection(t.source, t.broker, MQTT_PORT)
+                topic = topics.setdefault(t.topic, len(topics))
+                message = mqtt_publish_message_bytes(t.topic, t.payload, t.qos)
+                lines.append(
+                    f"publish {c} {message} {t.qos} {topic} {periodic(t.rate, t.delay_ms)}"
+                )
+            continue
+        if isinstance(t, model.Route):
+            topic = topics.setdefault(t.topic, len(topics))
+            subscribers = [
+                connection(sub, t.broker, MQTT_PORT) for sub in t.subscribers if sub in has_link
+            ]
+            listed = " ".join(str(c) for c in subscribers)
+            lines.append(f"route {index[t.broker]} {topic} {listed}".rstrip())
+            continue
         if not isinstance(t, model.Flow):
             raise ValueError(f"the ns3 backend does not support {t.kind} traffic")
         if t.source not in has_link:
@@ -280,8 +327,10 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
         devices = ""
         speed = Fraction(0)
         metric = obs.metric
-        if metric in ("throughput", "latency", "bytes_received"):
+        if metric in ("throughput", "latency", "bytes_received", "modbus_latency"):
             ok = adapter and target.name in has_link
+        elif metric == "broker_queue":
+            ok = isinstance(target, model.MqttBrokerNode)
         elif metric == "bytes_sent":
             ok = adapter and target.name in has_link
         elif metric == "queue_depth":
@@ -325,14 +374,14 @@ def _metrics(
             t_ms = tb.ns_to_ms(t)
             if s.metric == "throughput":
                 out.append((t_ms, (a - last) * 8 * tb.NS_PER_US / (t - last_t)))
-            elif s.metric == "latency":
+            elif s.metric in ("latency", "modbus_latency"):
                 if b:
                     out.append((t_ms, a / (b * tb.NS_PER_US)))
             elif s.metric == "bytes_received":
                 out.append((t_ms, a / 1_000_000))
             elif s.metric == "bytes_sent":
                 out.append((t_ms, a // 8 / 1_000_000))
-            elif s.metric == "queue_depth":
+            elif s.metric in ("queue_depth", "broker_queue"):
                 out.append((t_ms, float(a)))
             elif s.metric == "utilization":
                 out.append((t_ms, tb.quotient((a - last) * 100_000, s.speed * (t - last_t))))
