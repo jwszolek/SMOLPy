@@ -112,7 +112,14 @@ def program(ns3: Installation) -> Path:
     target = _cache_dir() / key.hexdigest()[:16] / PROGRAM
     if target.is_file():
         return target
-    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:  # e.g. the read-only cache of the -ns3 image
+        raise Ns3Unavailable(
+            f"{PROGRAM} for this ns-3 build and compiler ({ns3.compiler}) is not built, and"
+            f" cannot be built in {target.parent.parent}: {exc.strerror}. Set XDG_CACHE_HOME"
+            " to a writable directory to build it there."
+        ) from exc
     with tempfile.TemporaryDirectory(dir=target.parent) as tmp:
         src = Path(tmp) / "smol-ns3.cc"
         src.write_bytes(_source())

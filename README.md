@@ -71,6 +71,15 @@ docker run --rm -v "$PWD:/work" ghcr.io/jwszolek/smolpy run plant.smol --backend
 - It runs as uid 1000. To own the files it writes as yourself, add `--user "$(id -u):$(id -g)"`.
 - A version is pinned as `ghcr.io/jwszolek/smolpy:<version>`; `latest` is the latest release.
 
+**With ns-3,** from the image `<version>-ns3` or `latest-ns3`, for `linux/amd64`, published from 1.10.0 on. It adds the pinned ns-3 build and the ns-3 backend, ready to run:
+
+```bash
+docker run --rm -v "$PWD:/work" ghcr.io/jwszolek/smolpy:latest-ns3 run plant.smol --backend ns3 -o results.csv
+```
+
+- It is about 1.3 GB (300 MB to download), because it holds ns-3's build and a C++ toolchain.
+- It contains ns-3, so it is distributed under GPLv2's terms. SMOLPy itself stays MIT.
+
 From a clone, for development:
 
 ```bash
@@ -454,7 +463,7 @@ Every simulation goes through the same path. The Python API and `.smol` files bu
 |---|---|---|---|---|
 | `simpy` (default) | Python, SimPy | the whole model, the live and text dashboards | reference | included |
 | `rust` | Rust, through PyO3 | the whole model, headless: Ethernet, Modbus TCP, MQTT and PROFINET RT, every metric | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy[rust]` (since v1.8.0) |
-| `ns3` | ns-3's IPv4 stack, from C++ | the whole model, headless. Ethernet over UDP and PROFINET RT on layer 2, bit-exact with SimPy. Modbus TCP and MQTT over ns-3's TCP, which adds connection setup and acknowledgements | slower: each run is an ns-3 process | an ns-3 3.49 build in `NS3_HOME`, e.g. the image `ghcr.io/jwszolek/smolpy-ns3-base:3.49` |
+| `ns3` | ns-3's IPv4 stack, from C++ | the whole model, headless. Ethernet over UDP and PROFINET RT on layer 2, bit-exact with SimPy. Modbus TCP and MQTT over ns-3's TCP, which adds connection setup and acknowledgements | slower: each run is an ns-3 process | the image `ghcr.io/jwszolek/smolpy:latest-ns3`, or an ns-3 3.49 build in `NS3_HOME` |
 
 ```python
 result = net.simulate(duration=60_000, backend="rust")       # one run

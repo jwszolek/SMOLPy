@@ -215,7 +215,10 @@ class Ns3Backend:
     def run(self, scenario: Scenario) -> SimulationResult:
         from smolpy import ns3
 
-        return ns3.run(scenario)
+        try:
+            return ns3.run(scenario)
+        except ns3.Ns3Unavailable as exc:  # e.g. smol-ns3 cannot be built
+            raise BackendUnavailable(f"the ns3 backend is not available: {exc}") from exc
 
 
 REGISTRY: dict[str, Backend] = {b.name: b for b in (SimPyBackend(), RustBackend(), Ns3Backend())}

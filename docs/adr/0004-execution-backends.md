@@ -183,12 +183,19 @@ ns-3 is the one backend that cannot be installed with `pip`. It is a C++ code ba
 
 *As built (2026-11-16):* the image without ns-3 is `docker/Dockerfile`, built by `.github/workflows/docker-image.yml`. Each release, `publish.yml` calls it once both packages are on PyPI. It tests the image of each platform with the wheel smoke test and a `.smol` run through the CLI before it pushes `<version>` and `latest`. A pull request that changes the image builds and tests it for `linux/amd64` and pushes nothing. The image runs as uid 1000, not as root.
 
+*As built (2026-11-16):* the image with ns-3 is `docker/Dockerfile.ns3`, built by a second job of the same workflow, for `linux/amd64`:
+- **Contents.** The base image `smolpy-ns3-base:3.49`, plus `smolpy` and `smolpy-engine-rs` from the same wheels as the image without ns-3.
+- **`smol-ns3` built in.** It is built once, in the image, into a cache that every user reads (`XDG_CACHE_HOME=/opt/smolpy/cache`). No run compiles it. The cache is read-only, so a run that would need another build, for example with another `CXX`, fails instead of building one. Its message says to set `XDG_CACHE_HOME` to a writable directory, where the build then takes about 8 s.
+- **Tests.** Before the image is pushed, CI runs `docker/smoke.smol`, with every protocol, on ns-3 through the CLI as uid 1000. It also runs the ns-3 suite of the same commit against the SMOLPy installed in the image.
+- **Tags.** `<version>-ns3` and `latest-ns3`, first published with 1.10.0. `latest` remains the image without ns-3.
+- **Size.** 1.26 GB unpacked, 303 MB compressed, for 1.9.1.dev9. ns-3's build and the C++ toolchain stay in the image.
+
 **Registry and images.** The images are published to the GitHub Container Registry, `ghcr.io/jwszolek/smolpy`, public, for `linux/amd64` and `linux/arm64`:
 
 | Tag | Contents | Size | From |
 |---|---|---|---|
 | `<version>`, `latest` | Python, `smolpy` and `smolpy-engine-rs` from the release's own wheels | ~ 200 MB | the first release that publishes the Rust engine (ADR-0008 step 7) |
-| `<version>-ns3`, `latest-ns3` | the above, plus the pinned ns-3 release built with the SMOL C++ module, and `NS3_HOME` set | several GB | Phase 6, with the ns-3 backend |
+| `<version>-ns3`, `latest-ns3` | the above, plus the pinned ns-3 release built with the SMOL C++ module, and `NS3_HOME` set | ~~several GB~~ *as built:* 1.3 GB, 300 MB compressed | Phase 6, with the ns-3 backend |
 
 The entry point is the CLI:
 
@@ -200,7 +207,7 @@ docker run --rm -v "$PWD:/work" -w /work ghcr.io/jwszolek/smolpy:latest-ns3 run 
 - **Headless only.** The live dashboard needs a display, which a container does not have. Headless runs, text mode, `--runs` and `-o` all work.
 - **Built at release.** `publish.yml` builds and pushes the images at each release, after `smolpy` and `smolpy-engine-rs` are on PyPI, from the same files. The pushed images are listed under the repository's "Packages". The Dockerfiles live in `docker/`.
 - **ns-3 is built once per pinned release.** It is built in a separate base image, `ghcr.io/jwszolek/smolpy-ns3-base:<ns-3 version>`, which is rebuilt only when the pinned version changes. Each release then adds SMOLPy to it in a few minutes, instead of rebuilding ns-3.
-- **CI uses the image.** The ns-3 equivalence suite (ADR-0009) runs inside `<version>-ns3`, or inside the base image for pull requests. It never builds ns-3 itself.
+- **CI uses the image.** The ns-3 equivalence suite (ADR-0009) runs inside `<version>-ns3`, or inside the base image for pull requests. It never builds ns-3 itself. *As built (2026-11-16):* pull requests run it in the base image, against the SMOLPy of the pull request. Each release runs it in the new `<version>-ns3` image before pushing it.
 - **Reproducible results.** An image tag fixes the SMOLPy, Rust engine and ns-3 versions together. Recording the image digest next to the scenario JSON, and the generated ns-3 scenario (`--keep-generated`), is enough to rerun a published experiment exactly.
 - **Licences.** ns-3 is licensed under GPLv2, and SMOLPy and its Rust engine under MIT.
     - The `-ns3` image distributes ns-3 binaries and the SMOL C++ module linked against them, so that image as a whole is distributed under GPLv2's terms.

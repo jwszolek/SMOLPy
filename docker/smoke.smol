@@ -1,5 +1,6 @@
 # Run by CI in every image it builds: the CLI, a .smol file and the Rust
-# engine, with every protocol, writing its results to the mounted directory.
+# engine, or ns-3 in the -ns3 image, with every protocol, writing its results
+# to the mounted directory.
 
 network "image-smoke" {
 
