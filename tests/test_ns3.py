@@ -50,17 +50,15 @@ def test_a_build_is_found(monkeypatch, tmp_path) -> None:
 
 def test_a_cache_it_cannot_write_is_explained(monkeypatch, tmp_path) -> None:
     """In the -ns3 image the cache is read-only, with smol-ns3 built in: a
-    run that would need another build says so, and what to do."""
+    run that would need another build says so, and what to do. Here the
+    cache is a file, which no user can create directories in, root
+    included (CI runs as root)."""
     cache = tmp_path / "cache"
-    cache.mkdir()
-    cache.chmod(0o555)
+    cache.write_text("")
     monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
     found = ns3.Installation(tmp_path, tmp_path, tmp_path, ("ns3.49-core",), "c++")
-    try:
-        with pytest.raises(ns3.Ns3Unavailable, match="not built, and cannot be built in .*XDG"):
-            ns3.program(found)
-    finally:
-        cache.chmod(0o755)
+    with pytest.raises(ns3.Ns3Unavailable, match="not built, and cannot be built in .*XDG"):
+        ns3.program(found)
 
 
 def _network() -> Network:
