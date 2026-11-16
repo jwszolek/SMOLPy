@@ -1,5 +1,5 @@
 """The ns-3 backend (ADR-0004): SMOLPy scenarios on ns-3's IPv4 stack, with
-UDP for flows and TCP for Modbus and MQTT.
+UDP for flows and TCP for Modbus and MQTT, and PROFINET RT on layer 2.
 
 A scenario is lowered to plain lines of integers (every time in integer
 nanoseconds, every speed and period an exact rational) and run by
@@ -40,6 +40,7 @@ from smolpy.model.frames import (
     MODBUS_REQUEST_MESSAGE_BYTES,
     modbus_response_message_bytes,
     mqtt_publish_message_bytes,
+    pn_frame_size,
 )
 from smolpy.model.streams import source_ids, stream_seed
 
@@ -215,12 +216,10 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
     index = {n.name: i for i, n in enumerate(scenario.nodes)}
     lines = [f"smol-ns3 {FORMAT_VERSION}", f"duration {tb.ms_to_ns(scenario.run.duration_ms)}"]
     for n in scenario.nodes:
-        if isinstance(n, model.AdapterNode | model.MqttBrokerNode | model.ModbusSlaveNode):
-            lines.append(f"adapter {n.mac} {n.ip}")  # an IPv4 host
-        elif isinstance(n, model.SwitchNode):
+        if isinstance(n, model.SwitchNode):
             lines.append("switch")
-        else:  # the capabilities exclude it
-            raise ValueError(f"the ns3 backend does not support {n.kind} nodes")
+        else:
+            lines.append(f"adapter {n.mac} {n.ip}")  # a station, with IPv4
 
     next_port: dict[str, int] = {n.name: 0 for n in scenario.nodes}
     neighbours: dict[str, list[tuple[int, str]]] = {n.name: [] for n in scenario.nodes}
@@ -271,7 +270,19 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
         num, den = _ratio(tb.interval_ns(rate))
         return f"{tb.ms_to_ns(delay_ms)} {num} {den}"
 
+    # PROFINET ARs first, by controller in node order, as the reference engine
+    # starts them: their first frames are sent at the start of the run
+    ars = [t for t in scenario.traffic if isinstance(t, model.ProfinetAR)]
+    for ar_id, pn in enumerate(sorted(ars, key=lambda ar: index[ar.controller])):
+        if pn.controller in has_link and pn.device in has_link:
+            lines.append(
+                f"ar {index[pn.controller]} {index[pn.device]} {ar_id}"
+                f" {tb.ms_to_ns(pn.cycle_ms)} {pn.hold} {tb.ms_to_ns(pn.delay_ms)}"
+                f" {pn_frame_size(pn.outputs)} {pn_frame_size(pn.inputs)}"
+            )
     for t, source_id in zip(scenario.traffic, source_ids(scenario), strict=True):
+        if isinstance(t, model.ProfinetAR):
+            continue
         if isinstance(t, model.Poll):
             if t.source in has_link:
                 c = connection(t.source, t.slave, MODBUS_PORT)
@@ -331,6 +342,8 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
             ok = adapter and target.name in has_link
         elif metric == "broker_queue":
             ok = isinstance(target, model.MqttBrokerNode)
+        elif metric in ("pn_latency", "pn_jitter", "pn_watchdog_expiries"):
+            ok = isinstance(target, model.AdapterNode | model.ProfinetDeviceNode)
         elif metric == "bytes_sent":
             ok = adapter and target.name in has_link
         elif metric == "queue_depth":
@@ -374,14 +387,17 @@ def _metrics(
             t_ms = tb.ns_to_ms(t)
             if s.metric == "throughput":
                 out.append((t_ms, (a - last) * 8 * tb.NS_PER_US / (t - last_t)))
-            elif s.metric in ("latency", "modbus_latency"):
+            elif s.metric in ("latency", "modbus_latency", "pn_latency"):
                 if b:
                     out.append((t_ms, a / (b * tb.NS_PER_US)))
+            elif s.metric == "pn_jitter":
+                if b:
+                    out.append((t_ms, a / tb.NS_PER_US))
             elif s.metric == "bytes_received":
                 out.append((t_ms, a / 1_000_000))
             elif s.metric == "bytes_sent":
                 out.append((t_ms, a // 8 / 1_000_000))
-            elif s.metric in ("queue_depth", "broker_queue"):
+            elif s.metric in ("queue_depth", "broker_queue", "pn_watchdog_expiries"):
                 out.append((t_ms, float(a)))
             elif s.metric == "utilization":
                 out.append((t_ms, tb.quotient((a - last) * 100_000, s.speed * (t - last_t))))

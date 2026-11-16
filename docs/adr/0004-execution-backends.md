@@ -117,6 +117,7 @@ smolpy backends                             # list backends and their capabiliti
 | SMOL | ns-3 |
 |---|---|
 | `adapter`, `mqtt_broker`, `modbus_slave` | Node with Internet stack (IPv4 address from `ip`) |
+| `profinet_device`, `controls` | *Added 2026-11-16:* a node whose device sends and receives PROFINET RT frames on layer 2; see "PROFINET RT on ns-3" below |
 | `switch` (store-and-forward) | ~~Node with a learning bridge over one device per port~~ *As built:* a node with one SMOL Ethernet device per port and SMOL's switch, which learns, floods unknown destinations and drops hairpins. ns-3's `BridgeNetDevice` floods a hairpin instead of dropping it. |
 | `switch mode=cut-through` | **unsupported** — capability error |
 | `hub` | Shared CSMA channel *(hubs and `collision_rate` were later removed; see [Model Semantics](../model-semantics.md#open-issues), open issue 3)* |
@@ -151,7 +152,7 @@ smolpy backends                             # list backends and their capabiliti
 | `bytes_sent` | frames whose transmission on the node's device has completed (`PhyTxEnd`), frame bytes |
 | `latency` | from the origin time, carried in a packet tag set when the data is created, to reception by the device. Queueing at the sender is included, as in SimPy. |
 | `modbus_latency` | the same, with the request's origin tag copied into the response. *As built:* measured when the master has the whole response. |
-| `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` | the SMOL PROFINET consumer application, with the definitions of Model Semantics §7 |
+| `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` | the SMOL PROFINET consumer application, with the definitions of Model Semantics §7. *As built:* the node's consumer, called by its device for each PROFINET frame; see "PROFINET RT on ns-3" below. |
 | `queue_depth` | frames waiting in the egress queues of the switch's devices, not counting the frame in transmission |
 | `utilization` | frame + 20 B per frame completed on the links into the node, as a share of their capacity (ADR-0010) |
 | `broker_queue` | the queue of the broker application. *As built:* messages waiting for a subscriber's connection, which the subscriber has not yet opened. The broker handles a message at once, as on SimPy, so the queue is otherwise empty. |
@@ -278,6 +279,17 @@ What ns-3 is there for is its TCP. The backend therefore keeps everything else a
 
 - **Low load.** After the first messages, ns-3 is SimPy plus 2 ns per message. The remaining differences are the handshake, the first acknowledgement, and the acknowledgements of one-way traffic.
 - **Loaded.** The acknowledgements reorder frames in shared queues, so differences remain throughout the run. They are reported, not asserted (ADR-0009). Quantifying them under heavier load, where TCP's flow and congestion control act, is the next part of this research.
+
+**PROFINET RT on ns-3** *(built 2026-11-16)*
+
+PROFINET RT is a layer 2 protocol (EtherType 0x8892), without IP, so ns-3's stack has nothing to add to it. The backend runs it on SMOL's Ethernet device, so that scenarios that mix PROFINET with flows, Modbus and MQTT run whole on ns-3.
+- **Providers.** Each AR has a provider on the controller (outputs) and on the device (inputs). Each one hands a frame to its device every cycle, from the AR's start delay on.
+    - Frames are sized by the model's formula (`pn_frame_size`), 802.1Q tag and padding included.
+    - Their priority is 6, served strictly by the egress queues, or FIFO on a switch with `qos="fifo"`.
+    - The providers start by controller in node order, as on the reference engine.
+- **Consumers.** Each node's consumer measures latency and jitter, and supervises each AR with a watchdog, as defined in Model Semantics §7. The watchdog is one ns-3 event at `hold × cycle` after the last frame. Each frame cancels it and sets it again.
+- **The deadline comes first.** A frame that arrives exactly at the deadline was scheduled after the watchdog, at the end of its transmission. ns-3 runs events of one instant in the order they were scheduled, so the expiry counts, and the frame then restarts supervision. That is SimPy's outcome, where the watchdog's timeout fires before the frame is delivered.
+- **Results.** `priorities`, `cyclic` and `batches` (with the same seed) give SimPy's results bit for bit. That includes watchdog expiries under load, and a hold of one cycle with no jitter, where every frame arrives at its deadline (`test_a_frame_at_the_watchdogs_deadline_is_too_late`).
 
 **The ns-3 base image, as built** *(2026-11-16)*:
 - `ghcr.io/jwszolek/smolpy-ns3-base:3.49`, built by `.github/workflows/ns3-base.yml` from `docker/ns3-base/Dockerfile`, for `linux/amd64` only for now. It is rebuilt when that Dockerfile changes, and pushed after the merge to `main`.

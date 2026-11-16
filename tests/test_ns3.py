@@ -181,27 +181,41 @@ def fake_ns3(monkeypatch):
     monkeypatch.setattr(ns3, "locate", lambda: None)
 
 
-def test_profinet_is_outside_its_capabilities(fake_ns3) -> None:
-    net = Network("prio")
+def test_it_runs_the_whole_model(fake_ns3) -> None:
+    """Every node, traffic kind, pattern and metric of the reference engine;
+    headless only."""
+    ns3_caps = backends.REGISTRY["ns3"].capabilities()
+    simpy_caps = backends.REGISTRY["simpy"].capabilities()
+    for field in ("nodes", "traffic", "patterns", "metrics", "features"):
+        assert getattr(ns3_caps, field) == getattr(simpy_caps, field), field
+    assert ns3_caps.priorities and not ns3_caps.dashboards and not ns3_caps.notes
+
+
+def test_lowering_profinet() -> None:
+    """ARs by controller in node order, as the reference engine starts them;
+    frames sized by the model, 802.1Q tag and padding included. An AR with
+    an unwired side exchanges nothing."""
+    net = Network("pn")
     sw = net.switch("sw", ports=4)
-    a = net.adapter("a", ip="10.0.0.1")
-    b = net.adapter("b", ip="10.0.0.2")
-    net.link(a, sw, speed=100, length=1)
-    net.link(b, sw, speed=100, length=1)
-    a.sends(b, rate=100, size="imix", pattern="bursty", priority=3)
-    slave = net.modbus_slave("m", ip="10.0.0.3", unit_id=1)
-    broker = net.mqtt_broker("mq", ip="10.0.0.4")
-    net.link(slave, sw, speed=100, length=1)
-    net.link(broker, sw, speed=100, length=1)
-    a.polls(slave, register=0, count=2)
-    a.publishes(broker, topic="t", qos=1)
-    broker.routes("t", to=[b])
-    for metric in ("modbus_latency", "broker_queue"):
-        net.observe(metric, on=broker if metric == "broker_queue" else a, every=1)
-    backends.check(net.to_scenario(duration=10), "ns3")  # Ethernet, Modbus and MQTT
-    net.profinet_device("io", ip="10.0.0.5")
-    with pytest.raises(ScenarioError, match="PROFINET device \\(planned for Phase 6\\)"):
-        backends.check(net.to_scenario(duration=10), "ns3")
+    drive = net.profinet_device("drive", ip="10.0.1.1")
+    robot = net.adapter("robot", ip="10.0.0.2")
+    plc = net.adapter("plc", ip="10.0.0.1")
+    spare = net.profinet_device("spare", ip="10.0.1.9")  # no link
+    for node in (drive, robot, plc):
+        net.link(node, sw, speed=100, length=0)
+    plc.controls(drive, cycle=4, inputs=100, outputs=8, hold=2, delay_ms=0.25)
+    robot.controls(drive, cycle=1, inputs=200, outputs=40)
+    plc.controls(spare, cycle=2, inputs=8, outputs=8)
+    net.observe("pn_jitter", on=drive, every=4)
+    net.observe("pn_watchdog_expiries", on=spare, every=4)  # samples 0, as on SimPy
+    text, samplers = ns3.lower(net.to_scenario(duration=10))
+    assert [line for line in text.splitlines() if line.startswith(("ar", "observe"))] == [
+        "ar 2 1 0 1000000 3 0 68 228",  # robot's first: robot comes first in node order
+        "ar 3 1 1 4000000 2 250000 64 128",  # 8 B of outputs: padded to 64 B
+        "observe pn_jitter 1 4000000 1",
+        "observe pn_watchdog_expiries 4 4000000 1",
+    ]
+    assert [s.metric for s in samplers] == ["pn_jitter", "pn_watchdog_expiries"]
 
 
 def test_priorities_can_be_outside_a_backends_capabilities(monkeypatch) -> None:
@@ -224,7 +238,7 @@ def test_priorities_can_be_outside_a_backends_capabilities(monkeypatch) -> None:
         backends.check(net.to_scenario(duration=10), "ns3")
 
 
-# --- Modbus and MQTT over ns-3's TCP ---
+# --- on ns-3 ---
 
 needs_ns3 = pytest.mark.skipif(
     not backends.REGISTRY["ns3"].available(), reason="NS3_HOME names no ns-3 build"
@@ -317,3 +331,23 @@ def test_mqtt_over_tcp(qos: int) -> None:
     message = _bytes(simpy["bytes_received:hmi"])[1]
     assert _bytes(ns3["bytes_received:hmi"]) == [SYN_ACK + message * k for k in range(5)]
     assert _values(ns3["broker_queue:broker"]) == [0.0] * 5
+
+
+@needs_ns3
+@pytest.mark.parametrize("length", [0, 100])
+def test_a_frame_at_the_watchdogs_deadline_is_too_late(length: float) -> None:
+    """With a hold of one cycle and no jitter, every frame arrives exactly at
+    the deadline, which comes first, as on SimPy: one expiry per cycle."""
+    net = Network("deadline")
+    sw = net.switch("sw", ports=2)
+    plc = net.adapter("plc", ip="10.0.0.1")
+    io = net.profinet_device("io", ip="10.0.0.2")
+    net.link(plc, sw, speed=100, length=length)
+    net.link(io, sw, speed=100, length=length)
+    plc.controls(io, cycle=1, inputs=10, outputs=10, hold=1)
+    net.observe("pn_watchdog_expiries", on=io, every=5)
+    net.observe("pn_jitter", on=io, every=5)
+    simpy, ns3 = _run(net, 20)
+    assert ns3 == simpy
+    assert _values(ns3["pn_watchdog_expiries:io"]) == [4.0, 9.0, 14.0]  # from the 2nd frame
+    assert set(_values(ns3["pn_jitter:io"])) == {0.0}
