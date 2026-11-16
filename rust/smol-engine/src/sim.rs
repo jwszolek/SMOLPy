@@ -15,11 +15,15 @@
 //! - processes are created in SimPy's order: link transmitters, then node
 //!   processes in node order, then metric samplers in observation order;
 //! - the run stops before the first event at `t = duration`.
+//!
+//! The PROFINET watchdog waits on `arrival | timeout`, a SimPy `AnyOf`
+//! condition, which is reproduced event by event (see [`PnAr`]).
 
 use crate::frames::{
     flow_frame_size, modbus_response_frame_size, mqtt_publish_frame_size, IFG_BYTES,
     MODBUS_REQUEST_BYTES, MQTT_PUBACK_BYTES, PREAMBLE_SFD_BYTES, WIRE_OVERHEAD_BYTES,
 };
+use crate::frames::{pn_frame_size, PN_RT_PRIORITY};
 use crate::rng::{stream_seed, Rng};
 use crate::scenario::{Metric, NodeKind, Pattern, Scenario, Size};
 use crate::timebase::{self as tb, Instants, Q};
@@ -38,6 +42,12 @@ enum Ev {
     Put(u32),
     /// store, process, frame
     Get(u32, u32, u32),
+    /// a PROFINET watchdog's arrival event, of AR state and round
+    Arrival(u32, u32),
+    /// its timeout, of AR state and round
+    Watchdog(u32, u32),
+    /// its `arrival | timeout` condition, of AR state and round
+    Condition(u32, u32),
 }
 
 #[derive(Clone, Copy)]
@@ -50,6 +60,8 @@ struct Frame {
     in_port: i32,
     modbus: Modbus,
     mqtt: Mqtt,
+    /// the consumer-side PROFINET AR state this cyclic frame feeds; -1 if none
+    pn_ar: i32,
 }
 
 /// The Modbus TCP fields of a frame; `unit < 0` on any other frame.
@@ -88,6 +100,7 @@ impl Frame {
             in_port: -1,
             modbus: NOT_MODBUS,
             mqtt: NOT_MQTT,
+            pn_ar: -1,
         }
     }
 }
@@ -142,6 +155,59 @@ struct Adapter {
     bytes_received: u128,
     latency_windows: Vec<u32>,
     modbus_windows: Vec<u32>, // round-trip times of Modbus responses
+    pn: u32,                  // its PROFINET consumer
+}
+
+/// A PROFINET IO device: consumes its controller's outputs.
+struct Device {
+    mac: u32,
+    inbound: u32,
+    out: Option<u32>,
+    pn: u32,
+}
+
+/// The PROFINET RT consumer of a node, across its ARs (`_PnConsumer`).
+struct PnConsumer {
+    latency_windows: Vec<u32>,
+    jitter_windows: Vec<u32>,
+    expiries: u64,
+}
+
+/// State of a SimPy event the watchdog waits on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Signal {
+    Pending,
+    Triggered,
+    Processed,
+}
+
+/// One direction of an AR at its consumer (`_PnAR`), with its watchdog.
+///
+/// Each round of the watchdog makes a new arrival event and a timeout of
+/// `hold` cycles, and waits on the condition `arrival | timeout`, which is
+/// triggered by whichever of the two is processed first and is then processed
+/// itself, as a separate event. If the arrival has been processed by then,
+/// the next round starts; otherwise the watchdog counts an expiry and waits
+/// for the arrival alone. A frame triggers the arrival only while it is
+/// pending, and the watchdog starts with the first frame.
+struct PnAr {
+    consumer: u32,
+    cycle_ns: u64,
+    timeout_ns: u64,
+    last_arrival: Option<u64>,
+    arrival: Option<Signal>, // None until the watchdog has started
+    round: u32,
+    condition_triggered: bool,
+    expired: bool,
+}
+
+/// One side's cyclic frames: one frame per cycle after the delay
+/// (`_pn_provider`).
+struct PnProvider {
+    frame: Frame,
+    chan: u32,
+    delay_ns: u64,
+    cycle_ns: u64,
 }
 
 /// A Modbus TCP slave: answers Read Holding Registers for its unit id.
@@ -216,6 +282,9 @@ enum Sampled {
     QueueDepth(u32),
     Utilization(Vec<u32>, Q),
     BrokerQueue(u32),
+    /// the window maximum, in µs
+    Jitter(u32),
+    WatchdogExpiries(u32),
 }
 
 struct Sampler {
@@ -235,6 +304,9 @@ enum Proc {
     Slave(u32),
     Broker(u32),
     Periodic(u32),
+    PnProvider(u32),
+    PnDeviceRx(u32),
+    Watchdog(u32),
 }
 
 pub struct Outcome {
@@ -259,6 +331,10 @@ struct Engine {
     slaves: Vec<Slave>,
     brokers: Vec<Broker>,
     periodic: Vec<Periodic>,
+    devices: Vec<Device>,
+    pn_consumers: Vec<PnConsumer>,
+    pn_ars: Vec<PnAr>,
+    pn_providers: Vec<PnProvider>,
     samplers: Vec<Sampler>,
     windows: Vec<Vec<u64>>,
     procs: Vec<Proc>,
@@ -381,6 +457,19 @@ impl Engine {
                 let s = self.brokers[i as usize].inbound;
                 self.get(s, proc);
             }
+            Proc::PnProvider(i) => {
+                let delay = self.pn_providers[i as usize].delay_ns;
+                if delay > 0 {
+                    self.schedule(Ev::Timeout(proc), NORMAL, delay);
+                } else {
+                    self.pn_send(i, proc);
+                }
+            }
+            Proc::PnDeviceRx(d) => {
+                let s = self.devices[d as usize].inbound;
+                self.get(s, proc);
+            }
+            Proc::Watchdog(r) => self.watchdog_round(r),
             Proc::Periodic(i) => {
                 let pg = &mut self.periodic[i as usize];
                 let delay = if pg.delay_ns > 0 {
@@ -427,6 +516,20 @@ impl Engine {
                             self.windows[*w as usize].push(self.now - fr.created);
                         }
                     }
+                    if fr.pn_ar >= 0 {
+                        let pn = ad.pn;
+                        self.pn_record(pn, fr);
+                    }
+                }
+                self.release(f);
+                self.get(store, proc);
+            }
+            Proc::PnDeviceRx(d) => {
+                let fr = self.frames[f as usize];
+                let dev = &self.devices[d as usize];
+                if fr.dst == dev.mac {
+                    let pn = dev.pn;
+                    self.pn_record(pn, fr);
                 }
                 self.release(f);
                 self.get(store, proc);
@@ -512,7 +615,11 @@ impl Engine {
                 self.release(f);
                 self.get(store, proc);
             }
-            Proc::Flow(_) | Proc::Sampler(_) | Proc::Periodic(_) => {
+            Proc::Flow(_)
+            | Proc::Sampler(_)
+            | Proc::Periodic(_)
+            | Proc::PnProvider(_)
+            | Proc::Watchdog(_) => {
                 unreachable!("these processes do not get")
             }
         }
@@ -553,7 +660,13 @@ impl Engine {
                 let t = self.periodic[i as usize].instants.next().unwrap();
                 self.schedule(Ev::Timeout(proc), NORMAL, t - self.now);
             }
-            Proc::AdapterRx(_) | Proc::Switch(_) | Proc::Slave(_) | Proc::Broker(_) => {
+            Proc::PnProvider(i) => self.pn_send(i, proc),
+            Proc::AdapterRx(_)
+            | Proc::Switch(_)
+            | Proc::Slave(_)
+            | Proc::Broker(_)
+            | Proc::PnDeviceRx(_)
+            | Proc::Watchdog(_) => {
                 unreachable!("these processes do not time out")
             }
         }
@@ -663,6 +776,101 @@ impl Engine {
         self.enqueue(chan, f);
     }
 
+    /// A provider's frame, then the timeout to the next cycle.
+    fn pn_send(&mut self, i: u32, proc: u32) {
+        let p = &self.pn_providers[i as usize];
+        let (frame, chan, cycle) = (
+            Frame {
+                created: self.now,
+                ..p.frame
+            },
+            p.chan,
+            p.cycle_ns,
+        );
+        let f = self.alloc(frame);
+        self.enqueue(chan, f);
+        self.schedule(Ev::Timeout(proc), NORMAL, cycle);
+    }
+
+    /// A cyclic frame at its consumer (`_PnConsumer.record`).
+    fn pn_record(&mut self, consumer: u32, fr: Frame) {
+        let now = self.now;
+        let r = fr.pn_ar as usize;
+        if self.pn_ars[r].consumer != consumer {
+            return; // not one of this consumer's ARs
+        }
+        let c = &self.pn_consumers[consumer as usize];
+        for w in &c.latency_windows {
+            self.windows[*w as usize].push(now - fr.created);
+        }
+        let ar = &self.pn_ars[r];
+        match ar.last_arrival {
+            // supervision starts with the first frame, as after AR establishment
+            None => self.process(Proc::Watchdog(r as u32)),
+            Some(last) => {
+                let jitter = (now - last).abs_diff(ar.cycle_ns);
+                for w in &c.jitter_windows {
+                    self.windows[*w as usize].push(jitter);
+                }
+            }
+        }
+        let ar = &mut self.pn_ars[r];
+        ar.last_arrival = Some(now);
+        if ar.arrival == Some(Signal::Pending) {
+            ar.arrival = Some(Signal::Triggered);
+            let round = ar.round;
+            self.schedule(Ev::Arrival(r as u32, round), NORMAL, 0);
+        }
+    }
+
+    /// A new watchdog round: a new arrival event, a timeout and the
+    /// condition waiting on both.
+    fn watchdog_round(&mut self, r: u32) {
+        let ar = &mut self.pn_ars[r as usize];
+        ar.round += 1;
+        ar.arrival = Some(Signal::Pending);
+        ar.condition_triggered = false;
+        ar.expired = false;
+        let (round, timeout) = (ar.round, ar.timeout_ns);
+        self.schedule(Ev::Watchdog(r, round), NORMAL, timeout);
+    }
+
+    fn on_arrival(&mut self, r: u32, round: u32) {
+        let ar = &mut self.pn_ars[r as usize];
+        debug_assert_eq!(round, ar.round, "an arrival is always of the current round");
+        ar.arrival = Some(Signal::Processed);
+        if ar.expired {
+            // the watchdog waited for this arrival alone: the next round
+            self.watchdog_round(r);
+        } else if !ar.condition_triggered {
+            ar.condition_triggered = true;
+            self.schedule(Ev::Condition(r, round), NORMAL, 0);
+        }
+    }
+
+    fn on_watchdog(&mut self, r: u32, round: u32) {
+        let ar = &mut self.pn_ars[r as usize];
+        // a timeout of an earlier round, or one that lost to the arrival
+        if round == ar.round && !ar.condition_triggered {
+            ar.condition_triggered = true;
+            self.schedule(Ev::Condition(r, round), NORMAL, 0);
+        }
+    }
+
+    fn on_condition(&mut self, r: u32, round: u32) {
+        let ar = &mut self.pn_ars[r as usize];
+        debug_assert_eq!(round, ar.round);
+        if ar.arrival == Some(Signal::Processed) {
+            self.watchdog_round(r);
+        } else {
+            // real devices abort the AR here; it is counted and supervision
+            // resumes with the next frame (ADR-0005)
+            ar.expired = true;
+            let c = ar.consumer;
+            self.pn_consumers[c as usize].expiries += 1;
+        }
+    }
+
     fn on_in_flight(&mut self, c: u32, f: u32) {
         let ch = &self.channels[c as usize];
         let (port, dst) = (ch.in_port, ch.dst_store);
@@ -724,6 +932,18 @@ impl Engine {
                 (Some(v), bits)
             }
             Sampled::BrokerQueue(store) => (Some(self.stores[*store as usize].len() as f64), 0),
+            Sampled::Jitter(w) => {
+                let values = &mut self.windows[*w as usize];
+                let v = values
+                    .iter()
+                    .max()
+                    .map(|m| tb::ratio_f64(*m as u128, tb::NS_PER_US));
+                values.clear();
+                (v, 0)
+            }
+            Sampled::WatchdogExpiries(c) => {
+                (Some(self.pn_consumers[*c as usize].expiries as f64), 0)
+            }
         };
         let s = &mut self.samplers[i as usize];
         s.last_t = now;
@@ -753,6 +973,10 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         slaves: Vec::new(),
         brokers: Vec::new(),
         periodic: Vec::new(),
+        devices: Vec::new(),
+        pn_consumers: Vec::new(),
+        pn_ars: Vec::new(),
+        pn_providers: Vec::new(),
         samplers: Vec::new(),
         windows: Vec::new(),
         procs: Vec::new(),
@@ -780,9 +1004,24 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
     // every node gets an inbound store; adapters and switches their runtime state
     let mut inbound = Vec::new();
     let mut role = Vec::new(); // index into adapters or switches
+    let mut pn_of = Vec::new(); // the PROFINET consumer of adapters and devices
     for node in &sc.nodes {
         let s = e.store(Items::Fifo(VecDeque::new()));
         inbound.push(s);
+        let pn = e.pn_consumers.len() as u32;
+        if matches!(
+            node.kind,
+            NodeKind::Adapter { .. } | NodeKind::ProfinetDevice { .. }
+        ) {
+            e.pn_consumers.push(PnConsumer {
+                latency_windows: Vec::new(),
+                jitter_windows: Vec::new(),
+                expiries: 0,
+            });
+            pn_of.push(Some(pn));
+        } else {
+            pn_of.push(None);
+        }
         match &node.kind {
             NodeKind::Adapter { mac } => {
                 let mac = intern(mac);
@@ -793,8 +1032,19 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     bytes_received: 0,
                     latency_windows: Vec::new(),
                     modbus_windows: Vec::new(),
+                    pn,
                 });
                 role.push(e.adapters.len() - 1);
+            }
+            NodeKind::ProfinetDevice { mac } => {
+                let mac = intern(mac);
+                e.devices.push(Device {
+                    mac,
+                    inbound: s,
+                    out: None,
+                    pn,
+                });
+                role.push(e.devices.len() - 1);
             }
             NodeKind::ModbusSlave { mac, unit } => {
                 let mac = intern(mac);
@@ -832,7 +1082,8 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
     let mac_of = |i: usize| match &sc.nodes[i].kind {
         NodeKind::Adapter { mac }
         | NodeKind::ModbusSlave { mac, .. }
-        | NodeKind::MqttBroker { mac } => Some(mac.clone()),
+        | NodeKind::MqttBroker { mac }
+        | NodeKind::ProfinetDevice { mac } => Some(mac.clone()),
         NodeKind::Switch { .. } => None,
     };
     let is_adapter = |i: usize| matches!(sc.nodes[i].kind, NodeKind::Adapter { .. });
@@ -894,6 +1145,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     NodeKind::Adapter { .. } => e.adapters[role[node]].out = Some(ch),
                     NodeKind::ModbusSlave { .. } => e.slaves[role[node]].out = Some(ch),
                     NodeKind::MqttBroker { .. } => e.brokers[role[node]].out = Some(ch),
+                    NodeKind::ProfinetDevice { .. } => e.devices[role[node]].out = Some(ch),
                     NodeKind::Switch { .. } => unreachable!(),
                 }
                 if is_switch(other) {
@@ -953,12 +1205,67 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         topics.entry(topic).or_insert(n);
     }
 
-    // node processes, in node order: an adapter's receiver, then its flows
+    // node processes, in node order: an adapter's receiver, its PROFINET
+    // providers, then its flows
     for (i, node) in sc.nodes.iter().enumerate() {
         match &node.kind {
             NodeKind::Adapter { .. } => {
                 let a = role[i] as u32;
                 e.process(Proc::AdapterRx(a));
+                for ar in sc.ars.iter().filter(|ar| ar.controller == node.name) {
+                    let d = lookup(&ar.device)?;
+                    let NodeKind::ProfinetDevice { mac } = &sc.nodes[d].kind else {
+                        return Err(format!(
+                            "PROFINET AR {} -> {}: not a PROFINET device",
+                            ar.controller, ar.device
+                        ));
+                    };
+                    let device = &e.devices[role[d]];
+                    let (Some(chan), Some(device_chan)) = (e.adapters[a as usize].out, device.out)
+                    else {
+                        continue; // one side not wired: no cyclic exchange
+                    };
+                    let (controller_pn, device_pn) = (e.adapters[a as usize].pn, device.pn);
+                    let cycle_ns = tb::ms_to_ns(ar.cycle_ms)?;
+                    let delay_ns = tb::ms_to_ns(ar.delay_ms)?;
+                    let timeout_ns = ar
+                        .hold
+                        .checked_mul(cycle_ns)
+                        .ok_or("PROFINET AR: watchdog time")?;
+                    // the consumer states: inputs at the controller, outputs at the device
+                    let state = |e: &mut Engine, consumer: u32| -> i32 {
+                        e.pn_ars.push(PnAr {
+                            consumer,
+                            cycle_ns,
+                            timeout_ns,
+                            last_arrival: None,
+                            arrival: None,
+                            round: 0,
+                            condition_triggered: false,
+                            expired: false,
+                        });
+                        (e.pn_ars.len() - 1) as i32
+                    };
+                    let inputs = state(&mut e, controller_pn);
+                    let outputs = state(&mut e, device_pn);
+                    let (controller_mac, device_mac) = (e.adapters[a as usize].mac, intern(mac));
+                    for (src, dst, size, chan, pn_ar) in [
+                        (controller_mac, device_mac, ar.outputs, chan, outputs),
+                        (device_mac, controller_mac, ar.inputs, device_chan, inputs),
+                    ] {
+                        e.pn_providers.push(PnProvider {
+                            frame: Frame {
+                                priority: PN_RT_PRIORITY,
+                                pn_ar,
+                                ..Frame::new(src, dst, pn_frame_size(size), 0)
+                            },
+                            chan,
+                            delay_ns,
+                            cycle_ns,
+                        });
+                        e.process(Proc::PnProvider((e.pn_providers.len() - 1) as u32));
+                    }
+                }
                 if let Some(chan) = e.adapters[a as usize].out {
                     for (n, flow) in sc.flows.iter().enumerate() {
                         if flow.source != node.name {
@@ -1079,6 +1386,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     e.process(Proc::Broker(b as u32));
                 }
             }
+            NodeKind::ProfinetDevice { .. } => e.process(Proc::PnDeviceRx(role[i] as u32)),
             NodeKind::Switch { .. } => {
                 let w = role[i];
                 e.switches[w].mac_table = static_macs[i].clone();
@@ -1125,6 +1433,21 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 }
                 Some(Sampled::Utilization(chans, speed))
             }
+            Metric::PnLatency | Metric::PnJitter if pn_of[target].is_some() => {
+                let c = &mut e.pn_consumers[pn_of[target].unwrap() as usize];
+                let w = e.windows.len() as u32;
+                e.windows.push(Vec::new());
+                if obs.metric == Metric::PnLatency {
+                    c.latency_windows.push(w);
+                    Some(Sampled::Latency(w))
+                } else {
+                    c.jitter_windows.push(w);
+                    Some(Sampled::Jitter(w))
+                }
+            }
+            Metric::PnWatchdogExpiries if pn_of[target].is_some() => {
+                Some(Sampled::WatchdogExpiries(pn_of[target].unwrap()))
+            }
             Metric::BrokerQueue if matches!(sc.nodes[target].kind, NodeKind::MqttBroker { .. }) => {
                 Some(Sampled::BrokerQueue(inbound[target]))
             }
@@ -1159,6 +1482,9 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             Ev::InFlight(c, f) => e.on_in_flight(c, f),
             Ev::Put(s) => e.on_put(s),
             Ev::Get(s, p, f) => e.on_get(s, p, f),
+            Ev::Arrival(r, round) => e.on_arrival(r, round),
+            Ev::Watchdog(r, round) => e.on_watchdog(r, round),
+            Ev::Condition(r, round) => e.on_condition(r, round),
         }
     }
     Ok(Outcome {

@@ -17,6 +17,7 @@ pub enum NodeKind {
     Adapter { mac: String },
     ModbusSlave { mac: String, unit: u8 },
     MqttBroker { mac: String },
+    ProfinetDevice { mac: String },
     Switch { fifo: bool, topology: bool },
 }
 
@@ -90,6 +91,20 @@ pub struct Route {
     pub subscribers: Vec<String>,
 }
 
+/// A PROFINET RT application relationship: cyclic frames both ways, with
+/// `inputs` bytes from the device and `outputs` bytes to it; the watchdog is
+/// `hold` cycles.
+#[derive(Debug, Clone)]
+pub struct ProfinetAr {
+    pub controller: String,
+    pub device: String,
+    pub cycle_ms: Q,
+    pub inputs: u64,
+    pub outputs: u64,
+    pub hold: u64,
+    pub delay_ms: Q,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Metric {
     Throughput,
@@ -100,10 +115,13 @@ pub enum Metric {
     Utilization,
     ModbusLatency,
     BrokerQueue,
+    PnLatency,
+    PnJitter,
+    PnWatchdogExpiries,
 }
 
 impl Metric {
-    pub const ALL: [(&'static str, Metric); 8] = [
+    pub const ALL: [(&'static str, Metric); 11] = [
         ("throughput", Metric::Throughput),
         ("latency", Metric::Latency),
         ("bytes_sent", Metric::BytesSent),
@@ -112,6 +130,9 @@ impl Metric {
         ("utilization", Metric::Utilization),
         ("modbus_latency", Metric::ModbusLatency),
         ("broker_queue", Metric::BrokerQueue),
+        ("pn_latency", Metric::PnLatency),
+        ("pn_jitter", Metric::PnJitter),
+        ("pn_watchdog_expiries", Metric::PnWatchdogExpiries),
     ];
 
     pub fn name(self) -> &'static str {
@@ -135,6 +156,7 @@ pub struct Scenario {
     pub polls: Vec<Poll>,
     pub publishes: Vec<Publish>,
     pub routes: Vec<Route>,
+    pub ars: Vec<ProfinetAr>,
     pub observations: Vec<Observation>,
     pub duration_ms: Q,
     pub seed: u64,
@@ -151,8 +173,14 @@ pub struct Capabilities {
 }
 
 pub const CAPABILITIES: Capabilities = Capabilities {
-    nodes: &["adapter", "switch", "modbus_slave", "mqtt_broker"],
-    traffic: &["flow", "poll", "publish", "route"],
+    nodes: &[
+        "adapter",
+        "switch",
+        "modbus_slave",
+        "mqtt_broker",
+        "profinet_device",
+    ],
+    traffic: &["flow", "poll", "publish", "route", "profinet_ar"],
     patterns: &["constant", "poisson", "bursty", "batch"],
     metrics: &[
         "throughput",
@@ -163,12 +191,12 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "utilization",
         "modbus_latency",
         "broker_queue",
+        "pn_latency",
+        "pn_jitter",
+        "pn_watchdog_expiries",
     ],
     features: &["imix"],
-    notes: &[
-        ("profinet_device", "planned for Phase 5"),
-        ("profinet_ar", "planned for Phase 5"),
-    ],
+    notes: &[],
 };
 
 type Res<T> = Result<T, String>;
@@ -292,8 +320,8 @@ pub fn parse(text: &str) -> Res<Scenario> {
         f.done()?;
         links.push(link);
     }
-    let (mut flows, mut polls, mut publishes, mut routes) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut flows, mut polls, mut publishes, mut routes, mut ars) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (i, v) in array(top.take_or("traffic"), "traffic")?
         .into_iter()
         .enumerate()
@@ -303,6 +331,7 @@ pub fn parse(text: &str) -> Res<Scenario> {
             Traffic::Poll(poll) => polls.push(poll),
             Traffic::Publish(publish) => publishes.push(publish),
             Traffic::Route(route) => routes.push(route),
+            Traffic::ProfinetAr(ar) => ars.push(ar),
         }
     }
     let mut observations = Vec::new();
@@ -350,6 +379,7 @@ pub fn parse(text: &str) -> Res<Scenario> {
         polls,
         publishes,
         routes,
+        ars,
         observations,
         duration_ms,
         seed,
@@ -417,7 +447,12 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 mac: f.string("mac")?,
             }
         }
-        "profinet_device" => return Err(unsupported(&format!("{kind} nodes (Phase 5)"))),
+        "profinet_device" => {
+            f.string("ip")?;
+            NodeKind::ProfinetDevice {
+                mac: f.string("mac")?,
+            }
+        }
         other => return Err(format!("unknown node kind {other:?}")),
     };
     f.done()?;
@@ -429,6 +464,7 @@ enum Traffic {
     Poll(Poll),
     Publish(Publish),
     Route(Route),
+    ProfinetAr(ProfinetAr),
 }
 
 fn parse_traffic(value: Value, i: usize) -> Res<Traffic> {
@@ -505,7 +541,31 @@ fn parse_traffic(value: Value, i: usize) -> Res<Traffic> {
                 subscribers,
             }))
         }
-        "profinet_ar" => Err(unsupported(&format!("{kind} traffic (Phase 5)"))),
+        "profinet_ar" => {
+            let controller = f.string("controller")?;
+            let device = f.string("device")?;
+            f.what = format!("PROFINET AR {controller} -> {device}");
+            let ar = ProfinetAr {
+                controller,
+                device,
+                cycle_ms: f.number("cycle_ms")?,
+                inputs: f.integer("inputs")?,
+                outputs: f.integer("outputs")?,
+                hold: match f.take_or("hold") {
+                    None => 3,
+                    Some(v) => v
+                        .as_u64()
+                        .filter(|h| *h >= 1)
+                        .ok_or(format!("PROFINET AR: invalid hold {v}"))?,
+                },
+                delay_ms: match f.take_or("delay_ms") {
+                    None => Q::int(0),
+                    Some(v) => number(&v, "PROFINET AR: delay_ms")?,
+                },
+            };
+            f.done()?;
+            Ok(Traffic::ProfinetAr(ar))
+        }
         other => Err(format!("unknown traffic kind {other:?}")),
     }
 }
@@ -618,8 +678,8 @@ mod tests {
         assert_eq!(mqtt.publishes[0].topic, "hala/temp°C");
         assert_eq!(mqtt.publishes[0].qos, 1);
         assert_eq!(mqtt.routes[0].subscribers, ["tx"]);
-        assert!(parse(&B1.replace("\"throughput\"", "\"pn_jitter\""))
+        assert!(parse(&B1.replace("\"throughput\"", "\"frame_loss\""))
             .unwrap_err()
-            .contains("metric \"pn_jitter\""));
+            .contains("metric \"frame_loss\""));
     }
 }

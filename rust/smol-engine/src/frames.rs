@@ -36,6 +36,15 @@ pub fn modbus_response_frame_size(count: u16) -> u64 {
     padded(ETHERNET_IP_TCP_BYTES + 6 + 1 + 1 + 2 * count as u64)
 }
 
+/// The 802.1Q priority (PCP) of PROFINET RT cyclic frames.
+pub const PN_RT_PRIORITY: u8 = 6;
+
+/// PROFINET RT: Ethernet (14), 802.1Q (4), FrameID (2), IO data, APDU
+/// status (4) and FCS (4), padded to the minimum.
+pub fn pn_frame_size(io_bytes: u64) -> u64 {
+    padded(14 + VLAN_TAG_BYTES + 2 + io_bytes + 4 + 4)
+}
+
 /// A flow frame of `size` bytes (untagged, FCS included), with the tag a
 /// priority above 0 needs.
 pub fn flow_frame_size(size: u64, priority: u8) -> u64 {
@@ -55,6 +64,9 @@ mod tests {
         assert_eq!(MODBUS_REQUEST_BYTES, 69);
         assert_eq!(modbus_response_frame_size(10), 86);
         assert_eq!(modbus_response_frame_size(1), 68);
+        assert_eq!(pn_frame_size(20), 64);
+        assert_eq!(pn_frame_size(40), 68);
+        assert_eq!(pn_frame_size(1400), 1428);
         assert_eq!(MQTT_PUBACK_BYTES, padded(ETHERNET_IP_TCP_BYTES + 4));
         assert_eq!(mqtt_publish_frame_size(7, 20, 0), 58 + 2 + 2 + 7 + 20);
         assert_eq!(mqtt_publish_frame_size(7, 20, 1), 58 + 2 + 2 + 7 + 2 + 20);

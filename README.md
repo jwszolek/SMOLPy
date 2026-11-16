@@ -20,7 +20,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 > result = net.simulate(duration=60_000, backend="rust")
 > ```
 >
-> The Rust engine covers Ethernet, Modbus TCP and MQTT for now: adapters, switches, links, flows, Modbus polling and MQTT publish/subscribe. PROFINET follows. See [Simulation engine](#simulation-engine) and [ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/).
+> The Rust engine runs the whole model: Ethernet, Modbus TCP, MQTT and PROFINET RT. Only the live and text dashboards need SimPy. See [Simulation engine](#simulation-engine) and [ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/).
 
 📖 **Full documentation:** [jwszolek.github.io/SMOLPy](https://jwszolek.github.io/SMOLPy/)
 
@@ -443,7 +443,7 @@ Every simulation goes through the same path. The Python API and `.smol` files bu
 | Backend | Language | What it runs | Speed | Install |
 |---|---|---|---|---|
 | `simpy` (default) | Python, SimPy | the whole model, the live and text dashboards | reference | included |
-| `rust` | Rust, through PyO3 | Ethernet: adapters, switches, links, flows (constant, Poisson, bursty, batch, IMIX); Modbus TCP polling; seven metrics | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy[rust]` (since v1.8.0) |
+| `rust` | Rust, through PyO3 | the whole model, headless: Ethernet, Modbus TCP, MQTT and PROFINET RT, every metric | about **40× faster**: B1 at 10 M frames in 4.9 s, not 200.8 s | `pip install smolpy[rust]` (since v1.8.0) |
 
 ```python
 result = net.simulate(duration=60_000, backend="rust")       # one run
@@ -455,7 +455,7 @@ smolpy run plant.smol --backend rust
 ```
 
 - **The same numbers.** On deterministic scenarios the Rust engine reproduces SimPy's results bit for bit, down to the event count. Random traffic uses each engine's own generator, so there the results agree statistically. CI checks both on every pull request ([ADR-0009](https://jwszolek.github.io/SMOLPy/adr/0009-batch-execution-and-cross-backend-validation/)).
-- **Nothing is skipped silently.** A scenario that uses something a backend does not support, such as PROFINET on Rust for now, is rejected before the run with a message naming the element.
+- **Nothing is skipped silently.** A scenario that uses something a backend does not support is rejected before the run with a message naming the element. Asking the Rust engine for a dashboard is an error too.
 
 The model both engines implement:
 
