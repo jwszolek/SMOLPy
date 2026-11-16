@@ -1,15 +1,18 @@
 name: Docker image
 
-# The image without ns-3, ghcr.io/jwszolek/smolpy (ADR-0004, Container
-# images): Python, smolpy and smolpy-engine-rs for linux/amd64 and
-# linux/arm64, installed from the wheels of one version. Every image is tested
-# before anything is pushed: the wheel smoke test (bit-exact with SimPy) and a
-# .smol run through the CLI.
+# The images of ghcr.io/jwszolek/smolpy (ADR-0004, Container images), from
+# the wheels of one version of smolpy and smolpy-engine-rs:
+# - <version>, latest: without ns-3, for linux/amd64 and linux/arm64;
+# - <version>-ns3, latest-ns3: on the ns-3 base image, with smol-ns3 built
+#   in, for linux/amd64 (the base image's only platform so far).
+# Every image is tested before anything is pushed: a .smol run through the
+# CLI; the wheel smoke test (bit-exact with SimPy) without ns-3, and the ns-3
+# suite with it.
 #
 # - Called by publish.yml at a release, once both packages are on PyPI: uses
-#   the files of the same run and pushes <version> and latest.
-# - On a pull request that touches the image: builds the wheels here, for
-#   linux/amd64 only, tests that image and pushes nothing.
+#   the files of the same run and pushes both images.
+# - On a pull request that touches the images: builds the wheels here, for
+#   linux/amd64 only, tests both images and pushes nothing.
 
 on:
   pull_request:
@@ -39,6 +42,9 @@ jobs:
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/smolpy
       RELEASE: ${{ inputs.version && 'true' || 'false' }}  # no inputs on a pull request
+
+    outputs:
+      version: ${{ steps.v.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -104,6 +110,14 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           ls dist/
 
+      # the same wheels, for the ns-3 image
+      - name: Keep the wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-wheels
+          path: dist/*.whl
+          retention-days: 1
+
       - name: Set up QEMU, for linux/arm64
         if: ${{ env.RELEASE == 'true' }}
         uses: docker/setup-qemu-action@v3
@@ -151,3 +165,73 @@ jobs:
             --build-arg VERSION="$VERSION" -f docker/Dockerfile \
             -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
           echo "Pushed $IMAGE:$VERSION and $IMAGE:latest" >> "$GITHUB_STEP_SUMMARY"
+
+  image-ns3:
+    name: ${{ inputs.version && format('Image {0}-ns3', inputs.version) || 'Image with ns-3 (test build)' }}
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push to ghcr.io
+
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/smolpy
+      RELEASE: ${{ inputs.version && 'true' || 'false' }}
+      VERSION: ${{ needs.image.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download the wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: image-wheels
+          path: dist/
+
+      - uses: docker/setup-buildx-action@v3
+
+      # smol-ns3 is built into the image; its cache is read-only, so a run
+      # below that needed another build would fail
+      - name: Build
+        run: |
+          docker buildx build --platform linux/amd64 --load \
+            --build-arg VERSION="$VERSION" -f docker/Dockerfile.ns3 -t smolpy:test-ns3 .
+          docker image ls smolpy:test-ns3
+
+      - name: Test the CLI on ns-3
+        run: |
+          docker run --rm smolpy:test-ns3 --help
+          mkdir -p out && chmod 777 out
+          cp docker/smoke.smol out/
+          docker run --rm -v "$PWD/out:/work" \
+            smolpy:test-ns3 run smoke.smol --backend ns3 -o results.csv
+          grep -q "pn_latency:plc" out/results.csv
+          grep -q "modbus_latency:plc" out/results.csv
+          rm -rf out
+
+      # the tests of this version, against the smolpy installed in the image
+      - name: Run the ns-3 suite in the image
+        run: |
+          docker run --rm --user 0 -e PYTHONDONTWRITEBYTECODE=1 \
+            -v "$PWD/tests:/src/tests:ro" -w /src --entrypoint sh smolpy:test-ns3 -c \
+            "pip install --quiet --root-user-action=ignore pytest \
+             && python -m pytest -p no:cacheprovider tests/equivalence tests/test_ns3.py -k ns3 -q"
+
+      - name: Log in to ghcr.io
+        if: ${{ env.RELEASE == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: ${{ env.RELEASE == 'true' }}
+        run: |
+          for tag in "$VERSION-ns3" latest-ns3; do
+            docker tag smolpy:test-ns3 "$IMAGE:$tag"
+            docker push "$IMAGE:$tag"
+          done
+          echo "Pushed $IMAGE:$VERSION-ns3 and $IMAGE:latest-ns3" >> "$GITHUB_STEP_SUMMARY"

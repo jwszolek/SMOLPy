@@ -1,0 +1,46 @@
+# SMOLPy with ns-3: ghcr.io/jwszolek/smolpy:<version>-ns3 (ADR-0004,
+# Container images). Built by .github/workflows/docker-image.yml.
+#
+# The ns-3 base image, with the pinned ns-3 build and its toolchain, plus
+# smolpy and smolpy-engine-rs from the wheels of one version, as in the image
+# without ns-3. smol-ns3, the program that runs scenarios on ns-3, is built
+# here once, so that no run compiles it.
+#
+#     docker run --rm -v "$PWD:/work" ghcr.io/jwszolek/smolpy:latest-ns3 run plant.smol --backend ns3
+#
+# The image contains ns-3, licensed under GPLv2, and smol-ns3 linked against
+# it, so the image as a whole is distributed under GPLv2's terms. SMOLPy's own
+# code is MIT. The sources: ns-3 at the commit the base image records, and
+# smol-ns3 in smolpy/ns3/cpp.
+
+ARG NS3_BASE=ghcr.io/jwszolek/smolpy-ns3-base:3.49
+FROM ${NS3_BASE}
+
+ARG VERSION
+
+LABEL org.opencontainers.image.title="SMOLPy with ns-3" \
+      org.opencontainers.image.description="Network simulation DSL and discrete-event simulator, with the Rust engine and the ns-3 backend" \
+      org.opencontainers.image.source="https://github.com/jwszolek/SMOLPy" \
+      org.opencontainers.image.documentation="https://jwszolek.github.io/SMOLPy/" \
+      org.opencontainers.image.licenses="GPL-2.0-only AND MIT" \
+      org.opencontainers.image.version="${VERSION}"
+
+RUN --mount=type=bind,source=dist,target=/dist \
+    test -n "${VERSION}" \
+    && pip install --no-cache-dir --find-links /dist \
+        "smolpy[rust]==${VERSION}" "smolpy-engine-rs==${VERSION}" \
+    && python -c "import smolpy_engine_rs; assert smolpy_engine_rs.__version__ == '${VERSION}'"
+
+# smol-ns3, built for this ns-3 build into a cache every user reads. It is
+# not writable: a run that would need another build (another CXX) fails,
+# saying to set XDG_CACHE_HOME to a writable directory to build it there.
+ENV XDG_CACHE_HOME=/opt/smolpy/cache
+RUN python -c "from smolpy import ns3; print(ns3.program(ns3.locate()))" \
+    && chmod -R a+rX,go-w /opt/smolpy
+
+RUN useradd --create-home --uid 1000 smolpy
+USER 1000
+WORKDIR /work
+
+ENTRYPOINT ["smolpy"]
+CMD ["--help"]

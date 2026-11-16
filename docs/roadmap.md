@@ -172,7 +172,7 @@ A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP st
 
 ns-3 cannot be installed with `pip`, so the backend ships as a container image, `ghcr.io/jwszolek/smolpy:<version>-ns3`. It holds the pinned ns-3 release built once, and CI runs the ns-3 equivalence suite in it ([ADR-0004 — Container images](adr/0004-execution-backends.md#container-images)). A lighter image with SMOLPy and the Rust engine, without ns-3, can be published from the first release of `smolpy-engine-rs`.
 
-**Status:** steps 1 and 2 of 3 done. In step 3 the backend runs the whole model, and the `-ns3` image remains.
+**Status:** all 3 steps done. What remains for the exit criteria is quantifying the differences under load.
 1. **The image without ns-3: done.** `ghcr.io/jwszolek/smolpy:<version>` holds SMOLPy and the Rust engine, for `linux/amd64` and `linux/arm64`. It is built, tested and pushed at each release.
 2. **The ns-3 base image: done.** `ghcr.io/jwszolek/smolpy-ns3-base:3.49` holds ns-3.49, built once, for `linux/amd64`. `arm64` follows on a native runner.
 3. **The ns-3 backend.**
@@ -188,7 +188,10 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
     - **PROFINET: done.** PROFINET RT runs on layer 2, on SMOL's Ethernet device, with the three PROFINET metrics.
         - Every PROFINET scenario of the suite is bit-exact with SimPy, watchdog expiries included.
         - A frame that arrives exactly at the watchdog's deadline is too late on both engines.
-    - **Next:** the `<version>-ns3` image, with CI running the ns-3 suite in it.
+    - **The image: done.** `ghcr.io/jwszolek/smolpy:<version>-ns3` and `latest-ns3`, for `linux/amd64`, hold the base image, SMOLPy and the Rust engine, and `smol-ns3` built in.
+        - Each release builds it from the release's wheels.
+        - Before it is pushed, CI runs a `.smol` file on ns-3 through the CLI, and the ns-3 suite against the SMOLPy installed in it.
+    - **Next:** quantifying the differences under load, and `docs/backends.md`.
 
 **Exit criteria:**
 

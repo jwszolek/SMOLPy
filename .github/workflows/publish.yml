@@ -4,8 +4,8 @@ name: Publish to PyPI
 #
 # - Release (a pushed tag v*, or release.yml passing its tag): publishes
 #   smolpy and the smolpy-engine-rs wheels and sdist to PyPI with the tag's
-#   version, then the GitHub Release with every file and the Docker image
-#   ghcr.io/jwszolek/smolpy:<version> (docker-image.yml).
+#   version, then the GitHub Release with every file and the Docker images
+#   ghcr.io/jwszolek/smolpy:<version> and <version>-ns3 (docker-image.yml).
 # - Development build (dev-build.yml, dev: true, after a merge to main):
 #   publishes both to PyPI as X.Y.(Z+1).devN, N commits after the latest tag,
 #   a pre-release that pip installs only with --pre, and replaces the GitHub
