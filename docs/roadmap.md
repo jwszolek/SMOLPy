@@ -172,6 +172,11 @@ A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP st
 
 ns-3 cannot be installed with `pip`, so the backend ships as a container image, `ghcr.io/jwszolek/smolpy:<version>-ns3`. It holds the pinned ns-3 release built once, and CI runs the ns-3 equivalence suite in it ([ADR-0004 — Container images](adr/0004-execution-backends.md#container-images)). A lighter image with SMOLPy and the Rust engine, without ns-3, can be published from the first release of `smolpy-engine-rs`.
 
+**Status:** step 1 of 3 done.
+1. **The image without ns-3: done.** `ghcr.io/jwszolek/smolpy:<version>` holds SMOLPy and the Rust engine, for `linux/amd64` and `linux/arm64`. It is built, tested and pushed at each release.
+2. **The ns-3 base image.** It holds the pinned ns-3 release, built once.
+3. **The ns-3 backend.** It generates the scenario, adds the SMOL C++ module and runs the equivalence suite in CI.
+
 **Exit criteria:**
 
 - Low-load scenarios agree with SimPy and Rust.

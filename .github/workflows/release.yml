@@ -64,3 +64,4 @@ jobs:
     permissions:
       id-token: write  # PyPI trusted publishing
       contents: write  # the GitHub Release
+      packages: write  # the Docker image on ghcr.io

@@ -1,0 +1,30 @@
+# Run by CI in every image it builds: the CLI, a .smol file and the Rust
+# engine, with every protocol, writing its results to the mounted directory.
+
+network "image-smoke" {
+
+    switch          sw      ports=6
+    adapter         plc     ip=10.0.0.1
+    adapter         hmi     ip=10.0.0.2
+    mqtt_broker     broker  ip=10.0.0.3
+    modbus_slave    meter   ip=10.0.0.4 unit_id=1
+    profinet_device io      ip=10.0.0.5
+
+    link plc    -- sw speed=100 length=10
+    link hmi    -- sw speed=100 length=10
+    link broker -- sw speed=100 length=10
+    link meter  -- sw speed=100 length=10
+    link io     -- sw speed=100 length=10
+
+    flow    plc -> hmi rate=2000 size=512
+    poll    plc -> meter register=0 count=10 rate=100
+    route   broker topic="plant/t" -> [hmi]
+    publish plc -> broker topic="plant/t" rate=100 qos=1
+    control plc -> io cycle=2 inputs=20 outputs=20
+
+    observe throughput     on hmi every=10
+    observe modbus_latency on plc every=10
+    observe pn_latency     on plc every=10
+
+    simulate duration=100 mode=headless
+}

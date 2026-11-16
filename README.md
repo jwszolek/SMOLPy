@@ -61,6 +61,16 @@ pip install --pre "smolpy[rust]" # the latest development build of main
 - **Where it is on GitHub.** The [Development build](https://github.com/jwszolek/SMOLPy/releases/tag/dev) pre-release points to its commit.
 - **Releases proper** are made by hand.
 
+**Without Python,** from the Docker image of each release, which has SMOLPy and the Rust engine for `linux/amd64` and `linux/arm64`:
+
+```bash
+docker run --rm -v "$PWD:/work" ghcr.io/jwszolek/smolpy run plant.smol --backend rust -o results.csv
+```
+
+- The image runs headless: the live dashboard needs a display, so a `.smol` file needs `mode=headless` or `mode=text`.
+- It runs as uid 1000. To own the files it writes as yourself, add `--user "$(id -u):$(id -g)"`.
+- A version is pinned as `ghcr.io/jwszolek/smolpy:<version>`; `latest` is the latest release.
+
 From a clone, for development:
 
 ```bash

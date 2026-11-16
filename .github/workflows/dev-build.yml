@@ -28,3 +28,4 @@ jobs:
     permissions:
       id-token: write  # PyPI trusted publishing
       contents: write  # the GitHub pre-release
+      packages: write  # granted because publish.yml's image job asks for it; it runs at releases only
