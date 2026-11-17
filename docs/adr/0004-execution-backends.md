@@ -308,7 +308,7 @@ PROFINET RT is a layer 2 protocol (EtherType 0x8892), without IP, so ns-3's stac
 This meets Phase 6's exit criterion that differences under load are quantified and documented.
 
 **The ns-3 base image, as built** *(2026-11-16)*:
-- `ghcr.io/jwszolek/smolpy-ns3-base:3.49`, built by `.github/workflows/ns3-base.yml` from `docker/ns3-base/Dockerfile`, for `linux/amd64` only for now. It is rebuilt when that Dockerfile changes, and pushed after the merge to `main`.
+- `ghcr.io/jwszolek/smolpy-ns3-base:3.49`, built by `.github/workflows/ns3-base.yml` from `docker/ns3-base/Dockerfile`, for `linux/amd64` and `linux/arm64`. Each platform is built and tested on a GitHub runner of its own architecture (`ubuntu-latest`, `ubuntu-24.04-arm`) and pushed as `3.49-amd64` and `3.49-arm64`; `3.49` is the index of both. It is rebuilt when that Dockerfile changes, and pushed after the merge to `main`.
 - **Pinned release:** ns-3.49 (released 2026-10-07), as the git tag `ns-3.49` with its commit checked. Debian 12's g++ 12 and CMake 3.25 meet its minimums: g++ 11.1, C++23 and CMake 3.25.
 - **Build:**
     - The `release` profile, without examples, tests or Python bindings.
@@ -332,7 +332,7 @@ This meets Phase 6's exit criterion that differences under load are quantified a
 - How ns-3 queue lengths should be sampled so that `queue_depth` is comparable to SimPy's per-port frame count.
 - Whether the pinned ns-3 release's build tool supports building scratch programs with an extra module cleanly, or the module should be installed as a contrib module. *(Resolved: scratch programs build against the prebuilt modules; see the base image above.)*
 - The size of the `-ns3` image, and whether to build ns-3 in its `optimized` profile only, without examples and tests, to keep it small.
-- Whether GitHub's hosted runners can build the ns-3 base image for `linux/arm64` in reasonable time, or that platform needs a native arm64 runner or is offered for `amd64` only at first. *(Decided: `amd64` only at first; `arm64` on a native runner later.)*
+- Whether GitHub's hosted runners can build the ns-3 base image for `linux/arm64` in reasonable time, or that platform needs a native arm64 runner or is offered for `amd64` only at first. *(Decided: `amd64` only at first; `arm64` on a native runner later. As built (2026-11-17): the base image on GitHub's hosted arm64 runner.)*
 
 ---
 

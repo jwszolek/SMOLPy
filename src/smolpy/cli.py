@@ -14,6 +14,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 from rich.theme import Theme
 
+from smolpy import __version__
+
 if TYPE_CHECKING:
     from smolpy.model import Scenario
 
@@ -303,6 +305,7 @@ def main() -> None:
         prog="smolpy",
         description="SMOLPy — Network simulation DSL and discrete-event simulator",
     )
+    parser.add_argument("--version", action="version", version=f"smolpy {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     run_cmd = sub.add_parser(

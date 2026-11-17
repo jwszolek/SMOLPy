@@ -172,9 +172,9 @@ A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP st
 
 ns-3 cannot be installed with `pip`, so the backend ships as a container image, `ghcr.io/jwszolek/smolpy:<version>-ns3`. It holds the pinned ns-3 release built once, and CI runs the ns-3 equivalence suite in it ([ADR-0004 — Container images](adr/0004-execution-backends.md#container-images)). A lighter image with SMOLPy and the Rust engine, without ns-3, can be published from the first release of `smolpy-engine-rs`.
 
-**Status: done.** All 3 steps are done, and so are the exit criteria. `arm64` for the ns-3 images follows on a native runner.
+**Status: done.** All 3 steps are done, and so are the exit criteria. The ns-3 base image is built for `arm64` too, on a native runner; the `-ns3` image follows it there.
 1. **The image without ns-3: done.** `ghcr.io/jwszolek/smolpy:<version>` holds SMOLPy and the Rust engine, for `linux/amd64` and `linux/arm64`. It is built, tested and pushed at each release.
-2. **The ns-3 base image: done.** `ghcr.io/jwszolek/smolpy-ns3-base:3.49` holds ns-3.49, built once, for `linux/amd64`. `arm64` follows on a native runner.
+2. **The ns-3 base image: done.** `ghcr.io/jwszolek/smolpy-ns3-base:3.49` holds ns-3.49, built once, for `linux/amd64` and `linux/arm64`, each on a runner of its own architecture.
 3. **The ns-3 backend.**
     - **Ethernet: done.** `backend="ns3"` runs adapters, switches and flows with every pattern, IMIX and 802.1Q priorities, with the six Ethernet metrics, on ns-3's IPv4/UDP stack.
         - It runs over SMOL's own full-duplex Ethernet device, because ns-3's CSMA is half duplex (ADR-0004).
