@@ -259,7 +259,7 @@ jobs:
   # <version>-ns3 and latest-ns3: one tag for both platforms, from the images
   # tested above
   image-ns3-index:
-    name: Image ${{ inputs.version }}-ns3, both platforms
+    name: ${{ inputs.version && format('Image {0}-ns3, both platforms', inputs.version) || 'Image with ns-3, both platforms (release only)' }}
     needs: [image, image-ns3]
     if: ${{ inputs.version }}
     runs-on: ubuntu-latest
