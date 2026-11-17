@@ -93,3 +93,19 @@ def test_runs_apply_to_smol_files_only(tmp_path) -> None:
     # after a Python script, the options are the script's own
     done = _smolpy(str(script), "--runs", "3")
     assert done.returncode == 0 and "args ['--runs', '3']" in done.stdout
+
+
+def test_version_is_the_installed_distributions() -> None:
+    from importlib.metadata import version
+
+    import smolpy
+
+    assert smolpy.__version__ == version("smolpy")
+    out = subprocess.run(
+        [sys.executable, "-c", "from smolpy.cli import main; main()", "--version"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert out.returncode == 0
+    assert out.stdout.strip() == f"smolpy {smolpy.__version__}"

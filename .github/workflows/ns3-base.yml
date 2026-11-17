@@ -3,13 +3,15 @@ name: ns-3 base image
 # ghcr.io/jwszolek/smolpy-ns3-base:<ns-3 version> (ADR-0004, Container
 # images): the pinned ns-3 release, built once. It is rebuilt only when its
 # Dockerfile changes, which is how the pinned release changes, so releases
-# never build ns-3. linux/amd64 for now; linux/arm64 is to follow on a native
-# runner, as an emulated build of ns-3 would take hours.
+# never build ns-3. For linux/amd64 and linux/arm64, each built on a runner of
+# its own architecture, as an emulated build of ns-3 would take hours: each
+# platform is pushed as <ns-3 version>-<arch>, and <ns-3 version> is the
+# multi-platform index of the two.
 #
 # Every build is tested before it is pushed: a scratch program, as the ns-3
 # backend's generated scenarios will be, built and run against it.
 #
-# - On a pull request that changes it: build and test, push nothing.
+# - On a pull request that changes it: build and test both, push nothing.
 # - After the merge to main, or run by hand: build, test and push.
 
 on:
@@ -27,16 +29,26 @@ on:
 
 jobs:
   image:
-    name: ns-3 base image
-    runs-on: ubuntu-latest
+    name: ns-3 base image, ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
       contents: read
       packages: write  # push to ghcr.io
 
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux/amd64, arch: amd64, runner: ubuntu-latest }
+          - { platform: linux/arm64, arch: arm64, runner: ubuntu-24.04-arm }
+
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/smolpy-ns3-base
       PUSH: ${{ github.event_name != 'pull_request' }}
+
+    outputs:
+      version: ${{ steps.v.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +59,7 @@ jobs:
           VERSION=$(sed -nE 's/^ARG NS3_VERSION=(.+)$/\1/p' docker/ns3-base/Dockerfile)
           test -n "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "ns-3 $VERSION"
+          echo "ns-3 $VERSION on $(uname -m)"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -56,16 +68,18 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: docker/ns3-base
-          platforms: linux/amd64
+          platforms: ${{ matrix.platform }}
           load: true
           tags: ns3-base:test
-          cache-from: type=gha,scope=ns3-base
-          cache-to: type=gha,scope=ns3-base,mode=max
+          cache-from: type=gha,scope=ns3-base-${{ matrix.arch }}
+          cache-to: type=gha,scope=ns3-base-${{ matrix.arch }},mode=max
 
       - name: Test with a scratch program
         run: |
           docker run --rm -v "$PWD/docker/ns3-base/smoke.cc:/opt/ns-3/scratch/smoke.cc:ro" \
             ns3-base:test ./ns3 run smoke
+          docker image inspect --format '{{.Os}}/{{.Architecture}}' ns3-base:test \
+            | grep -qx "${{ matrix.platform }}"
           docker image ls ns3-base:test
 
       - name: Log in to ghcr.io
@@ -81,6 +95,37 @@ jobs:
         env:
           VERSION: ${{ steps.v.outputs.version }}
         run: |
-          docker tag ns3-base:test "$IMAGE:$VERSION"
-          docker push "$IMAGE:$VERSION"
-          echo "Pushed $IMAGE:$VERSION" >> "$GITHUB_STEP_SUMMARY"
+          docker tag ns3-base:test "$IMAGE:$VERSION-${{ matrix.arch }}"
+          docker push "$IMAGE:$VERSION-${{ matrix.arch }}"
+          echo "Pushed $IMAGE:$VERSION-${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # <ns-3 version>: one tag for both platforms, from the images tested above
+  index:
+    name: ns-3 base image, both platforms
+    needs: image
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push to ghcr.io
+
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/smolpy-ns3-base
+      VERSION: ${{ needs.image.outputs.version }}
+
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the index
+        run: |
+          docker buildx imagetools create -t "$IMAGE:$VERSION" \
+            "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
+          echo "Pushed $IMAGE:$VERSION for linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"
