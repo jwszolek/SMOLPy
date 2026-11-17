@@ -172,7 +172,7 @@ A code-generated ns-3 scenario from the Scenario IR. Gives a realistic TCP/IP st
 
 ns-3 cannot be installed with `pip`, so the backend ships as a container image, `ghcr.io/jwszolek/smolpy:<version>-ns3`. It holds the pinned ns-3 release built once, and CI runs the ns-3 equivalence suite in it ([ADR-0004 — Container images](adr/0004-execution-backends.md#container-images)). A lighter image with SMOLPy and the Rust engine, without ns-3, can be published from the first release of `smolpy-engine-rs`.
 
-**Status: done.** All 3 steps are done, and so are the exit criteria. The ns-3 base image is built for `arm64` too, on a native runner; the `-ns3` image follows it there.
+**Status: done.** All 3 steps are done, and so are the exit criteria. The ns-3 images are built for `arm64` too, on a native runner.
 1. **The image without ns-3: done.** `ghcr.io/jwszolek/smolpy:<version>` holds SMOLPy and the Rust engine, for `linux/amd64` and `linux/arm64`. It is built, tested and pushed at each release.
 2. **The ns-3 base image: done.** `ghcr.io/jwszolek/smolpy-ns3-base:3.49` holds ns-3.49, built once, for `linux/amd64` and `linux/arm64`, each on a runner of its own architecture.
 3. **The ns-3 backend.**
@@ -188,7 +188,7 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
     - **PROFINET: done.** PROFINET RT runs on layer 2, on SMOL's Ethernet device, with the three PROFINET metrics.
         - Every PROFINET scenario of the suite is bit-exact with SimPy, watchdog expiries included.
         - A frame that arrives exactly at the watchdog's deadline is too late on both engines.
-    - **The image: done.** `ghcr.io/jwszolek/smolpy:<version>-ns3` and `latest-ns3`, for `linux/amd64`, hold the base image, SMOLPy and the Rust engine, and `smol-ns3` built in.
+    - **The image: done.** `ghcr.io/jwszolek/smolpy:<version>-ns3` and `latest-ns3`, for `linux/amd64` and `linux/arm64`, hold the base image, SMOLPy and the Rust engine, and `smol-ns3` built in.
         - Each release builds it from the release's wheels.
         - Before it is pushed, CI runs a `.smol` file on ns-3 through the CLI, and the ns-3 suite against the SMOLPy installed in it.
     - **Under load: done.** `python -m benchmarks load` compares Modbus and MQTT on ns-3's TCP with SimPy on a plant cell whose uplink loads up to 150 % ([Execution backends](backends.md#modbus-and-mqtt-over-tcp)).

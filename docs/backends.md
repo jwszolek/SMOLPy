@@ -32,7 +32,7 @@ A scenario outside a backend's capabilities is rejected before it runs, with the
 
 ## Installing ns-3
 
-ns-3 cannot be installed with `pip`. The simplest way is the image, for `linux/amd64`:
+ns-3 cannot be installed with `pip`. The simplest way is the image, for `linux/amd64` and `linux/arm64`:
 
 ```bash
 docker run --rm -v "$PWD:/work" ghcr.io/jwszolek/smolpy:latest-ns3 run plant.smol --backend ns3
@@ -50,7 +50,7 @@ The first run compiles `smol-ns3` against that build, which takes about 8 s, and
 
 The cross-backend suite ([ADR-0009](adr/0009-batch-execution-and-cross-backend-validation.md)) compares every backend with SimPy.
 
-**Rust** gives SimPy's results bit for bit: every sample, in every scenario.
+**Rust** gives SimPy's results bit for bit on every deterministic scenario: every sample, down to the event count. Random traffic uses its own generator, so there the results agree statistically.
 
 **ns-3** runs SMOL's own full-duplex Ethernet device and switch, because ns-3's CSMA is half duplex. On top of them it runs ns-3's IP stack, and its random traffic is drawn from SimPy's streams. So:
 - **Ethernet** over UDP, with every pattern, IMIX and priorities, gives SimPy's results bit for bit. That holds for stochastic scenarios too, with the same seed.

@@ -4,15 +4,19 @@ name: Docker image
 # the wheels of one version of smolpy and smolpy-engine-rs:
 # - <version>, latest: without ns-3, for linux/amd64 and linux/arm64;
 # - <version>-ns3, latest-ns3: on the ns-3 base image, with smol-ns3 built
-#   in, for linux/amd64 (the base image's only platform so far).
+#   in, for linux/amd64 and linux/arm64. Each platform is built and tested
+#   on a runner of its own architecture, as smol-ns3 is compiled in the
+#   image; it is pushed as <version>-ns3-<arch>, and the two tags are the
+#   multi-platform index of both.
 # Every image is tested before anything is pushed: a .smol run through the
 # CLI; the wheel smoke test (bit-exact with SimPy) without ns-3, and the ns-3
 # suite with it.
 #
 # - Called by publish.yml at a release, once both packages are on PyPI: uses
 #   the files of the same run and pushes both images.
-# - On a pull request that touches the images: builds the wheels here, for
-#   linux/amd64 only, tests both images and pushes nothing.
+# - On a pull request that touches the images: builds the wheels here, tests
+#   the image without ns-3 for linux/amd64 and the image with ns-3 for both
+#   platforms, and pushes nothing.
 
 on:
   pull_request:
@@ -96,6 +100,15 @@ jobs:
           manylinux: auto
           args: --release --out dist -m rust/smolpy-engine-rs/Cargo.toml
 
+      # for the ns-3 image on linux/arm64
+      - name: Build smolpy-engine-rs for aarch64
+        if: ${{ env.RELEASE != 'true' }}
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64
+          manylinux: auto
+          args: --release --out dist -m rust/smolpy-engine-rs/Cargo.toml
+
       # --- the image ---
 
       - name: Version
@@ -167,12 +180,19 @@ jobs:
           echo "Pushed $IMAGE:$VERSION and $IMAGE:latest" >> "$GITHUB_STEP_SUMMARY"
 
   image-ns3:
-    name: ${{ inputs.version && format('Image {0}-ns3', inputs.version) || 'Image with ns-3 (test build)' }}
+    name: ${{ inputs.version && format('Image {0}-ns3', inputs.version) || 'Image with ns-3 (test build)' }}, ${{ matrix.platform }}
     needs: image
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write  # push to ghcr.io
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux/amd64, arch: amd64, runner: ubuntu-latest }
+          - { platform: linux/arm64, arch: arm64, runner: ubuntu-24.04-arm }
 
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/smolpy
@@ -196,13 +216,15 @@ jobs:
       # below that needed another build would fail
       - name: Build
         run: |
-          docker buildx build --platform linux/amd64 --load \
+          docker buildx build --platform "${{ matrix.platform }}" --load \
             --build-arg VERSION="$VERSION" -f docker/Dockerfile.ns3 -t smolpy:test-ns3 .
+          docker image inspect --format '{{.Os}}/{{.Architecture}}' smolpy:test-ns3 \
+            | grep -qx "${{ matrix.platform }}"
           docker image ls smolpy:test-ns3
 
       - name: Test the CLI on ns-3
         run: |
-          docker run --rm smolpy:test-ns3 --help
+          docker run --rm smolpy:test-ns3 --version | grep -qx "smolpy $VERSION"
           mkdir -p out && chmod 777 out
           cp docker/smoke.smol out/
           docker run --rm -v "$PWD/out:/work" \
@@ -230,8 +252,38 @@ jobs:
       - name: Push
         if: ${{ env.RELEASE == 'true' }}
         run: |
-          for tag in "$VERSION-ns3" latest-ns3; do
-            docker tag smolpy:test-ns3 "$IMAGE:$tag"
-            docker push "$IMAGE:$tag"
-          done
-          echo "Pushed $IMAGE:$VERSION-ns3 and $IMAGE:latest-ns3" >> "$GITHUB_STEP_SUMMARY"
+          docker tag smolpy:test-ns3 "$IMAGE:$VERSION-ns3-${{ matrix.arch }}"
+          docker push "$IMAGE:$VERSION-ns3-${{ matrix.arch }}"
+          echo "Pushed $IMAGE:$VERSION-ns3-${{ matrix.arch }}" >> "$GITHUB_STEP_SUMMARY"
+
+  # <version>-ns3 and latest-ns3: one tag for both platforms, from the images
+  # tested above
+  image-ns3-index:
+    name: Image ${{ inputs.version }}-ns3, both platforms
+    needs: [image, image-ns3]
+    if: ${{ inputs.version }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # push to ghcr.io
+
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/smolpy
+      VERSION: ${{ needs.image.outputs.version }}
+
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the index
+        run: |
+          docker buildx imagetools create -t "$IMAGE:$VERSION-ns3" -t "$IMAGE:latest-ns3" \
+            "$IMAGE:$VERSION-ns3-amd64" "$IMAGE:$VERSION-ns3-arm64"
+          docker buildx imagetools inspect "$IMAGE:$VERSION-ns3"
+          echo "Pushed $IMAGE:$VERSION-ns3 and $IMAGE:latest-ns3 for linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"
