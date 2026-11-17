@@ -11,16 +11,17 @@ Python rewrite of SMOL — a Network Description Language and Discrete-Event Sim
 
 SMOLPy lets you describe a network topology in pure Python, define traffic flows, and run a discrete-event simulation that produces real metric time-series.  A built-in Dear PyGui desktop dashboard shows the topology and live metric charts as the simulation runs.
 
-> **Two simulation engines, one model.** SMOLPy is no longer a SimPy-only simulator. A scenario, written in Python or in a `.smol` file, becomes one execution-independent model, and it can run on more than one engine:
+> **Three simulation engines, one model.** A scenario, written in Python or in a `.smol` file, becomes one execution-independent model, and it runs on any of three engines:
 >
 > - **SimPy** (Python): the reference implementation. It is always installed, runs the whole model and drives the dashboards.
 > - **Rust** (`smol-engine`): a native engine that gives **SimPy's results bit for bit** and runs about **40× faster**. B1 at 10 M frames takes 4.9 s, against 200.8 s on SimPy.
+> - **ns-3**: the same scenario on **[ns-3](https://www.nsnam.org/)**, the established network simulator, with its real IPv4, UDP and **TCP** stack. Modbus TCP and MQTT run over ns-3's TCP, with its handshake, acknowledgements, and flow and congestion control. Ethernet and PROFINET RT give SimPy's results bit for bit.
 >
 > ```python
-> result = net.simulate(duration=60_000, backend="rust")
+> result = net.simulate(duration=60_000, backend="rust")   # or "ns3"
 > ```
 >
-> The Rust engine runs the whole model: Ethernet, Modbus TCP, MQTT and PROFINET RT. Only the live and text dashboards need SimPy. See [Simulation engine](#simulation-engine) and [ADR-0008](https://jwszolek.github.io/SMOLPy/adr/0008-rust-des-engine-mvp/).
+> Every engine runs the whole model: Ethernet, Modbus TCP, MQTT and PROFINET RT. Only the live and text dashboards need SimPy. See [Simulation engine](#simulation-engine), [Running on ns-3](#running-on-ns-3) and [Execution backends](https://jwszolek.github.io/SMOLPy/backends/).
 
 📖 **Full documentation:** [jwszolek.github.io/SMOLPy](https://jwszolek.github.io/SMOLPy/)
 
@@ -71,7 +72,7 @@ docker run --rm -v "$PWD:/work" ghcr.io/jwszolek/smolpy run plant.smol --backend
 - It runs as uid 1000. To own the files it writes as yourself, add `--user "$(id -u):$(id -g)"`.
 - A version is pinned as `ghcr.io/jwszolek/smolpy:<version>`; `latest` is the latest release.
 
-**With ns-3,** from the image `<version>-ns3` or `latest-ns3`, for `linux/amd64`, published from 1.10.0 on. It adds the pinned ns-3 build and the ns-3 backend, ready to run:
+**With ns-3,** from the image `<version>-ns3` or `latest-ns3`, published from 1.10.0 on, for `linux/amd64` and, from the release after 1.10.1, `linux/arm64`. It adds the pinned ns-3 build and the ns-3 backend, ready to run:
 
 ```bash
 docker run --rm -v "$PWD:/work" ghcr.io/jwszolek/smolpy:latest-ns3 run plant.smol --backend ns3 -o results.csv
@@ -455,7 +456,7 @@ IRT (isochronous, scheduled) traffic, AR establishment (DCP / RPC connect), acyc
 
 ## Simulation engine
 
-Every simulation goes through the same path. The Python API and `.smol` files build a **Scenario IR**, an execution-independent model ([ADR-0007](https://jwszolek.github.io/SMOLPy/adr/0007-execution-independent-scenario-model/)), and a **backend** runs it. Both engines follow the same written contract, [Model Semantics](https://jwszolek.github.io/SMOLPy/model-semantics/):
+Every simulation goes through the same path. The Python API and `.smol` files build a **Scenario IR**, an execution-independent model ([ADR-0007](https://jwszolek.github.io/SMOLPy/adr/0007-execution-independent-scenario-model/)), and a **backend** runs it. Every engine follows the same written contract, [Model Semantics](https://jwszolek.github.io/SMOLPy/model-semantics/):
 - simulated time is integer nanoseconds;
 - frames are modelled on the wire as real Ethernet, with preamble, FCS and inter-frame gap.
 
@@ -474,17 +475,46 @@ batch = run_many(net, runs=30, duration=60_000, backend="rust")
 smolpy run plant.smol --backend rust
 ```
 
-- **The same numbers.** On deterministic scenarios the Rust engine reproduces SimPy's results bit for bit, down to the event count. Random traffic uses each engine's own generator, so there the results agree statistically. CI checks both on every pull request ([ADR-0009](https://jwszolek.github.io/SMOLPy/adr/0009-batch-execution-and-cross-backend-validation/)).
+- **The same numbers.** On deterministic scenarios the Rust engine reproduces SimPy's results bit for bit, down to the event count. Random traffic uses its own generator, so there the results agree statistically. ns-3 draws random traffic from SimPy's streams, so its Ethernet and PROFINET RT results are bit for bit with the same seed, random traffic included. CI checks both on every pull request ([ADR-0009](https://jwszolek.github.io/SMOLPy/adr/0009-batch-execution-and-cross-backend-validation/)).
 - **ns-3 adds TCP.** Ethernet and PROFINET on ns-3 also give SimPy's results bit for bit. Modbus and MQTT run over ns-3's TCP, so their results differ by what TCP does: under heavy load by up to +43 % in latency. [Execution backends](https://jwszolek.github.io/SMOLPy/backends/) has the details and measurements.
 - **Nothing is skipped silently.** A scenario that uses something a backend does not support is rejected before the run with a message naming the element. Asking the Rust engine for a dashboard is an error too.
 
-The model both engines implement:
+The model every engine implements:
 
 - **MAC-learning switch** — each switch pre-seeds its forwarding table from the topology wiring, eliminating spurious flooding toward silent endpoints (e.g. a server that only receives).  Dynamic learning still operates for traffic through intermediate switches.
 - **Store-and-forward model** — transmission delay + propagation delay per hop.
 - **Queuing** — each link direction has its own egress queue with 8 strict 802.1Q priority classes (FIFO within a class, non-preemptive); `qos="fifo"` on a switch ignores priorities. `queue_depth` reports buffered frames at the switch's outbound ports.
 - **Traffic shaping** — constant, Poisson, Pareto-burst and batch patterns; IMIX frame-size distribution.
 - **Live mode** (SimPy only) — simulation runs in 200 chunks (~8 s total wall time); the dashboard reads shared metric arrays between chunks via Python's GIL.
+
+---
+
+## Running on ns-3
+
+The `ns3` backend runs a SMOL scenario on [ns-3](https://www.nsnam.org/) 3.49, the open-source network simulator used widely in networking research. The same `.smol` file or `Network` that runs on SimPy runs there too, unchanged:
+
+```bash
+docker run --rm -v "$PWD:/work" ghcr.io/jwszolek/smolpy:latest-ns3 run plant.smol --backend ns3 -o results.csv
+```
+
+```python
+result = net.simulate(duration=60_000, backend="ns3")
+```
+
+**What it is for.**
+- **A real TCP.** SMOL sizes Modbus TCP and MQTT frames as TCP segments, but SimPy and Rust do not model TCP's behaviour. On ns-3 every Modbus master–slave and MQTT client–broker pair has one persistent connection over ns-3's TCP: the handshake, delayed acknowledgements, CUBIC congestion control and the receiver's window.
+- **A cross-check against an established simulator.** Below the TCP layer, ns-3 runs SMOL's own full-duplex Ethernet device and switch. So Ethernet over UDP and PROFINET RT on layer 2 give SimPy's results **bit for bit**, watchdog expiries and stochastic traffic included. That ties SMOL's reference model to ns-3's event scheduler and IP stack.
+- **Where TCP matters.** `python -m benchmarks load` runs a plant cell whose Modbus and MQTT traffic shares a 10 Mb/s uplink with a UDP camera, from 50 % to 150 % offered load:
+
+| Offered load | Modbus RTT, SimPy → ns-3 | MQTT latency, SimPy → ns-3 | Delivered to the HMI |
+|---|---|---|---|
+| 0.50 – 0.95 | within 0.4 % | within 0.4 % | the same |
+| 1.00 | +18 % | +25 % | the same |
+| 1.50 | 3.2 → 3.4 s (+6 %) | 3.2 → 4.5 s (+43 %) | −41 % |
+
+Below saturation the engines agree. At saturation, TCP's own acknowledgements tip the link over. Heavily overloaded, TCP's windows hold MQTT back while the UDP stream, which does not back off, takes the link. [Execution backends](https://jwszolek.github.io/SMOLPy/backends/#modbus-and-mqtt-over-tcp) has the full table and the mechanism.
+
+**Getting it.** ns-3 cannot be installed with `pip`, so the simplest way is the image `ghcr.io/jwszolek/smolpy:latest-ns3` ([Install](#install)). It holds the ns-3 build, SMOLPy, the Rust engine and `smol-ns3`, the C++ program that runs scenarios on ns-3, compiled in. With your own ns-3 3.49 build instead, set `NS3_HOME` to it: the first run compiles `smol-ns3` in about 8 s and caches it.
 
 ---
 
