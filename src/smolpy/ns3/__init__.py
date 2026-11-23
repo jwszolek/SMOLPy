@@ -47,7 +47,7 @@ from smolpy.model.streams import source_ids, stream_seed
 if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2  # 2: switch buffers (ADR-0011)
 UDP_IP_BYTES = 8 + 20
 ETHERNET_BYTES = 14 + 4  # header and FCS
 PROGRAM = "smol-ns3"
@@ -224,11 +224,7 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
     lines = [f"smol-ns3 {FORMAT_VERSION}", f"duration {tb.ms_to_ns(scenario.run.duration_ms)}"]
     for n in scenario.nodes:
         if isinstance(n, model.SwitchNode):
-            if n.buffer_bytes is not None:  # never run as unbounded (ADR-0011)
-                raise ValueError(
-                    f"switch {n.name!r}: the ns3 backend does not support bounded switch buffers"
-                )
-            lines.append("switch")
+            lines.append(f"switch {n.buffer_bytes or 0}")  # 0: unbounded
         else:
             lines.append(f"adapter {n.mac} {n.ip}")  # a station, with IPv4
 
@@ -355,17 +351,20 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
             ok = isinstance(target, model.MqttBrokerNode)
         elif metric in ("pn_latency", "pn_jitter", "pn_watchdog_expiries"):
             ok = isinstance(target, model.AdapterNode | model.ProfinetDeviceNode)
-        elif metric == "bytes_sent":
+        elif metric in ("bytes_sent", "frames_sent", "frames_received", "modbus_unanswered"):
             ok = adapter and target.name in has_link
         elif metric == "queue_depth":
             ok = isinstance(target, model.SwitchNode)
+        elif metric in ("drops", "drops_total"):
+            ok = isinstance(target, model.SwitchNode)
+            metric = "drops"  # smol-ns3 reports the total; drops is its difference
         elif metric == "utilization":
             ok = bool(into.get(target.name))
             devices = " ".join(str(d) for d, _ in into.get(target.name, []))
             speed = sum((s for _, s in into.get(target.name, [])), Fraction(0))
         else:
             raise ValueError(f"the ns3 backend does not support the metric {metric!r}")
-        samplers.append(_Sampler(key, metric if ok else "", speed))
+        samplers.append(_Sampler(key, obs.metric if ok else "", speed))
         if ok:
             num, den = _ratio(tb.period_ns(obs.every_ms))
             lines.append(f"observe {metric} {index[target.name]} {num} {den} {devices}".rstrip())
@@ -408,8 +407,19 @@ def _metrics(
                 out.append((t_ms, a / 1_000_000))
             elif s.metric == "bytes_sent":
                 out.append((t_ms, a // 8 / 1_000_000))
-            elif s.metric in ("queue_depth", "broker_queue", "pn_watchdog_expiries"):
+            elif s.metric in (
+                "queue_depth",
+                "broker_queue",
+                "pn_watchdog_expiries",
+                "drops_total",
+                "frames_sent",
+                "frames_received",
+            ):
                 out.append((t_ms, float(a)))
+            elif s.metric == "drops":
+                out.append((t_ms, float(a - last)))
+            elif s.metric == "modbus_unanswered":
+                out.append((t_ms, float(a - b)))
             elif s.metric == "utilization":
                 out.append((t_ms, tb.quotient((a - last) * 100_000, s.speed * (t - last_t))))
             last_t, last = t, a

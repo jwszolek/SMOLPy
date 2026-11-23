@@ -84,16 +84,47 @@ def compare_runs(candidate: SimulationResult, reference: SimulationResult) -> li
     return out
 
 
-def compare_sampling(candidate: SimulationResult, reference: SimulationResult) -> list[Mismatch]:
+# Metrics that take no sample when their window is empty (Model Semantics §8)
+WINDOW_METRICS = ("latency", "modbus_latency", "pn_latency", "pn_jitter")
+
+
+def compare_sampling(
+    candidate: SimulationResult, reference: SimulationResult, lossy: bool = False
+) -> list[Mismatch]:
     """The same metrics, sampled at the same instants; the values may differ.
     For a backend whose protocol stack is meant to differ from the reference's
-    (ns-3's TCP), whose differences are reported, not asserted (ADR-0009)."""
+    (ns-3's TCP), whose differences are reported, not asserted (ADR-0009).
+
+    With *lossy*, a scenario where frames are dropped (ADR-0011): TCP
+    retransmits what the reference loses, so a window metric can have
+    messages, and a sample, in other windows than on the reference. Its
+    instants must then only be sampling instants of its observation."""
     out = _compare_keys(set(candidate.metrics), set(reference.metrics))
     for key in sorted(set(candidate.metrics) & set(reference.metrics)):
         got = [t for t, _ in candidate.metrics[key]]
         want = [t for t, _ in reference.metrics[key]]
-        if got != want:
+        if lossy and key.partition(":")[0] in WINDOW_METRICS:
+            grid = _sampling_instants(reference.scenario, key)
+            if not set(got) <= grid or got != sorted(got):
+                out.append(Mismatch(key, f"sampled at {got}, not all sampling instants"))
+        elif got != want:
             out.append(Mismatch(key, f"sampled at {got}, the reference at {want}"))
+    return out
+
+
+def _sampling_instants(scenario: Scenario, key: str) -> set[float]:
+    """The instants, in ms, at which the observations of *key* sample."""
+    from smolpy.model import timebase as tb
+
+    assert scenario.run is not None
+    duration = tb.ms_to_ns(scenario.run.duration_ms)
+    out: set[float] = set()
+    for o in scenario.observations:
+        if f"{o.metric}:{o.target}" == key:
+            for t in tb.instants(0, tb.period_ns(o.every_ms)):
+                if t >= duration:
+                    break
+                out.add(tb.ns_to_ms(t))
     return out
 
 

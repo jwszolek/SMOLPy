@@ -7,6 +7,8 @@ python -m benchmarks batch --scenario B3 --frames 1M --runs 16 --jobs 8 [--backe
 python -m benchmarks profile --scenario B1 --frames 1M --tool cprofile|tracemalloc|py-spy
 python -m benchmarks load [--loads 0.5 0.9 1.0 1.2] [--duration 20000] [--backend simpy ns3]
 python -m benchmarks load-summary benchmarks/results/<file>.json
+python -m benchmarks loss [--loads 0.93 0.996] [--duration 30000] [--backend simpy rust ns3]
+python -m benchmarks loss-summary benchmarks/results/<file>.json
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from benchmarks import loss
 from benchmarks.load import DURATION_MS, LOADS, run_load, summarize_load
 from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
@@ -90,6 +93,16 @@ def main() -> None:
     load_summ = sub.add_parser("load-summary", help="markdown table of a load results file")
     load_summ.add_argument("file", type=Path)
 
+    lossy = sub.add_parser("loss", help="the testbed of ADR-0011, bounded buffers, every engine")
+    lossy.add_argument("--loads", nargs="+", type=float, default=list(loss.LOADS))
+    lossy.add_argument("--duration", type=float, default=loss.DURATION_MS, help="simulated ms")
+    lossy.add_argument("--backend", nargs="+", default=list(loss.ENGINES))
+    lossy.add_argument("--label", default="bounded-buffers")
+    lossy.add_argument("--out", type=Path, default=None)
+
+    loss_summ = sub.add_parser("loss-summary", help="markdown table of a loss results file")
+    loss_summ.add_argument("file", type=Path)
+
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
@@ -106,6 +119,12 @@ def main() -> None:
         print(summarize_load(out, *a.backend[:2]) if len(a.backend) > 1 else "")
     elif a.cmd == "load-summary":
         print(summarize_load(a.file))
+    elif a.cmd == "loss":
+        out = loss.run_loss(a.loads, a.duration, a.backend, a.label, a.out)
+        print(f"\nresults: {out}\n")
+        print(loss.summarize_loss(out))
+    elif a.cmd == "loss-summary":
+        print(loss.summarize_loss(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
         r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)

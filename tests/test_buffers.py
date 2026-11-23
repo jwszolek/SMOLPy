@@ -180,16 +180,6 @@ def test_a_backend_without_the_feature_rejects_a_bounded_switch(
         backends.check(_cell().to_scenario(duration=10), name)
 
 
-def test_no_engine_runs_a_bounded_switch_as_unbounded_when_called_directly() -> None:
-    """Past backends.check(): every engine without bounded buffers still
-    refuses them. ns-3's lowering needs no ns-3 build."""
-    from smolpy import ns3
-
-    sc = _cell().to_scenario(duration=10)
-    with pytest.raises(ValueError, match="does not support bounded switch buffers"):
-        ns3.lower(sc)
-
-
 @pytest.mark.parametrize("name", ["simpy", "rust", "ns3"])
 def test_an_unbounded_switch_runs_as_before(name: str) -> None:
     _backend(name)

@@ -81,9 +81,11 @@ def test_deterministic(name: str, backend: str) -> None:
 def test_over_tcp(name: str, backend: str, record_property) -> None:
     """Over TCP, the same metrics at the same instants; the differences in
     their values are reported, not asserted (ADR-0009, high-fidelity rules)."""
-    candidate = harness.run_once(_supported(DETERMINISTIC[name](), backend), backend)
+    scenario = _supported(DETERMINISTIC[name](), backend)
+    candidate = harness.run_once(scenario, backend)
     reference = _reference_run(name)
-    mismatches = harness.compare_sampling(candidate, reference)
+    lossy = any(getattr(n, "buffer_bytes", None) is not None for n in scenario.nodes)
+    mismatches = harness.compare_sampling(candidate, reference, lossy)
     assert not mismatches, "\n".join(map(str, mismatches))
     for key, (want, got) in harness.mean_differences(candidate, reference).items():
         record_property(key, f"{want:.6g} on {harness.REFERENCE}, {got:.6g} on {backend}")
