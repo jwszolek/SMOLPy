@@ -31,6 +31,11 @@ _UNITS: dict[str, str] = {
     "modbus_latency": "µs",
     "pn_latency": "µs",
     "pn_jitter": "µs",
+    "drops": "fr",
+    "drops_total": "fr",
+    "frames_sent": "fr",
+    "frames_received": "fr",
+    "modbus_unanswered": "polls",
 }
 
 

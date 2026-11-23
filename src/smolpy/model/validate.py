@@ -88,6 +88,12 @@ METRIC_TARGETS: dict[str, tuple[type, ...] | None] = {
     "pn_jitter": (AdapterNode, ProfinetDeviceNode),
     "pn_watchdog_expiries": (AdapterNode, ProfinetDeviceNode),
     "utilization": None,
+    # ADR-0011: loss
+    "drops": (SwitchNode,),
+    "drops_total": (SwitchNode,),
+    "frames_sent": (AdapterNode,),
+    "frames_received": (AdapterNode,),
+    "modbus_unanswered": (AdapterNode,),
 }
 
 SWITCH_MODES = ("store-and-forward", "cut-through")

@@ -269,6 +269,94 @@ def protocols() -> Scenario:
     return net.to_scenario(duration=60)
 
 
+def tail_drop() -> Scenario:
+    """Ethernet and PROFINET through bounded switch buffers (ADR-0011): a
+    learning core that floods to a bounded port, a FIFO edge switch, two
+    sources whose frames reach a full queue at the same instants, priority
+    frames dropped by tail drop, and a watchdog that expires on loss."""
+    net = Network("tail-drop")
+    core = net.switch("core", ports=4, buffer=8 * 1_500)
+    # 5 frames of 1 500 B leave 50 B: too little for a 92 B PROFINET frame
+    edge = net.switch("edge", ports=5, qos="fifo", buffer=5 * 1_500 + 50)
+    plc = net.adapter("plc", ip="10.0.0.1")
+    io = net.profinet_device("io", ip="10.0.0.2")
+    left = net.adapter("left", ip="10.0.0.3")
+    right = net.adapter("right", ip="10.0.0.4")
+    srv = net.adapter("srv", ip="10.0.0.5")
+    quiet = net.adapter("quiet", ip="10.0.0.6")
+    cam = net.adapter("cam", ip="10.0.0.7")
+    net.link(left, core, speed=1_000, length=5)
+    net.link(right, core, speed=1_000, length=5)
+    net.link(srv, core, speed=100, length=10)
+    net.link(core, edge, speed=100, length=50)
+    net.link(plc, edge, speed=100, length=10)
+    net.link(io, edge, speed=100, length=10)
+    net.link(quiet, edge, speed=100, length=10)
+    net.link(cam, edge, speed=1_000, length=10)
+    plc.controls(io, cycle=1, inputs=64, outputs=64, hold=2)
+    # the same rate and start: their frames reach core's port to srv together
+    left.sends(srv, rate=5_000, size=1_500)
+    right.sends(srv, rate=5_000, size=1_500)
+    right.sends(srv, rate=2_000, size=200, priority=5, delay_ms=0.05)
+    # to quiet, which never sends: core floods these, to srv's port as well
+    left.sends(quiet, rate=3_000, size=1_200, delay_ms=0.3)
+    left.sends(plc, rate=2_000, size=1_500, delay_ms=0.1)
+    # with left's, 129 % of plc's port: PROFINET inputs are dropped there
+    cam.sends(plc, rate=8_500, size=1_500, delay_ms=0.02)
+    net.observe("drops", on=core, every=2)
+    net.observe("drops_total", on=core, every=2)
+    net.observe("drops_total", on=edge, every=2)
+    net.observe("queue_depth", on=core, every=1)
+    net.observe("frames_sent", on=left, every=2)
+    net.observe("frames_received", on=srv, every=2)
+    net.observe("frames_received", on=quiet, every=2)
+    net.observe("latency", on=srv, every=2)
+    net.observe("pn_watchdog_expiries", on=plc, every=2)
+    net.observe("pn_latency", on=plc, every=2)
+    return net.to_scenario(duration=40)
+
+
+def lossy_protocols() -> Scenario:
+    """Modbus polls and MQTT messages through a bounded port overloaded by
+    a constant flow: lost requests, responses and PUBLISH copies."""
+    net = Network("lossy-protocols")
+    sw = net.switch("sw", ports=5, buffer=6 * 1_500 + 40)
+    scada = net.adapter("scada", ip="10.0.0.1")
+    meter = net.modbus_slave("meter", ip="10.0.0.2", unit_id=3)
+    broker = net.mqtt_broker("broker", ip="10.0.0.3")
+    sensor = net.adapter("sensor", ip="10.0.0.4")
+    cam = net.adapter("cam", ip="10.0.0.5")
+    net.link(scada, sw, speed=100, length=20)
+    for node in (meter, broker, sensor, cam):
+        net.link(node, sw, speed=1_000, length=20)
+    cam.sends(scada, rate=9_000, size=1_500)  # 110 % of scada's port
+    scada.polls(meter, register=0, count=20, rate=500)
+    sensor.publishes(broker, topic="cell/temp", rate=400, payload=40, qos=1)
+    broker.routes("cell/temp", to=[scada])
+    net.observe("modbus_unanswered", on=scada, every=2)
+    net.observe("modbus_latency", on=scada, every=2)
+    net.observe("latency", on=scada, every=2)
+    net.observe("frames_received", on=scada, every=2)
+    net.observe("drops_total", on=sw, every=2)
+    return net.to_scenario(duration=40)
+
+
+def random_drops() -> Scenario:
+    """Poisson traffic into a bounded port at 150 % of its link: the buffer
+    is nearly always full, so delay is capped and its mean is precise."""
+    net = Network("random-drops")
+    sw = net.switch("sw", ports=3, buffer=12 * 1_518)
+    srv = net.adapter("srv", ip="10.0.0.1")
+    net.link(srv, sw, speed=100, length=5)
+    for i in (2, 3):
+        host = net.adapter(f"h{i}", ip=f"10.0.0.{i}")
+        net.link(host, sw, speed=1_000, length=10)
+        host.sends(srv, rate=0.75 * 100e6 / (1_538 * 8), size=1_518, pattern="poisson")
+    for metric in ("throughput", "latency", "frames_received"):
+        net.observe(metric, on=srv, every=20)
+    return net.to_scenario(duration=1_000, seed=23)
+
+
 def random_load() -> Scenario:
     """Poisson and bursty traffic with IMIX sizes into one server port, at
     about 40 % of its link."""
@@ -338,9 +426,12 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "messaging": messaging,
     "cyclic": cyclic,
     "protocols": protocols,
+    "tail-drop": tail_drop,
+    "lossy-protocols": lossy_protocols,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
     "random-load": random_load,
     "batches": batches,
     "groups": groups,
+    "random-drops": random_drops,
 }
