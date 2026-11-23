@@ -274,7 +274,16 @@ class Network:
                     for m in node.mqtt_specs
                 )
                 traffic.extend(
-                    model.Poll(node.name, p.slave.name, p.register, p.count, p.rate_hz, p.delay_ms)
+                    model.Poll(
+                        node.name,
+                        p.slave.name,
+                        p.register,
+                        p.count,
+                        p.rate_hz,
+                        p.delay_ms,
+                        p.outstanding,
+                        p.timeout_ms,
+                    )
                     for p in node.modbus_specs
                 )
             elif isinstance(node, MQTTBroker):

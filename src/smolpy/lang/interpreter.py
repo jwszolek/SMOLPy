@@ -171,7 +171,13 @@ class _Interpreter:
                     slave = self._resolve(net, d.slave, d.line)
                     assert isinstance(master, Adapter)
                     master.polls(
-                        slave, register=d.register, count=d.count, rate=d.rate, delay_ms=d.delay_ms
+                        slave,
+                        register=d.register,
+                        count=d.count,
+                        rate=d.rate,
+                        delay_ms=d.delay_ms,
+                        outstanding=d.outstanding,  # type: ignore[arg-type]
+                        timeout_ms=d.timeout_ms,  # type: ignore[arg-type]
                     )
                     lines.statement("poll", master.name, d.line)
                 elif isinstance(d, smol_ast.ControlDecl):

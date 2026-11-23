@@ -68,12 +68,16 @@ class ModbusSpec:
         count: int,
         rate_hz: float,
         delay_ms: float = 0.0,
+        outstanding: int | None = None,
+        timeout_ms: float | None = None,
     ) -> None:
         self.slave = slave
         self.register = register
         self.count = count
         self.rate_hz = rate_hz
         self.delay_ms = delay_ms
+        self.outstanding = outstanding  # None: any number of requests in flight
+        self.timeout_ms = timeout_ms  # None: no response timeout
         # Frame sizes are part of the model: smolpy.model.frames.
         self.request_frame_size: int = MODBUS_REQUEST_BYTES
         self.response_frame_size: int = modbus_response_frame_size(count)
@@ -163,9 +167,16 @@ class Adapter(Node):
         count: int,
         rate: float = 1.0,  # polls / second
         delay_ms: float = 0.0,
+        outstanding: int | None = None,  # 1: one request in flight (ADR-0012)
+        timeout_ms: float | None = None,  # response timeout, with outstanding=1
     ) -> None:
-        self._check(model.Poll(self.name, slave.name, register, count, rate, delay_ms), slave)
-        self.modbus_specs.append(ModbusSpec(slave, register, count, rate, delay_ms))
+        poll = model.Poll(
+            self.name, slave.name, register, count, rate, delay_ms, outstanding, timeout_ms
+        )
+        self._check(poll, slave)
+        self.modbus_specs.append(
+            ModbusSpec(slave, register, count, rate, delay_ms, outstanding, timeout_ms)
+        )
 
     def controls(
         self,

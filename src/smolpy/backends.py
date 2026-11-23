@@ -52,7 +52,8 @@ class Capabilities:
     traffic: frozenset[str]
     patterns: frozenset[str]  # of flows
     metrics: frozenset[str]
-    # "imix": IMIX frame sizes; "bounded_buffer": switch buffers (ADR-0011)
+    # "imix": IMIX frame sizes; "bounded_buffer": switch buffers (ADR-0011);
+    # "modbus_outstanding": polls with one request in flight (ADR-0012)
     features: frozenset[str] = frozenset()
     priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
@@ -298,6 +299,9 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
             raise unsupported(t, f"pattern {pattern!r}", ("traffic", i))
         if getattr(t, "size", None) == "imix" and "imix" not in caps.features:
             raise unsupported(t, "IMIX frame sizes", ("traffic", i))
+        closed = getattr(t, "outstanding", None) is not None
+        if closed and "modbus_outstanding" not in caps.features:
+            raise unsupported(t, "polls with one request in flight", ("traffic", i))
         if getattr(t, "priority", 0) > 0 and not caps.priorities:
             raise unsupported(t, "802.1Q priorities", ("traffic", i))
     for i, o in enumerate(scenario.observations):

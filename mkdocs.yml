@@ -54,6 +54,7 @@ nav:
       - ADR-0009 Batch Execution and Cross-Backend Validation: adr/0009-batch-execution-and-cross-backend-validation.md
       - ADR-0010 Ethernet Frames on the Wire: adr/0010-ethernet-frames-on-the-wire.md
       - ADR-0011 Bounded Switch Buffers: adr/0011-bounded-switch-buffers.md
+      - ADR-0012 One Modbus Request in Flight: adr/0012-modbus-one-request-in-flight.md
 
 markdown_extensions:
   - admonition

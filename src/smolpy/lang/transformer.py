@@ -62,6 +62,17 @@ def _bytes(raw: Any) -> Any:
     return raw
 
 
+def _outstanding(raw: Any) -> Any:
+    """``outstanding=unlimited`` is ``None``; anything else is left for
+    validation, which accepts only 1 (ADR-0012)."""
+    return None if raw == "unlimited" else raw
+
+
+def _ms(raw: Any) -> Any:
+    """A time in ms as a float; anything else is left for validation."""
+    return float(raw) if isinstance(raw, int) and not isinstance(raw, bool) else raw
+
+
 def _require(kwargs: dict[str, Any], key: str, *, file: str, line: int, stmt: str) -> Any:
     if key not in kwargs:
         raise SMOLSyntaxError(file, line, f"'{stmt}' is missing required argument '{key}'")
@@ -213,6 +224,8 @@ class _SmolTransformer(Transformer):
             count=int(_require(kw, "count", file=self.file, line=meta.line, stmt="poll")),
             rate=float(kw.get("rate", 1.0)),
             delay_ms=float(kw.get("delay", 0.0)),
+            outstanding=_outstanding(kw["outstanding"]) if "outstanding" in kw else None,
+            timeout_ms=_ms(kw["timeout"]) if "timeout" in kw else None,
             line=meta.line,
         )
 
