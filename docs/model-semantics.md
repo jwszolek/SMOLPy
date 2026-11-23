@@ -71,7 +71,7 @@ On the wire it is preceded by a preamble and SFD and followed by an inter-frame 
 
 - **A link is full duplex.** Each direction is an independent channel with its own egress queue and transmitter at the sending node. Half-duplex links are valid in the model but not supported by the SimPy backend, which rejects them.
 - **Transmitter:**
-    - it takes the next frame from its queue;
+    - it takes the next frame from its queue: at once when it has sent the previous frame's FCS, or, when it is idle, at the instant a frame is queued, after the events already scheduled for that instant ([§9](#9-simultaneous-events));
     - it sends the preamble and SFD (8 B) and the frame: `tx = tx(8 + size)`;
     - it then keeps the wire idle for the inter-frame gap (12 B): `gap = tx(12)`. The next frame starts no earlier than the end of the gap.
     - Both are rounded as in [§1](#1-time-and-units). A link therefore carries at most `speed / ((size + 20) × 8)` frames per second, as real Ethernet does: 148 809 frames of 64 B per second at 100 Mb/s.
@@ -82,9 +82,18 @@ On the wire it is preceded by a preamble and SFD and followed by an inter-frame 
     - frames within a class are served first in, first out;
     - service is non-preemptive: a frame in transmission is never interrupted.
 - **`qos="fifo"`** on a switch puts every frame into one class on that switch's egress queues. All other nodes, including end stations, use the 8 classes.
-- **Queues are unbounded,** so no frame is ever dropped for lack of buffer.
+- **Queues are unbounded unless a switch sets `buffer`** ([ADR-0011](adr/0011-bounded-switch-buffers.md)). Without it no frame is ever dropped for lack of buffer.
 
-*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`.*
+**Bounded egress queues.** A switch with `buffer` (bytes) bounds each of its egress queues:
+- **What occupies the buffer:** the frame bytes ([§2](#2-frames)) of the frames queued on the port and not yet taken by its transmitter, which are the frames `queue_depth` counts. The frame in transmission does not occupy the buffer.
+- **Tail drop.** A frame of `s` bytes that arrives with `q` bytes queued is queued if `q + s ≤ buffer`, and dropped otherwise. A dropped frame is never queued, displaces nothing and schedules nothing.
+- **One limit per port,** shared by the 8 priority classes. A frame is dropped whatever its priority, under `qos="fifo"` as under `"strict"`.
+- **Flooded copies** are admitted or dropped each on its own port.
+- **The delay is bounded.** A frame admitted with `n` frames of `q` bytes ahead of it starts its preamble at most `tx(q + 20·n) + tx(8 + m) + tx(12)` after it is queued, where `m` is the largest frame of the scenario.
+- **End stations are unbounded.** Adapters, brokers, Modbus slaves and PROFINET devices never drop a frame.
+- **Validation.** `buffer` is a whole number of bytes, at least 1 522 B (one maximum frame with a tag) and at least the largest frame of the scenario.
+
+*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`; bounded queues in `test_buffers.py`: `test_a_frame_is_dropped_exactly_when_it_would_exceed_the_buffer`, `test_the_queue_never_holds_more_than_its_buffer`, `test_queueing_delay_is_bounded_by_the_buffer`, `test_a_buffer_that_is_never_full_changes_nothing`, `test_one_port_is_an_md1k_queue`.*
 
 ## 4. Switches
 
@@ -122,7 +131,16 @@ On the wire it is preceded by a preamble and SFD and followed by an inter-frame 
 | Modbus slave | for a request with its `unit_id`: one response to the requester |
 | PROFINET device | passes cyclic frames of its ARs to its PROFINET consumer |
 
-An end station sends everything over its single link, in the egress queue order of [§3](#3-links-and-egress-queues).
+An end station sends everything over its single link, in the egress queue order of [§3](#3-links-and-egress-queues). Its egress queue is unbounded.
+
+**When a frame is lost** at a bounded switch, nothing is retransmitted: the model has no transport layer ([ADR-0011](adr/0011-bounded-switch-buffers.md)).
+- **Modbus:** a lost request or response leaves its poll without a response. The master does not retry, and its next polls go out on schedule.
+- **MQTT:** a lost PUBLISH is neither forwarded nor acknowledged. A lost copy is lost to its subscriber. A lost PUBACK changes nothing.
+- **PROFINET RT:** a lost cyclic frame leaves a gap, and the watchdog expires if it exceeds `hold × cycle` ([§7](#7-profinet-consumer)).
+
+The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost segments ([Execution backends](backends.md)).
+
+*Tests: `test_a_lost_poll_stays_unanswered`, `test_a_lost_profinet_frame_expires_the_watchdog` in `test_buffers.py`.*
 
 ## 6. Traffic sources
 
@@ -177,6 +195,11 @@ An end station sends everything over its single link, in the egress queue order 
 | `pn_latency` | mean PROFINET latency over cyclic frames received in the window. *Window metric.* | µs |
 | `pn_jitter` | maximum jitter over the window. *Window metric.* | µs |
 | `pn_watchdog_expiries` | total expiries so far, over all ARs of the node | count |
+| `drops` | frames the switch's egress buffers dropped in the window. Sampled every time, 0 included. | frames |
+| `drops_total` | frames the switch's egress buffers dropped so far | frames |
+| `frames_sent` | frames whose transmission on the adapter's link has completed so far | frames |
+| `frames_received` | frames the adapter accepted so far | frames |
+| `modbus_unanswered` | Modbus requests the adapter's polls have generated so far, less the responses it has accepted so far: lost polls plus polls in flight | polls |
 
 A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)` pairs in time order.
 
@@ -189,9 +212,10 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
 - **`utilization`:** `wire_bits × 10⁵ / (Σ speed × W)` %, where `speed` is in Mb/s.
 
 **Frame bytes, not wire bytes.** The byte metrics count frames, header to FCS, without the preamble, SFD and gap, as switch and NIC counters do. So a saturated 100 Mb/s link carrying 64 B frames shows 76.2 Mb/s of `throughput` and 100 % `utilization`.
-- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`) as they are.
+- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`, `drops`, `drops_total`, `frames_sent`, `frames_received`, `modbus_unanswered`) as they are.
+- **Loss of a flow** `a → b`, when `a` sends nothing else: `frames_sent:a − frames_received:b` is the frames dropped plus the frames in flight, which are at most the buffers on the path and a frame per link.
 
-*Tests: `test_metric_definitions`, `test_window_metrics_skip_empty_windows`, `test_modbus_latency_is_round_trip`, `test_mqtt_latency_is_end_to_end`, `test_watchdog_expiries_are_cumulative`.*
+*Tests: `test_metric_definitions`, `test_window_metrics_skip_empty_windows`, `test_modbus_latency_is_round_trip`, `test_mqtt_latency_is_end_to_end`, `test_watchdog_expiries_are_cumulative`; `test_loss_is_frames_sent_less_frames_received` in `test_buffers.py`.*
 
 ## 9. Simultaneous events
 
@@ -201,6 +225,8 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
 - **Frames queued at the same instant on one egress queue** are served by priority, then in the order they were queued:
     - a batch group in draw order;
     - broker copies in subscriber order, then the PUBACK.
+    - This holds on an idle port too: its transmitter takes a frame after the events already scheduled for the instant, so it takes the highest-priority frame queued by then.
+- **Admissions to a bounded queue** at the same instant are decided in the order the frames are queued, each against the bytes queued at that moment ([§3](#3-links-and-egress-queues)). A frame the transmitter has taken no longer counts.
 
 **Start-up order** decides the scheduling order of the first events:
 - link transmitters are started first, in link order, a then b direction;
@@ -222,3 +248,4 @@ Every disagreement between this page and the intended model is listed here, with
 | 4 | Wire overhead was not counted | Preamble, SFD and inter-frame gap were not on the wire, protocol sizes left the FCS out, frames could be shorter than 64 B, and flows with a priority had no tag. A link carried 31 % more 64 B frames than real Ethernet. | resolved in ADR-0010: frames on the wire as real Ethernet |
 | 5 | One random stream for all sources | Adding or reordering one source changed the draws of all others. | resolved in ADR-0007 step 5: one stream per traffic statement |
 | 6 | SimPy did not use integer nanoseconds | Time was float µs. Periodic sources added the interval to the clock, and metrics were float sums. | resolved in ADR-0007 step 7: SimPy runs on integer nanoseconds |
+| 7 | Queues were unbounded | No frame was ever dropped, so at and above saturation delay grew without limit, where a real switch caps it and drops frames. A testbed measured a capped RTT and 0.09 % loss at ρ = 0.996, where the model predicted a p99 of 79 ms. | resolved in ADR-0011: a switch's `buffer` bounds its egress queues, with tail drop |

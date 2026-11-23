@@ -199,8 +199,11 @@ def test_it_runs_the_whole_model(fake_ns3) -> None:
     headless only."""
     ns3_caps = backends.REGISTRY["ns3"].capabilities()
     simpy_caps = backends.REGISTRY["simpy"].capabilities()
+    # ADR-0011 step 4 brings bounded buffers and their metrics to ns-3
+    later = {"bounded_buffer", "drops", "drops_total", "frames_sent", "frames_received"}
+    later.add("modbus_unanswered")
     for field in ("nodes", "traffic", "patterns", "metrics", "features"):
-        assert getattr(ns3_caps, field) == getattr(simpy_caps, field), field
+        assert getattr(ns3_caps, field) == getattr(simpy_caps, field) - later, field
     assert ns3_caps.priorities and not ns3_caps.dashboards and not ns3_caps.notes
 
 

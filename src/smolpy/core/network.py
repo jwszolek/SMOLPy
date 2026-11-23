@@ -27,6 +27,10 @@ _UNITS = {
     "utilization": "%",
     "bytes_sent": "MB",
     "bytes_received": "MB",
+    "drops": "fr",  # drops_total too
+    "frames_sent": "fr",
+    "frames_received": "fr",
+    "modbus_unanswered": "polls",
 }
 
 

@@ -19,6 +19,11 @@ MetricName = Literal[
     "pn_latency",
     "pn_jitter",
     "pn_watchdog_expiries",
+    "drops",
+    "drops_total",
+    "frames_sent",
+    "frames_received",
+    "modbus_unanswered",
 ]
 
 

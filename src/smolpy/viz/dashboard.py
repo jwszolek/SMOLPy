@@ -48,6 +48,11 @@ _UNITS = {
     "modbus_latency": "µs",
     "pn_latency": "µs",
     "pn_jitter": "µs",
+    "drops": "frames",
+    "drops_total": "frames",
+    "frames_sent": "frames",
+    "frames_received": "frames",
+    "modbus_unanswered": "polls",
 }
 
 
