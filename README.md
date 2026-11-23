@@ -33,7 +33,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 |---|---|---|---|---|---|
 | **Ethernet** (generic traffic) | Layer 2 frames | One-way flows: constant, Poisson, bursty, batch | `Adapter.sends()` | `flow` | `throughput`, `latency`, `bytes_sent`, `bytes_received` |
 | **MQTT** | TCP/IP | Publish / subscribe through a broker, QoS 0 and 1 | `MQTTBroker`, `Adapter.publishes()`, `MQTTBroker.routes()` | `mqtt_broker`, `publish`, `route` | `broker_queue`, `latency` |
-| **Modbus TCP** | TCP/IP | Request / response polling (Read Holding Registers, FC 03) | `ModbusSlave`, `Adapter.polls()` | `modbus_slave`, `poll` | `modbus_latency` |
+| **Modbus TCP** | TCP/IP | Request / response polling (Read Holding Registers, FC 03) | `ModbusSlave`, `Adapter.polls()` | `modbus_slave`, `poll` | `modbus_latency`, `modbus_unanswered`, `modbus_timeouts`, `modbus_skipped` |
 | **PROFINET RT** | Layer 2 (EtherType 0x8892), 802.1Q priority 6 | Cyclic producer / consumer exchange with watchdog | `ProfinetDevice`, `Adapter.controls()` | `profinet_device`, `control` | `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` |
 
 Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation), unbounded or bounded with tail drop (`buffer=` in bytes). One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
@@ -208,6 +208,8 @@ broker.routes("plant/temp", to=[server])
 # Modbus TCP poll (master → slave, Read Holding Registers)
 plc.polls(slave, register=40001, count=10, rate=1.0)
 plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
+# ...waiting for each response, with a timeout of 1 s
+plc.polls(meter, register=0, count=10, rate=100, outstanding=1, timeout_ms=1_000)
 
 # PROFINET RT cyclic I/O (controller ↔ device), 4 ms update time
 plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
@@ -242,6 +244,8 @@ plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
 | `count` | int | Number of registers to read |
 | `rate` | float | Polls per second (default 1.0) |
 | `delay_ms` | float | Simulation time before polling starts (default 0) |
+| `outstanding` | int \| None | `1`: at most one request of the pair awaits a response; `None`: unlimited (default) |
+| `timeout_ms` | float \| None | Response timeout, with `outstanding=1` (default `None`: no timeout) |
 
 **`controls()` parameters**
 
@@ -295,6 +299,8 @@ net.observe(metric, on=node, every=interval_ms)
 | `frames_sent` | frames | Adapter (sender) |
 | `frames_received` | frames | Adapter (receiver) |
 | `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
+| `modbus_timeouts` | polls | Adapter (master): requests that timed out so far, with `outstanding=1` |
+| `modbus_skipped` | polls | Adapter (master): poll instants skipped so far, because a request was outstanding |
 
 ### Simulation
 
@@ -407,6 +413,7 @@ SMOLPy also models Modbus TCP — a request/response protocol, unlike MQTT's fir
 - **Each slave** is addressed by its own `unit_id` (1–247); it replies only to requests matching its `unit_id` and ignores everything else. Multiple sensors can share one switch, each polled independently by the same master.
 - **Every poll is a request/response round trip** — both frames traverse the network and contend for bandwidth, unlike MQTT where only the publisher-to-broker leg carries the payload.
 - **`modbus_latency`** measures poll round-trip time (RTT): the time from when the master sends a request to when the matching response arrives back. This is the key metric for judging whether a polling interval is achievable on a given network.
+- **One request in flight.** By default a poll is open loop: a request goes out at every instant of its schedule. With `outstanding=1` the master waits for each response, as a usual Modbus TCP master does: an instant that comes while a request is outstanding is skipped (`modbus_skipped`), and `timeout_ms` sets a response timeout (`modbus_timeouts`). On ns-3, with Linux's minimum RTO, a lost response then comes back about 210 ms after its request, as on real hardware ([ADR-0012](https://jwszolek.github.io/SMOLPy/adr/0012-modbus-one-request-in-flight/), [Modbus TCP](https://jwszolek.github.io/SMOLPy/modbus/)).
 
 ### Frame size formula
 
@@ -480,7 +487,7 @@ smolpy run plant.smol --backend rust
 ```
 
 - **The same numbers.** On deterministic scenarios the Rust engine reproduces SimPy's results bit for bit, down to the event count. Random traffic uses its own generator, so there the results agree statistically. ns-3 draws random traffic from SimPy's streams, so its Ethernet and PROFINET RT results are bit for bit with the same seed, random traffic included. CI checks both on every pull request ([ADR-0009](https://jwszolek.github.io/SMOLPy/adr/0009-batch-execution-and-cross-backend-validation/)).
-- **ns-3 adds TCP.** Ethernet and PROFINET on ns-3 also give SimPy's results bit for bit. Modbus and MQTT run over ns-3's TCP, so their results differ by what TCP does: under heavy load by up to +43 % in latency. [Execution backends](https://jwszolek.github.io/SMOLPy/backends/) has the details and measurements.
+- **ns-3 adds TCP.** Ethernet and PROFINET on ns-3 also give SimPy's results bit for bit. Modbus and MQTT run over ns-3's TCP, so their results differ by what TCP does: under heavy load by up to +44 % in latency, and under loss by TCP's retransmissions. [Execution backends](https://jwszolek.github.io/SMOLPy/backends/) has the details and measurements.
 - **Nothing is skipped silently.** A scenario that uses something a backend does not support is rejected before the run with a message naming the element. Asking the Rust engine for a dashboard is an error too.
 
 The model every engine implements:
@@ -507,7 +514,7 @@ result = net.simulate(duration=60_000, backend="ns3")
 ```
 
 **What it is for.**
-- **A real TCP.** SMOL sizes Modbus TCP and MQTT frames as TCP segments, but SimPy and Rust do not model TCP's behaviour. On ns-3 every Modbus master–slave and MQTT client–broker pair has one persistent connection over ns-3's TCP: the handshake, delayed acknowledgements, CUBIC congestion control and the receiver's window.
+- **A real TCP.** SMOL sizes Modbus TCP and MQTT frames as TCP segments, but SimPy and Rust do not model TCP's behaviour. On ns-3 every Modbus master–slave and MQTT client–broker pair has one persistent connection over ns-3's TCP: the handshake, delayed acknowledgements, CUBIC congestion control, the receiver's window and retransmission. Its minimum RTO, delayed-ACK and SYN timeouts are Linux's (`smolpy.ns3.TcpSettings`).
 - **A cross-check against an established simulator.** Below the TCP layer, ns-3 runs SMOL's own full-duplex Ethernet device and switch. So Ethernet over UDP and PROFINET RT on layer 2 give SimPy's results **bit for bit**, watchdog expiries and stochastic traffic included. That ties SMOL's reference model to ns-3's event scheduler and IP stack.
 - **Where TCP matters.** `python -m benchmarks load` runs a plant cell whose Modbus and MQTT traffic shares a 10 Mb/s uplink with a UDP camera, from 50 % to 150 % offered load:
 
@@ -515,7 +522,7 @@ result = net.simulate(duration=60_000, backend="ns3")
 |---|---|---|---|
 | 0.50 – 0.95 | within 0.4 % | within 0.4 % | the same |
 | 1.00 | +18 % | +25 % | the same |
-| 1.50 | 3.2 → 3.4 s (+6 %) | 3.2 → 4.5 s (+43 %) | −41 % |
+| 1.50 | 3.2 → 3.4 s (+6 %) | 3.2 → 4.6 s (+44 %) | −40 % |
 
 Below saturation the engines agree. At saturation, TCP's own acknowledgements tip the link over. Heavily overloaded, TCP's windows hold MQTT back while the UDP stream, which does not back off, takes the link. [Execution backends](https://jwszolek.github.io/SMOLPy/backends/#modbus-and-mqtt-over-tcp) has the full table and the mechanism.
 
@@ -525,7 +532,7 @@ Below saturation the engines agree. At saturation, TCP's own acknowledgements ti
 
 ## Examples
 
-See [`examples/README.md`](examples/README.md) for ten ready-to-run scenarios covering single-switch saturation, oversubscription, two-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, and PROFINET RT cyclic I/O.
+See [`examples/README.md`](examples/README.md) for twelve ready-to-run scenarios covering single-switch saturation, oversubscription, two-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, a bounded switch buffer, and a Modbus master that waits for each response.
 
 ```bash
 uv run smolpy run examples/example.py

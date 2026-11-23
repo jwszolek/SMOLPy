@@ -1,6 +1,6 @@
 # SMOLPy Examples
 
-Eleven ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, and a switch with a bounded buffer.  Every example opens a live desktop dashboard as the simulation runs.
+Twelve ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, a switch with a bounded buffer, and a Modbus master that waits for each response.  Every example opens a live desktop dashboard as the simulation runs.
 
 ## Prerequisites
 
@@ -384,6 +384,19 @@ After a hardware testbed ([ADR-0011](https://jwszolek.github.io/SMOLPy/adr/0011-
 
 It runs headless (`mode=headless`), so on every backend: add `--backend rust`, or `--backend ns3` to run the polls over ns-3's TCP.
 
+### 12. `example_modbus_timeout.smol` — A Modbus master that waits for each response
+
+```bash
+uv run smolpy run examples/example_modbus_timeout.smol
+uv run smolpy run examples/example_modbus_timeout.smol --backend ns3
+```
+
+The bottleneck of example 11 at 99 % load, with `buffer=91080`, so that a full queue drops Modbus responses as well as UDP frames. The poll has `outstanding=1 timeout=1000` ([ADR-0012](https://jwszolek.github.io/SMOLPy/adr/0012-modbus-one-request-in-flight/)): the laptop sends a request only when the previous one has been answered or has timed out.
+
+- **On SimPy and Rust** a lost request or response is never retransmitted. It times out after 1 s (`modbus_timeouts`: 8 on SimPy), and the poll skips the 100 instants up to the timeout (`modbus_skipped`: 800).
+- **On ns-3** the poll runs over TCP with Linux's minimum RTO of 200 ms. A lost response is retransmitted and arrives about 210 ms after its request: `modbus_latency` peaks at about 216 ms, the poll skips 210 instants in all, and no timeout fires.
+- **Without `outstanding` and `timeout`** the poll is open loop: a lost poll stays unanswered (`modbus_unanswered`), and the next ones go out on schedule.
+
 ---
 
 ### Multi-switch topology
@@ -412,6 +425,8 @@ net.link(edge_sw, core_sw, speed=1_000, length=5)   # inter-switch uplink
 | `frames_sent` | frames | Adapter (sender) |
 | `frames_received` | frames | Adapter (receiver) |
 | `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
+| `modbus_timeouts` | polls | Adapter (master): requests that timed out so far, with `outstanding=1` |
+| `modbus_skipped` | polls | Adapter (master): poll instants skipped so far, because a request was outstanding |
 
 ### Traffic patterns
 

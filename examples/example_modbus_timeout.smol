@@ -1,0 +1,50 @@
+# One Modbus request in flight (ADR-0012): a master that waits for each
+# response, at a bottleneck that loses frames.
+#
+# The topology and the load are those of the testbed of ADR-0011: a Raspberry
+# Pi on a 1 Gb/s port sends Poisson UDP traffic of 1518 B frames to a laptop
+# on a 100 Mb/s port, at 99 % of that port, and the laptop polls a Modbus
+# server on the Pi every 10 ms. The switch holds 91 080 B (60 large frames)
+# per port, so a full queue drops responses as well as UDP frames.
+#
+# The poll behaves like a usual Modbus TCP master: outstanding=1 keeps one
+# request in flight, and a poll instant that comes while it is outstanding is
+# skipped (modbus_skipped). A response that has not come back within 1000 ms
+# counts as a timeout (modbus_timeouts) and frees the pair.
+#
+# - On SimPy and Rust a lost request or response is never retransmitted, so
+#   each loss becomes a timeout, and the poll skips the 100 instants up to
+#   it, the one at the timeout included.
+# - On ns-3 (--backend ns3) the polls run over TCP, with Linux's minimum RTO
+#   of 200 ms: a lost response is retransmitted and arrives about 210 ms
+#   after its request, so modbus_latency shows peaks of about 210 ms, the
+#   poll skips about 20 instants, and no timeout fires.
+#
+# Remove outstanding= and timeout= to poll open loop: on SimPy and Rust a
+# lost poll then stays unanswered (modbus_unanswered) while the next ones go
+# out on schedule. Remove only timeout= and, on SimPy and Rust, polling stops
+# at the first loss.
+
+network "modbus-timeout" {
+
+    switch       sw     ports=3 buffer=91080
+    adapter      pi     ip=10.0.0.1
+    modbus_slave server ip=10.0.0.3 unit_id=1
+    adapter      laptop ip=10.0.0.2
+
+    link pi     -- sw speed=1000 length=2
+    link server -- sw speed=1000 length=2
+    link laptop -- sw speed=100  length=2
+
+    # 8047 frames/s of 1518 B, 1538 B on the wire: 99 % of 100 Mb/s
+    flow pi     -> laptop rate=8047 size=1518 pattern=poisson
+    poll laptop -> server register=0 count=10 rate=100 outstanding=1 timeout=1000
+
+    observe modbus_latency    on laptop every=10
+    observe modbus_timeouts   on laptop every=1000
+    observe modbus_skipped    on laptop every=1000
+    observe modbus_unanswered on laptop every=1000
+    observe drops_total       on sw     every=1000
+
+    simulate duration=30000 mode=headless
+}

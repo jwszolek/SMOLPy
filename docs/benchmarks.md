@@ -31,6 +31,10 @@ uv run python -m benchmarks load-summary benchmarks/results/<file>.json
 uv run python -m benchmarks loss
 uv run python -m benchmarks loss-summary benchmarks/results/<file>.json
 
+# one Modbus request in flight: the testbed case of ADR-0012 on SimPy, Rust and ns-3
+uv run python -m benchmarks closed-loop
+uv run python -m benchmarks closed-loop-summary benchmarks/results/<file>.json
+
 # profiling (reports go to benchmarks/profiles/, not committed)
 uv run python -m benchmarks profile --scenario B3 --frames 1M --tool cprofile
 uv run python -m benchmarks profile --scenario B1 --frames 1M --metrics on --tool tracemalloc

@@ -9,7 +9,7 @@
 - ADR-0011: "Protocols when a frame is lost", for Modbus.
 - [Model Semantics](../model-semantics.md) §5, §6, §8 and §9.
 
-**Roadmap:** none. It came out of the ADR-0011 testbed.
+**Roadmap:** none before it; it came out of the ADR-0011 testbed. The roadmap now lists it as done, with `response_delay` as its next step.
 
 ---
 
@@ -198,7 +198,7 @@ poll <connection> <request B> <response B> <delay ns> <period num> <period den> 
     - **For comparison, on the same scenario:**
         - ns-3's own TCP settings give about 1 s;
         - open-loop polls give a fast retransmit after 25 to 29 ms.
-    - **On SimPy and Rust a lost response is a timeout.** Without a timeout, polling stops at the first loss: 5 polls of 75 000 instants are unanswered, and the rest are skipped.
+    - **On SimPy and Rust a lost response is a timeout.** Without a timeout, polling stops at the first loss: of the 14 995 instants of a load, 5 polls are unanswered, one per seed, and the rest are skipped.
     - **The share of polls affected is 1.5 to 3.4 times the hardware's.** It follows the share of frames dropped, which is 3 to 8 times the testbed's (ADR-0011); that gap stays open.
 - **Results that change with the TCP settings.** The recorded ns-3 benchmarks were run again against the code before this step:
     - **T1 of ADR-0011 (open loop):** all 90 runs give the same values.
