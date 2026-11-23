@@ -1,4 +1,5 @@
-//! Reads Scenario IR JSON, format "smol-ir" version 2 (ADR-0007, ADR-0010).
+//! Reads Scenario IR JSON, format "smol-ir" version 2 (ADR-0007, ADR-0010),
+//! with the optional switch buffers of ADR-0011.
 //!
 //! The scenario has already been validated by `smolpy.model.validate`; this
 //! reader is strict about structure (unknown fields, kinds and versions are
@@ -431,6 +432,10 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 Some("topology") => true,
                 Some(other) => return Err(format!("switch {name}: unknown mac_table {other:?}")),
             };
+            match f.take_or("buffer_bytes") {
+                None | Some(Value::Null) => {}
+                Some(_) => return Err(unsupported("bounded switch buffers")),
+            }
             NodeKind::Switch { fifo, topology }
         }
         "modbus_slave" => {
@@ -652,6 +657,11 @@ mod tests {
         assert!(parse(&B1.replace("\"version\": 2", "\"version\": 1"))
             .unwrap_err()
             .contains("version 1"));
+        assert!(
+            parse(&B1.replace("\"learning\"", "\"learning\", \"buffer_bytes\": 4000"))
+                .unwrap_err()
+                .contains("bounded switch buffers")
+        );
         assert!(
             parse(&B1.replace("\"priority\": 0", "\"priority\": 0, \"x\": 1"))
                 .unwrap_err()

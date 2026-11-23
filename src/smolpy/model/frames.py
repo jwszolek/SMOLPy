@@ -16,6 +16,7 @@ ETHERNET_HEADER_BYTES = 14
 FCS_BYTES = 4
 VLAN_TAG_BYTES = 4  # 802.1Q, on frames with a priority above 0
 MIN_FRAME_BYTES = 64
+MAX_STANDARD_FRAME_BYTES = 1522  # 1 518 B and an 802.1Q tag: the least a bounded buffer holds
 PREAMBLE_SFD_BYTES = 8
 IFG_BYTES = 12  # inter-frame gap
 WIRE_OVERHEAD_BYTES = PREAMBLE_SFD_BYTES + IFG_BYTES  # 20 B per frame on the wire

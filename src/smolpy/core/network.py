@@ -142,8 +142,9 @@ class Network:
         mode: SwitchMode = "store-and-forward",
         qos: SwitchQoS = "strict",
         mac_table: MacTableMode = "learning",
+        buffer: int | None = None,
     ) -> Switch:
-        node = Switch(name, ports=ports, mode=mode, qos=qos, mac_table=mac_table)
+        node = Switch(name, ports=ports, mode=mode, qos=qos, mac_table=mac_table, buffer=buffer)
         self._register(node)
         return node
 

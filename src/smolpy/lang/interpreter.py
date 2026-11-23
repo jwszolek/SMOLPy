@@ -120,6 +120,7 @@ class _Interpreter:
                         mode=d.mode,  # type: ignore[arg-type]
                         qos=d.qos,  # type: ignore[arg-type]
                         mac_table=d.mac_table,  # type: ignore[arg-type]
+                        buffer=d.buffer,  # type: ignore[arg-type]
                     )
                 elif isinstance(d, smol_ast.MqttBrokerDecl):
                     net.mqtt_broker(d.name, ip=d.ip)

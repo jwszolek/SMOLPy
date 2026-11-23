@@ -19,6 +19,7 @@ class SwitchDecl:
     line: int
     qos: str = "strict"
     mac_table: str = "learning"
+    buffer: int | float | str | None = None  # bytes; suffixes resolved by the transformer
 
 
 @dataclass

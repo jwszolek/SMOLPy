@@ -72,7 +72,7 @@ link c -- sw: 'sw' has only 2 ports, all in use
 
 | Element | Rules |
 |---|---|
-| nodes | IPv4 address; MAC address of six hex bytes; `ports` ≥ 1; switch `mode`, `qos`, `mac_table`; Modbus `unit_id` 0–255 |
+| nodes | IPv4 address; MAC address of six hex bytes; `ports` ≥ 1; switch `mode`, `qos`, `mac_table`, and `buffer_bytes`, a whole number of bytes of at least 1 522 and of the largest frame in the scenario; Modbus `unit_id` 0–255 |
 | links | not to itself; `speed` > 0; `length` ≥ 0 |
 | `Flow` | source and destination are adapters; `rate` > 0; `size` ≥ 1 or `imix`; known `pattern`; `priority` 0–7; a batch size exactly when `pattern="batch"` |
 | `Publish` | adapter → MQTT broker; non-empty topic; `rate` > 0; `qos` 0 or 1 (QoS 2 is not modelled) |
@@ -152,4 +152,4 @@ Each node and traffic entry carries a `kind`: `adapter`, `switch`, `mqtt_broker`
 - an unknown `kind` or field;
 - a missing required field.
 
-Optional fields that are left out take their defaults. Under ADR-0007, a new optional field does not change the version, and any change in meaning does.
+Optional fields that are left out take their defaults. Under ADR-0007, a new optional field does not change the version, and any change in meaning does. A switch's `buffer_bytes` ([ADR-0011](adr/0011-bounded-switch-buffers.md)) is written only when it is set, so documents without bounded switches are as before.
