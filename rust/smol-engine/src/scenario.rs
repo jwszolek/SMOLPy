@@ -1,6 +1,6 @@
 //! Reads Scenario IR JSON, format "smol-ir" version 2 (ADR-0007, ADR-0010),
-//! with the optional switch buffers of ADR-0011. Polls with one request in
-//! flight (ADR-0012) are rejected.
+//! with the optional switch buffers of ADR-0011 and the optional
+//! `outstanding` and `timeout_ms` of polls (ADR-0012).
 //!
 //! The scenario has already been validated by `smolpy.model.validate`; this
 //! reader is strict about structure (unknown fields, kinds and versions are
@@ -85,6 +85,10 @@ pub struct Poll {
     pub count: u16,
     pub rate: Q,
     pub delay_ms: Q,
+    /// one request in flight (`outstanding=1`), or open loop (ADR-0012)
+    pub one_in_flight: bool,
+    /// the master's response timeout, with one request in flight
+    pub timeout_ms: Option<Q>,
 }
 
 /// MQTT PUBLISH messages to a broker at `rate` messages per second.
@@ -139,10 +143,12 @@ pub enum Metric {
     FramesSent,
     FramesReceived,
     ModbusUnanswered,
+    ModbusTimeouts,
+    ModbusSkipped,
 }
 
 impl Metric {
-    pub const ALL: [(&'static str, Metric); 16] = [
+    pub const ALL: [(&'static str, Metric); 18] = [
         ("throughput", Metric::Throughput),
         ("latency", Metric::Latency),
         ("bytes_sent", Metric::BytesSent),
@@ -159,6 +165,8 @@ impl Metric {
         ("frames_sent", Metric::FramesSent),
         ("frames_received", Metric::FramesReceived),
         ("modbus_unanswered", Metric::ModbusUnanswered),
+        ("modbus_timeouts", Metric::ModbusTimeouts),
+        ("modbus_skipped", Metric::ModbusSkipped),
     ];
 
     pub fn name(self) -> &'static str {
@@ -225,8 +233,10 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "frames_sent",
         "frames_received",
         "modbus_unanswered",
+        "modbus_timeouts",
+        "modbus_skipped",
     ],
-    features: &["imix", "bounded_buffer"],
+    features: &["imix", "bounded_buffer", "modbus_outstanding"],
     notes: &[],
 };
 
@@ -527,11 +537,17 @@ fn parse_traffic(value: Value, i: usize) -> Res<Traffic> {
                 None => Q::int(0),
                 Some(v) => number(&v, "poll: delay_ms")?,
             };
-            for field in ["outstanding", "timeout_ms"] {
-                match f.take_or(field) {
-                    None | Some(Value::Null) => {}
-                    Some(_) => return Err(unsupported("polls with one request in flight")),
-                }
+            let one_in_flight = match f.take_or("outstanding") {
+                None | Some(Value::Null) => false,
+                Some(v) if v.as_u64() == Some(1) => true,
+                Some(v) => return Err(format!("poll: outstanding {v}")),
+            };
+            let timeout_ms = match f.take_or("timeout_ms") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(number(&v, "poll: timeout_ms")?),
+            };
+            if timeout_ms.is_some() && !one_in_flight {
+                return Err("poll: timeout_ms needs outstanding 1".to_string());
             }
             f.done()?;
             Ok(Traffic::Poll(Poll {
@@ -540,6 +556,8 @@ fn parse_traffic(value: Value, i: usize) -> Res<Traffic> {
                 count,
                 rate,
                 delay_ms,
+                one_in_flight,
+                timeout_ms,
             }))
         }
         "publish" => {
@@ -720,14 +738,24 @@ mod tests {
                 .unwrap_err()
                 .contains("unknown field \"x\"")
         );
-        for field in ["\"outstanding\": 1", "\"timeout_ms\": 50.0"] {
-            let poll = format!(
-                "\"traffic\": [{{\"kind\": \"poll\", \"source\": \"tx\", \"slave\": \"rx\", \"register\": 0, \"count\": 10, \"rate\": 100, \"delay_ms\": 0.0, {field}}}, "
+        let poll = |fields: &str| {
+            let traffic = format!(
+                "\"traffic\": [{{\"kind\": \"poll\", \"source\": \"tx\", \"slave\": \"rx\", \"register\": 0, \"count\": 10, \"rate\": 100, \"delay_ms\": 0.0{fields}}}, "
             );
-            assert!(parse(&B1.replace("\"traffic\": [", &poll))
-                .unwrap_err()
-                .contains("polls with one request in flight"));
-        }
+            parse(&B1.replace("\"traffic\": [", &traffic))
+        };
+        let open = poll("").unwrap();
+        assert!(!open.polls[0].one_in_flight && open.polls[0].timeout_ms.is_none());
+        let closed = poll(", \"outstanding\": 1, \"timeout_ms\": 0.3").unwrap();
+        assert!(closed.polls[0].one_in_flight);
+        assert_eq!(closed.polls[0].timeout_ms, Some(Q::new(3, 10).unwrap()));
+        assert!(poll(", \"outstanding\": 1").unwrap().polls[0].one_in_flight);
+        assert!(poll(", \"outstanding\": 2")
+            .unwrap_err()
+            .contains("poll: outstanding 2"));
+        assert!(poll(", \"timeout_ms\": 50.0")
+            .unwrap_err()
+            .contains("timeout_ms needs outstanding 1"));
         let poisson = parse(&B1.replace("\"constant\"", "\"poisson\"")).unwrap();
         assert_eq!(poisson.flows[0].pattern, Pattern::Poisson);
         let imix = parse(&B1.replace("\"size\": 512", "\"size\": \"imix\"")).unwrap();

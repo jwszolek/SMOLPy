@@ -76,7 +76,7 @@ laptop.polls(server, register=0, count=10, rate=100, outstanding=1, timeout_ms=5
     - **Without `timeout`, the master waits forever.** On SimPy and Rust a single lost request or response then stops that pair's polling for the rest of the run. That is what a master without a timeout would do without TCP retransmission, and `modbus_skipped` shows it. Documentation recommends a timeout on those backends.
 - **Validation:**
     - `outstanding` is `1` or unset. The IR holds an integer, so that a window of `N` can be added later.
-    - `timeout` is a positive number, at least 1 ns after rounding (§1), and set only with `outstanding=1`.
+    - `timeout` is a positive number, at least 1 ns after rounding (§1) and at most 2^63 − 1 ns, as a duration, and set only with `outstanding=1`.
     - **A pair with `outstanding=1` has one poll statement.** Two statements to the same slave would have to share one transaction slot, and their instants would compete. The rule needed for that, a transaction queue per connection, is left for later. Several register blocks of one slave are one poll with a larger `count`.
 - **IR.** `Poll.outstanding: int | None = None` and `Poll.timeout_ms: float | None = None`.
 

@@ -36,6 +36,8 @@ _UNITS: dict[str, str] = {
     "frames_sent": "fr",
     "frames_received": "fr",
     "modbus_unanswered": "polls",
+    "modbus_timeouts": "polls",
+    "modbus_skipped": "polls",
 }
 
 

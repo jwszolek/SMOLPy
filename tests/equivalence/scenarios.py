@@ -341,6 +341,57 @@ def lossy_protocols() -> Scenario:
     return net.to_scenario(duration=40)
 
 
+def poll_timeouts() -> Scenario:
+    """Polls with one request in flight (ADR-0012) through a bounded port
+    overloaded by a constant flow: lost responses time out, late ones are
+    discarded, and poll instants are skipped."""
+    net = Network("poll-timeouts")
+    sw = net.switch("sw", ports=5, buffer=6 * 1_500 + 40)
+    scada = net.adapter("scada", ip="10.0.0.1")
+    meter = net.modbus_slave("meter", ip="10.0.0.2", unit_id=3)
+    gauge = net.modbus_slave("gauge", ip="10.0.0.3", unit_id=4)
+    valve = net.modbus_slave("valve", ip="10.0.0.4", unit_id=5)
+    cam = net.adapter("cam", ip="10.0.0.5")
+    net.link(scada, sw, speed=100, length=20)
+    for node in (meter, gauge, valve, cam):
+        net.link(node, sw, speed=1_000, length=20)
+    cam.sends(scada, rate=12_000, size=1_500)  # 146 % of scada's port
+    scada.polls(meter, register=0, count=20, rate=500, outstanding=1, timeout_ms=3)
+    # under the queueing delay: some responses are late
+    scada.polls(gauge, register=0, count=8, rate=1_000, outstanding=1, timeout_ms=0.3)
+    scada.polls(valve, register=0, count=2, rate=400)  # open loop, for contrast
+    net.observe("modbus_timeouts", on=scada, every=2)
+    net.observe("modbus_skipped", on=scada, every=2)
+    net.observe("modbus_unanswered", on=scada, every=2)
+    net.observe("modbus_latency", on=scada, every=2)
+    net.observe("drops_total", on=sw, every=2)
+    return net.to_scenario(duration=40)
+
+
+def poll_tie() -> Scenario:
+    """Round trips of exactly one poll period: each response arrives at the
+    instant of the next poll, which it does not free; and a timeout of
+    exactly the round trip, at which the response is late (ADR-0012)."""
+    net = Network("poll-tie")
+    sw = net.switch("sw", ports=4)
+    hmi = net.adapter("hmi", ip="10.0.0.1")
+    plc = net.adapter("plc", ip="10.0.0.2")
+    drive = net.modbus_slave("drive", ip="10.0.0.3", unit_id=1)
+    pump = net.modbus_slave("pump", ip="10.0.0.4", unit_id=2)
+    # 632 m at 100 Mb/s: a request and a 10-register response take 40 us
+    for node in (hmi, plc, drive, pump):
+        net.link(node, sw, speed=100, length=632)
+    hmi.polls(drive, register=0, count=10, rate=25_000, outstanding=1)
+    plc.polls(pump, register=0, count=10, rate=25_000, outstanding=1, timeout_ms=0.04)
+    net.observe("modbus_latency", on=hmi, every=0.1)
+    net.observe("modbus_skipped", on=hmi, every=0.1)
+    net.observe("modbus_unanswered", on=hmi, every=0.1)
+    net.observe("modbus_timeouts", on=plc, every=0.1)
+    net.observe("modbus_skipped", on=plc, every=0.1)
+    net.observe("frames_received", on=plc, every=0.1)
+    return net.to_scenario(duration=2)
+
+
 def random_drops() -> Scenario:
     """Poisson traffic into a bounded port at 150 % of its link: the buffer
     is nearly always full, so delay is capped and its mean is precise."""
@@ -428,6 +479,8 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "protocols": protocols,
     "tail-drop": tail_drop,
     "lossy-protocols": lossy_protocols,
+    "poll-timeouts": poll_timeouts,
+    "poll-tie": poll_tie,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
     "random-load": random_load,

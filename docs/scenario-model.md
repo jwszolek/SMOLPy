@@ -77,7 +77,7 @@ link c -- sw: 'sw' has only 2 ports, all in use
 | `Flow` | source and destination are adapters; `rate` > 0; `size` ≥ 1 or `imix`; known `pattern`; `priority` 0–7; a batch size exactly when `pattern="batch"` |
 | `Publish` | adapter → MQTT broker; non-empty topic; `rate` > 0; `qos` 0 or 1 (QoS 2 is not modelled) |
 | `Route` | broker → adapters, each subscriber once |
-| `Poll` | adapter → Modbus slave; `register` 0–65535; `count` 1–125; `rate` > 0; `outstanding` 1 or unset; `timeout_ms` ≥ 1 ns, only with `outstanding`; with `outstanding`, one poll per master–slave pair |
+| `Poll` | adapter → Modbus slave; `register` 0–65535; `count` 1–125; `rate` > 0; `outstanding` 1 or unset; `timeout_ms` from 1 ns to 2^63 − 1 ns, only with `outstanding`; with `outstanding`, one poll per master–slave pair |
 | `ProfinetAR` | adapter → PROFINET device; `cycle` 1, 2, 4 … 512 ms; `inputs`/`outputs` 1–1440 B; `hold` 1–255 |
 | observations | an implemented metric (`frame_loss` is not); a node type the metric applies to; `every` > 0 |
 | run | `duration` > 0; integer `seed` |

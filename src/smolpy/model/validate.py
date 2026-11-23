@@ -94,6 +94,9 @@ METRIC_TARGETS: dict[str, tuple[type, ...] | None] = {
     "frames_sent": (AdapterNode,),
     "frames_received": (AdapterNode,),
     "modbus_unanswered": (AdapterNode,),
+    # ADR-0012: one Modbus request in flight
+    "modbus_timeouts": (AdapterNode,),
+    "modbus_skipped": (AdapterNode,),
 }
 
 SWITCH_MODES = ("store-and-forward", "cut-through")
@@ -266,6 +269,8 @@ def _check_outstanding(t: Poll) -> None:
         raise _fail(
             t, f"timeout must be at least 1 ns (0.000001 ms) and finite, got {t.timeout_ms!r}"
         )
+    if timebase.ms_to_ns(t.timeout_ms) > timebase.MAX_NS:
+        raise _fail(t, f"timeout must be at most 2^63 - 1 ns (292 years), got {t.timeout_ms!r} ms")
 
 
 def _largest_frame(t: TrafficSpec) -> int:

@@ -24,6 +24,8 @@ MetricName = Literal[
     "frames_sent",
     "frames_received",
     "modbus_unanswered",
+    "modbus_timeouts",
+    "modbus_skipped",
 ]
 
 

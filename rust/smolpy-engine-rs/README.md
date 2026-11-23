@@ -17,7 +17,7 @@ result = net.simulate(duration=60_000, backend="rust")
 - **Scope: the whole model, headless.**
     - Adapters, switches (both QoS modes, learning and converged MAC tables), links, and flows with every pattern and IMIX sizes.
     - The metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `queue_depth` and `utilization`.
-    - Modbus TCP polling: slaves, polls and `modbus_latency`.
+    - Modbus TCP polling: slaves, open-loop polls and polls with one request in flight and a response timeout, `modbus_latency`, `modbus_unanswered`, `modbus_timeouts` and `modbus_skipped`.
     - MQTT: brokers, publications with QoS 0 and 1, routes and `broker_queue`.
     - PROFINET RT: devices, controllers' ARs, the watchdog, `pn_latency`, `pn_jitter` and `pn_watchdog_expiries`.
     - The live and text dashboards need SimPy.
