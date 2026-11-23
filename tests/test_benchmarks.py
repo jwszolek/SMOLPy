@@ -101,3 +101,34 @@ def test_load_run_and_summary(tmp_path) -> None:
     assert doc["format"] == "smolpy-load" and len(doc["runs"]) == 4
     table = load.summarize_load(out, "simpy", "simpy")
     assert table.count("(+0.0 %)") == 8  # a backend against itself, two loads
+
+
+# --- the testbed of ADR-0011 (benchmarks.loss) ---
+
+
+def test_loss_scenario_offers_the_load_it_names() -> None:
+    from benchmarks import loss
+    from smolpy.model import Flow, SwitchNode
+    from smolpy.model.frames import WIRE_OVERHEAD_BYTES
+
+    sc = loss.scenario(0.996, duration_ms=100)
+    (udp,) = [t for t in sc.traffic if isinstance(t, Flow)]
+    assert udp.rate * (udp.size + WIRE_OVERHEAD_BYTES) * 8 / 100e6 == pytest.approx(0.996)
+    (sw,) = [n for n in sc.nodes if isinstance(n, SwitchNode)]
+    assert sw.buffer_bytes == 115_000
+
+
+def test_loss_run_and_summary(tmp_path) -> None:
+    from benchmarks import loss
+
+    out = loss.run_loss(
+        [0.9, 1.05], duration_ms=300, engines=["simpy"], out=tmp_path / "t.json", seeds=(1, 2)
+    )
+    doc = json.loads(out.read_text())
+    assert doc["format"] == "smolpy-loss" and len(doc["runs"]) == 2 * 2 * 2
+    for r in doc["runs"]:
+        assert r["summary"]["rtt_max_ms"] < 10  # capped by the buffer
+        assert r["rho"] < 1 or 0 < r["summary"]["dropped"] < 0.2
+    table = loss.summarize_loss(out)
+    assert table.count("| simpy |") == 4  # two buffers, two loads
+    assert "Buffer 115000 B" in table and "Buffer 113900 B" in table

@@ -202,9 +202,22 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
 - Under load, the differences are quantified and documented.
 - The `-ns3` image is published at each release, and CI runs the ns-3 suite in it.
 
+## Bounded switch buffers ([ADR-0011](adr/0011-bounded-switch-buffers.md))
+
+**Status: done.** A switch's `buffer` bounds each of its egress queues, in frame bytes, with tail drop, on all three backends.
+
+1. **The scenario: done.** `buffer` in the Python API and `.smol`, validated. It is an optional IR field, written only when set, so the IR stays version 2.
+2. **SimPy: done.** Tail drop, and the metrics `drops`, `drops_total`, `frames_sent`, `frames_received` and `modbus_unanswered`. One port matches M/D/1/K's blocking probability and mean time in system.
+3. **Rust: done.** Bit for bit with SimPy, drops and event counts included.
+4. **ns-3: done.** Ethernet and PROFINET bit for bit with SimPy, drops included. Modbus and MQTT run over TCP, which retransmits what the other engines lose ([Execution backends](backends.md#bounded-switch-buffers)).
+5. **Documentation and an example: done.** [`example_bounded_buffer.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_bounded_buffer.smol).
+
+**Why.** A hardware testbed showed a capped RTT and loss at ρ ≈ 1, where unbounded queues predicted delays without limit. With a 115 kB buffer the model caps the RTT at 9.4 ms; the testbed measured about 9.8 ms. The model loses more UDP frames than measured (0.5 % against 0.09 % at ρ = 0.996); that is left open.
+
+**Possible extensions:** a buffer pool shared by a switch's ports, limits per priority class, and a limit in frames.
+
 ## Candidates (not yet scheduled)
 
-- Bounded switch buffers with frame loss.
 - PROFINET IRT / TSN scheduling.
 - PROFIBUS with a PROFINET gateway.
 - EtherNet/IP and OPC UA.

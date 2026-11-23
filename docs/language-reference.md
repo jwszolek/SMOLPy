@@ -39,10 +39,16 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<bytes>]
 ```
 
 `mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
+
+`buffer` bounds each egress queue of the switch, in frame bytes ([ADR-0011](adr/0011-bounded-switch-buffers.md)). A frame that would take the bytes waiting on its port beyond `buffer` is dropped, whatever its priority; the frame being transmitted does not count. Without `buffer` the queues are unbounded and nothing is dropped. The value takes the suffixes `kB` (10³), `MB` (10⁶), `KiB` (2¹⁰) and `MiB` (2²⁰), and must come out as a whole number of bytes, at least 1522 and at least the largest frame of the scenario:
+
+```
+switch sw ports=8 buffer=115kB
+```
 
 ### `mqtt_broker` — MQTT message broker
 
@@ -127,6 +133,11 @@ observe <metric> on <node> every=<ms>
 | `queue_depth` | frames | Switch |
 | `broker_queue` | msgs | MQTTBroker |
 | `utilization` | % | any node |
+| `drops` | frames | Switch: dropped by its buffers in the window |
+| `drops_total` | frames | Switch: dropped by its buffers so far |
+| `frames_sent` | frames | Adapter |
+| `frames_received` | frames | Adapter |
+| `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
 
 Observing a metric on the wrong node type (or a metric that doesn't exist) is a semantic error, caught before the simulation runs.
 

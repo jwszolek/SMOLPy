@@ -79,9 +79,9 @@ def _network() -> Network:
 def test_lowering() -> None:
     text, samplers = ns3.lower(_network().to_scenario(duration=10))
     assert text.splitlines() == [
-        "smol-ns3 1",
+        "smol-ns3 2",
         "duration 10000000",
-        "switch",
+        "switch 0",  # unbounded
         "adapter 02:00:0a:00:00:01 10.0.0.1",
         "adapter 02:00:0a:00:00:02 10.0.0.2",
         "adapter 02:00:0a:00:00:03 10.0.0.3",
@@ -199,11 +199,8 @@ def test_it_runs_the_whole_model(fake_ns3) -> None:
     headless only."""
     ns3_caps = backends.REGISTRY["ns3"].capabilities()
     simpy_caps = backends.REGISTRY["simpy"].capabilities()
-    # ADR-0011 step 4 brings bounded buffers and their metrics to ns-3
-    later = {"bounded_buffer", "drops", "drops_total", "frames_sent", "frames_received"}
-    later.add("modbus_unanswered")
     for field in ("nodes", "traffic", "patterns", "metrics", "features"):
-        assert getattr(ns3_caps, field) == getattr(simpy_caps, field) - later, field
+        assert getattr(ns3_caps, field) == getattr(simpy_caps, field), field
     assert ns3_caps.priorities and not ns3_caps.dashboards and not ns3_caps.notes
 
 

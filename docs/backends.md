@@ -27,6 +27,7 @@ All three run the whole model: every node and traffic kind, every traffic patter
 | Install | included | `pip install smolpy[rust]` | the image `ghcr.io/jwszolek/smolpy:latest-ns3`, or an ns-3 build |
 | Ethernet and PROFINET RT | reference | bit-exact | bit-exact |
 | Modbus TCP and MQTT | sized as TCP, without TCP's behaviour | bit-exact | over ns-3's TCP |
+| Bounded switch buffers ([ADR-0011](adr/0011-bounded-switch-buffers.md)) | reference: a lost message is lost | bit-exact | Ethernet and PROFINET bit-exact; TCP retransmits a lost segment |
 
 A scenario outside a backend's capabilities is rejected before it runs, with the reason.
 
@@ -83,6 +84,52 @@ Each Modbus master and slave, and each MQTT client and broker, share one persist
 - **At ρ = 1.00** the link is exactly full on SimPy. ns-3's acknowledgements add about 0.7 % of the uplink: the sensor with QoS 1 acknowledges every second PUBACK. That overloads the link, so its queue grows slowly.
 - **Overloaded**, both engines queue without bound, and the latencies agree within a few percent while the queueing delay stays under about a second.
 - **Heavily overloaded**, TCP's windows decide. A connection can have at most its congestion window (or the receiver's window) in flight, so its rate is at most window / RTT. As the RTT reaches seconds, that falls below the sensors' publishing rate. Their messages wait in their TCP send buffers, and the camera's UDP stream, which does not back off, takes more of the link. On SimPy every source keeps sending, and the switch's queue shares the link in proportion to what each one offers.
-- **No losses.** SMOL's queues are unbounded, so nothing is dropped and TCP retransmits nothing. A real switch would drop frames, and TCP would react to the losses as well: that is outside SMOL's model.
+- **No losses.** The switches of L1 have no `buffer`, so their queues are unbounded: nothing is dropped and TCP retransmits nothing. With bounded buffers, below, TCP reacts to losses as well.
 
 The results are in `benchmarks/results/*-tcp-under-load.json`. `python -m benchmarks load-summary <file>` prints their table.
+
+### Bounded switch buffers
+
+A switch with `buffer` drops a frame that does not fit in its port's egress buffer ([ADR-0011](adr/0011-bounded-switch-buffers.md)). The three engines apply the same rule, to the same frame:
+- **Rust** gives SimPy's results bit for bit, drops and event counts included.
+- **ns-3** does too for Ethernet over UDP and PROFINET RT, random traffic included with the same seed.
+- **Modbus and MQTT** are where they differ, by design. SimPy and Rust have no transport layer, so a lost request or response leaves its poll unanswered (`modbus_unanswered`). On ns-3 the frame is a TCP segment, and TCP retransmits it, so the poll is answered late.
+
+`python -m benchmarks loss` runs scenario T1, after a hardware testbed:
+- an unmanaged 1 Gb/s switch;
+- Poisson UDP of 1 518 B frames from a Raspberry Pi to a laptop on a 100 Mb/s port, at load ρ of that port;
+- the laptop polls a Modbus server on the Pi every 10 ms.
+
+Each load runs 30 simulated seconds with 5 seeds. The tables give means over the seeds, with the range in brackets:
+- **RTT:** of the Modbus polls, in ms, over 1 ms windows.
+- **Unanswered:** polls without a response at the end of the run.
+- **Dropped:** the frames the switch dropped, as a share of the UDP frames sent.
+
+**115 000 B per port**, what the testbed's capped RTT points to:
+
+| ρ | RTT median, SimPy and ns-3 | RTT median, Rust | RTT max, all | Unanswered | Dropped, SimPy and ns-3 |
+|---|---|---|---|---|---|
+| 0.93 | 0.58 [0.55, 0.62] | 0.57 [0.54, 0.60] | 8.66 | 0 | 0 |
+| 0.98 | 2.13 [1.99, 2.44] | 1.90 [1.73, 2.10] | 9.34 | 0 | 0.095 % |
+| 0.996 | 4.33 [3.93, 4.85] | 3.86 [3.39, 4.36] | 9.36 | 0 | 0.51 % [0.39, 0.63] |
+| 1.02 | 7.45 [7.22, 7.60] | 7.29 [7.04, 7.54] | 9.36 | ≤ 1 in flight | 2.18 % |
+
+- **The delay is capped.** It is at most 9.36 ms on every engine, where unbounded queues give a p99 of tens of ms at ρ = 0.996. The testbed measured about 9.8 ms.
+- **Only UDP is lost.** A full queue holds 75 frames of 1 518 B (113 850 B), and the 1 150 B left over always fit a Modbus response (86 B). So no poll goes unanswered, and ns-3's TCP has nothing to retransmit: ns-3 gives SimPy's results, apart from the third decimal at ρ ≥ 1.02.
+- **Rust and SimPy differ only by their random draws.** Rust draws its own streams. With these five seeds its medians are lower near ρ = 1, and with seeds 6–15 they are not: 4.20 ± 0.08 ms against 4.07 ± 0.18 ms at ρ = 0.996.
+- **Loss is higher than measured.** At ρ = 0.996 the model drops 0.51 % of the UDP frames, where the testbed lost 0.09 %. That points to a different load, or a larger or shared buffer, on the testbed. It is not fitted here.
+
+**113 900 B per port**: 75 frames and 50 B, so a full queue drops responses too:
+
+| ρ | Unanswered, SimPy | Unanswered, Rust | Unanswered, ns-3 | RTT p99, SimPy | RTT p99, ns-3 | RTT max, SimPy | RTT max, ns-3 |
+|---|---|---|---|---|---|---|---|
+| 0.98 | 1.6 | 2.8 | 0 | 8.64 | 8.65 | 9.24 | 32.4 |
+| 0.996 | 14.0 | 10.4 | 0 | 9.10 | 9.15 | 9.24 | 38.1 |
+| 1.02 | 58.0 | 48.2 | 0 | 9.21 | 31.5 | 9.24 | 42.6 |
+| 1.05 | 117.6 | 119.8 | 0 | 9.23 | 32.7 | 9.24 | 48.0 |
+
+- **SimPy and Rust lose polls.** A poll whose request or response is dropped is never answered, and the delay of the others stays capped by the buffer.
+- **ns-3 loses none.** TCP retransmits the lost response. A poll every 10 ms keeps segments flowing, so the next responses arrive out of order, and three duplicate acknowledgements trigger a fast retransmit, without waiting for the 1 s minimum timeout. The poll is answered 3 to 4 poll periods late, at 30 to 48 ms.
+- **What to use.** For Modbus and MQTT under loss, SimPy and Rust count what a stack without retransmission would lose. They give a lower bound on delivery and say nothing about the delay of retransmission. ns-3 shows what a TCP stack does.
+
+The results are in `benchmarks/results/*-bounded-buffers.json`. `python -m benchmarks loss-summary <file>` prints their tables.

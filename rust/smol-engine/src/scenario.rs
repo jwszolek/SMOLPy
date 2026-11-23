@@ -15,11 +15,25 @@ pub const VERSION: u64 = 2;
 
 #[derive(Debug, Clone)]
 pub enum NodeKind {
-    Adapter { mac: String },
-    ModbusSlave { mac: String, unit: u8 },
-    MqttBroker { mac: String },
-    ProfinetDevice { mac: String },
-    Switch { fifo: bool, topology: bool },
+    Adapter {
+        mac: String,
+    },
+    ModbusSlave {
+        mac: String,
+        unit: u8,
+    },
+    MqttBroker {
+        mac: String,
+    },
+    ProfinetDevice {
+        mac: String,
+    },
+    /// `buffer`: the egress buffer of each port in bytes, unbounded if None
+    Switch {
+        fifo: bool,
+        topology: bool,
+        buffer: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -119,10 +133,15 @@ pub enum Metric {
     PnLatency,
     PnJitter,
     PnWatchdogExpiries,
+    Drops,
+    DropsTotal,
+    FramesSent,
+    FramesReceived,
+    ModbusUnanswered,
 }
 
 impl Metric {
-    pub const ALL: [(&'static str, Metric); 11] = [
+    pub const ALL: [(&'static str, Metric); 16] = [
         ("throughput", Metric::Throughput),
         ("latency", Metric::Latency),
         ("bytes_sent", Metric::BytesSent),
@@ -134,6 +153,11 @@ impl Metric {
         ("pn_latency", Metric::PnLatency),
         ("pn_jitter", Metric::PnJitter),
         ("pn_watchdog_expiries", Metric::PnWatchdogExpiries),
+        ("drops", Metric::Drops),
+        ("drops_total", Metric::DropsTotal),
+        ("frames_sent", Metric::FramesSent),
+        ("frames_received", Metric::FramesReceived),
+        ("modbus_unanswered", Metric::ModbusUnanswered),
     ];
 
     pub fn name(self) -> &'static str {
@@ -195,8 +219,13 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "pn_latency",
         "pn_jitter",
         "pn_watchdog_expiries",
+        "drops",
+        "drops_total",
+        "frames_sent",
+        "frames_received",
+        "modbus_unanswered",
     ],
-    features: &["imix"],
+    features: &["imix", "bounded_buffer"],
     notes: &[],
 };
 
@@ -432,11 +461,19 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 Some("topology") => true,
                 Some(other) => return Err(format!("switch {name}: unknown mac_table {other:?}")),
             };
-            match f.take_or("buffer_bytes") {
-                None | Some(Value::Null) => {}
-                Some(_) => return Err(unsupported("bounded switch buffers")),
+            let buffer = match f.take_or("buffer_bytes") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_u64()
+                        .filter(|b| *b > 0)
+                        .ok_or_else(|| format!("switch {name}: buffer_bytes {v}"))?,
+                ),
+            };
+            NodeKind::Switch {
+                fifo,
+                topology,
+                buffer,
             }
-            NodeKind::Switch { fifo, topology }
         }
         "modbus_slave" => {
             f.string("ip")?;
@@ -657,10 +694,19 @@ mod tests {
         assert!(parse(&B1.replace("\"version\": 2", "\"version\": 1"))
             .unwrap_err()
             .contains("version 1"));
+        let bounded =
+            parse(&B1.replace("\"learning\"", "\"learning\", \"buffer_bytes\": 4000")).unwrap();
+        assert!(matches!(
+            bounded.nodes[0].kind,
+            NodeKind::Switch {
+                buffer: Some(4000),
+                ..
+            }
+        ));
         assert!(
-            parse(&B1.replace("\"learning\"", "\"learning\", \"buffer_bytes\": 4000"))
+            parse(&B1.replace("\"learning\"", "\"learning\", \"buffer_bytes\": -1"))
                 .unwrap_err()
-                .contains("bounded switch buffers")
+                .contains("buffer_bytes -1")
         );
         assert!(
             parse(&B1.replace("\"priority\": 0", "\"priority\": 0, \"x\": 1"))

@@ -4,10 +4,10 @@
 // scenario that smolpy.ns3 has lowered to plain lines of integers, with every
 // time already in integer nanoseconds (Model Semantics §1):
 //
-//     smol-ns3 1
+//     smol-ns3 2
 //     duration <ns>
 //     adapter <mac> <ipv4>                   nodes, numbered from 0 in order
-//     switch
+//     switch <buffer B>                     0: unbounded egress queues
 //     link <a> <b> <speed num> <speed den> <propagation ns> <gap ns> <strict a> <strict b>
 //     static <switch> <mac> <port>          a switch's MAC table at the start
 //     flow <src> <dst ipv4> <udp payload> <priority> <delay ns> <period num> <period den>
@@ -42,8 +42,14 @@
 //   A frame is its IP packet plus header and FCS (18 B), at least 64 B, and
 //   an 802.1Q tag (4 B) with a priority above 0; it occupies the wire for
 //   preamble, SFD and frame, and the next frame waits for the 12 B gap
-//   (ADR-0010). The egress queue is unbounded and serves priorities strictly,
-//   FIFO within one, or is plain FIFO on a switch with qos=fifo.
+//   (ADR-0010). The egress queue serves priorities strictly, FIFO within
+//   one, or is plain FIFO on a switch with qos=fifo. On a switch with a
+//   buffer it holds at most that many frame bytes, the frame in
+//   transmission not counted, and drops a frame that does not fit (tail
+//   drop, ADR-0011). An idle port takes a queued frame after the events
+//   already scheduled for that instant, as the reference engine does, so
+//   frames queued at one instant compete by priority and are admitted
+//   against the same buffer.
 // - SmolSwitch: store-and-forward, learning, flooding unknown destinations to
 //   every port but the one a frame came in on, dropping hairpins.
 // - Neighbour caches start full: SMOL models no ARP.
@@ -369,12 +375,14 @@ class SmolDevice : public NetDevice
                    u128 speedDen,
                    uint64_t gapNs,
                    bool strict,
+                   uint64_t buffer,
                    Ptr<SmolChannel> channel)
     {
         m_speedNum = speedNum;
         m_speedDen = speedDen;
         m_gapNs = gapNs;
         m_strict = strict;
+        m_buffer = buffer;
         m_channel = channel;
     }
 
@@ -387,14 +395,23 @@ class SmolDevice : public NetDevice
     // A frame at the end of its propagation (SmolChannel).
     void Receive(Frame frame);
 
-    // A frame for the egress queue: sent now if the port is idle.
+    // A frame for the egress queue. A bounded queue drops it if its bytes
+    // would exceed the buffer. An idle port takes it at this instant, after
+    // the events already scheduled for it (Model Semantics §3, §9).
     void Enqueue(Frame frame)
     {
+        if (m_buffer > 0 && m_queuedBytes + frame.bytes > m_buffer)
+        {
+            ++dropped; // tail drop: nothing is queued or scheduled
+            return;
+        }
+        m_queuedBytes += frame.bytes;
         m_queue[m_strict ? frame.priority : 0].push_back(std::move(frame));
         ++m_queued;
-        if (!m_busy)
+        if (!m_busy && !m_starting)
         {
-            StartNext();
+            m_starting = true;
+            Simulator::ScheduleNow(&SmolDevice::Start, this);
         }
     }
 
@@ -403,9 +420,11 @@ class SmolDevice : public NetDevice
         return m_queued; // the frame on the wire is not queued
     }
 
-    uint64_t bitsSent = 0;      // frame bits whose transmission has completed
-    uint64_t framesSent = 0;    // those frames
-    uint64_t bytesReceived = 0; // frames addressed to this port
+    uint64_t bitsSent = 0;       // frame bits whose transmission has completed
+    uint64_t framesSent = 0;     // those frames
+    uint64_t bytesReceived = 0;  // frames addressed to this port
+    uint64_t framesReceived = 0; // those frames
+    uint64_t dropped = 0;        // frames a bounded queue dropped
     std::vector<Window*> latencyWindows;
     PnConsumer* pn = nullptr; // the node's PROFINET consumer
 
@@ -571,6 +590,15 @@ class SmolDevice : public NetDevice
         return ns;
     }
 
+    void Start()
+    {
+        m_starting = false;
+        if (!m_busy && m_queued > 0)
+        {
+            StartNext();
+        }
+    }
+
     void StartNext()
     {
         m_busy = true;
@@ -581,6 +609,7 @@ class SmolDevice : public NetDevice
         m_sending = std::move(q->front());
         q->pop_front();
         --m_queued;
+        m_queuedBytes -= m_sending.bytes; // in transmission: out of the buffer
         uint64_t now = Simulator::Now().GetNanoSeconds();
         uint64_t gap = m_freeAt > now ? m_freeAt - now : 0; // the gap after the last frame
         Simulator::Schedule(NanoSeconds(gap + TransmissionNs(m_sending.bytes)),
@@ -602,10 +631,13 @@ class SmolDevice : public NetDevice
     u128 m_speedDen = 1;
     uint64_t m_gapNs = 0;
     bool m_strict = true;
+    uint64_t m_buffer = 0; // bytes; 0: unbounded
     std::array<std::deque<Frame>, 8> m_queue; // by priority; all in 0 if not strict
     uint64_t m_queued = 0;
+    uint64_t m_queuedBytes = 0;
     Frame m_sending;
     bool m_busy = false;
+    bool m_starting = false; // a Start is scheduled for this instant
     uint64_t m_freeAt = 0; // the end of the gap after the last frame
     std::unordered_map<uint64_t, uint64_t> m_txNs;
 };
@@ -725,6 +757,18 @@ class SmolSwitch
         }
         return depth;
     }
+
+    uint64_t Dropped() const
+    {
+        uint64_t n = 0;
+        for (const auto& port : ports)
+        {
+            n += port->dropped;
+        }
+        return n;
+    }
+
+    uint64_t buffer = 0; // bytes per port; 0: unbounded
 };
 
 void
@@ -741,6 +785,7 @@ SmolDevice::Receive(Frame frame)
         return;
     }
     bytesReceived += frame.bytes;
+    ++framesReceived;
     // a UDP datagram's or PROFINET frame's origin is a packet tag; TCP data
     // carries it as a byte tag, the first one in a segment; segments without
     // data have none
@@ -920,6 +965,8 @@ struct Host
     std::vector<Window*> rttWindows;                               // modbus_latency
     std::unordered_map<uint32_t, std::vector<Connection*>> routes; // broker: topic -> subscribers
     uint64_t waiting = 0; // broker: messages waiting for a subscriber's connection
+    uint64_t modbusRequests = 0;  // generated by its polls
+    uint64_t modbusResponses = 0; // arrived
 };
 
 class Connection
@@ -947,6 +994,11 @@ class Connection
         s->SetRecvCallback(MakeCallback(&Connection::ReceiveAtClient, this));
         s->Connect(InetSocketAddress(m_server, m_port));
         Attach(Client, s); // data may be sent while the handshake runs
+    }
+
+    Host* ClientHost() const
+    {
+        return m_hosts[Client];
     }
 
     // The server's end, accepted.
@@ -1034,6 +1086,7 @@ class Connection
             Reply(this, Server, {Message::ModbusResponse, message.reply, message.origin});
             break;
         case Message::ModbusResponse:
+            ++host->modbusResponses;
             for (Window* w : host->rttWindows)
             {
                 w->sum += now - message.origin;
@@ -1158,6 +1211,10 @@ struct Periodic
     {
         Sent m = message;
         m.origin = Simulator::Now().GetNanoSeconds();
+        if (m.kind == Message::ModbusRequest)
+        {
+            ++connection->ClientHost()->modbusRequests;
+        }
         connection->Send(Connection::Client, m);
         Next();
     }
@@ -1176,6 +1233,10 @@ enum class Kind
     PnLatency,
     PnJitter,
     PnWatchdogExpiries,
+    Drops, // drops and drops_total: the total so far
+    FramesSent,
+    FramesReceived,
+    ModbusUnanswered,
 };
 
 struct Observation
@@ -1183,7 +1244,7 @@ struct Observation
     uint32_t index;
     Kind kind;
     Ptr<SmolDevice> device;          // an adapter's port
-    SmolSwitch* sw = nullptr;        // queue_depth
+    SmolSwitch* sw = nullptr;        // queue_depth, drops
     std::vector<Ptr<SmolDevice>> in; // utilization: the ports that send to the target
     Host* host = nullptr;            // broker_queue
     Window window;                   // latency, modbus_latency
@@ -1234,6 +1295,19 @@ Sample(Observation* o)
     case Kind::PnWatchdogExpiries:
         a = o->host->pn.expiries;
         break;
+    case Kind::Drops:
+        a = o->sw->Dropped();
+        break;
+    case Kind::FramesSent:
+        a = o->device->framesSent;
+        break;
+    case Kind::FramesReceived:
+        a = o->device->framesReceived;
+        break;
+    case Kind::ModbusUnanswered:
+        a = o->host->modbusRequests;
+        b = o->host->modbusResponses;
+        break;
     }
     *o->out << o->index << ' ' << now << ' ' << a << ' ' << b << '\n';
     uint64_t next = o->ticks.Next();
@@ -1256,9 +1330,9 @@ Run(std::istream& in, std::ostream& out)
 
     std::string word;
     uint32_t version = 0;
-    if (!(in >> word >> version) || word != "smol-ns3" || version != 1)
+    if (!(in >> word >> version) || word != "smol-ns3" || version != 2)
     {
-        Fail("not a smol-ns3 version 1 scenario");
+        Fail("not a smol-ns3 version 2 scenario");
     }
 
     uint64_t durationNs = 0;
@@ -1299,6 +1373,10 @@ Run(std::istream& in, std::ostream& out)
             if (sw)
             {
                 switches.emplace_back();
+                if (!(s >> switches.back().buffer))
+                {
+                    Fail("bad switch: " + line);
+                }
                 macs.emplace_back();
                 ips.emplace_back();
             }
@@ -1331,7 +1409,9 @@ Run(std::istream& in, std::ostream& out)
             for (int e = 0; e < 2; ++e)
             {
                 Ptr<SmolDevice> d = CreateObject<SmolDevice>();
-                d->Configure(speedNum, speedDen, gapNs, strict[e] != 0, channel);
+                // only a switch bounds its egress queues: end stations never drop
+                uint64_t buffer = isSwitch[at[e]] ? switches[switchOf[at[e]]].buffer : 0;
+                d->Configure(speedNum, speedDen, gapNs, strict[e] != 0, buffer, channel);
                 Ptr<Node> node = nodes.Get(at[e]);
                 if (isSwitch[at[e]])
                 {
@@ -1669,6 +1749,24 @@ Run(std::istream& in, std::ostream& out)
             else if (kind == "pn_watchdog_expiries")
             {
                 o->kind = Kind::PnWatchdogExpiries;
+                o->host = &hosts.at(target);
+            }
+            else if (kind == "drops")
+            {
+                o->kind = Kind::Drops;
+                o->sw = &switches[switchOf[target]];
+            }
+            else if (kind == "frames_sent")
+            {
+                o->kind = Kind::FramesSent;
+            }
+            else if (kind == "frames_received")
+            {
+                o->kind = Kind::FramesReceived;
+            }
+            else if (kind == "modbus_unanswered")
+            {
+                o->kind = Kind::ModbusUnanswered;
                 o->host = &hosts.at(target);
             }
             else

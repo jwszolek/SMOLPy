@@ -36,7 +36,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 | **Modbus TCP** | TCP/IP | Request / response polling (Read Holding Registers, FC 03) | `ModbusSlave`, `Adapter.polls()` | `modbus_slave`, `poll` | `modbus_latency` |
 | **PROFINET RT** | Layer 2 (EtherType 0x8892), 802.1Q priority 6 | Cyclic producer / consumer exchange with watchdog | `ProfinetDevice`, `Adapter.controls()` | `profinet_device`, `control` | `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` |
 
-Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation). One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
+Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation), unbounded or bounded with tail drop (`buffer=` in bytes). One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
 
 **Not supported (yet):** PROFINET IRT, PROFIBUS, EtherNet/IP, EtherCAT, OPC UA, Modbus RTU (serial), and Modbus write function codes. See the [Architecture Decision Records](https://jwszolek.github.io/SMOLPy/adr/0001-protocol-package-structure/) for what is planned.
 
@@ -281,7 +281,6 @@ net.observe(metric, on=node, every=interval_ms)
 |---|---|---|
 | `throughput` | Mb/s | Adapter |
 | `latency` | µs | Adapter |
-| `frame_loss` | % | Adapter |
 | `bytes_sent` | MB | Adapter (sender) |
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
@@ -291,6 +290,11 @@ net.observe(metric, on=node, every=interval_ms)
 | `pn_latency` | µs | Adapter (controller), ProfinetDevice |
 | `pn_jitter` | µs | Adapter (controller), ProfinetDevice |
 | `pn_watchdog_expiries` | count | Adapter (controller), ProfinetDevice |
+| `drops` | frames | Switch: dropped by its buffers in the window |
+| `drops_total` | frames | Switch: dropped by its buffers so far |
+| `frames_sent` | frames | Adapter (sender) |
+| `frames_received` | frames | Adapter (receiver) |
+| `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
 
 ### Simulation
 
@@ -446,7 +450,7 @@ frame_size = max(64, 14 (Ethernet) + 4 (802.1Q tag) + 2 (FrameID) + io_bytes + 4
 
 ### Not modelled
 
-IRT (isochronous, scheduled) traffic, AR establishment (DCP / RPC connect), acyclic record data, alarms, media redundancy (MRP). Switch buffers are unbounded, so frames are delayed but never dropped.
+IRT (isochronous, scheduled) traffic, AR establishment (DCP / RPC connect), acyclic record data, alarms, media redundancy (MRP). Switch buffers are unbounded unless a switch sets `buffer`. With it, a full port drops RT frames too, and the watchdog expires on the gap.
 
 ### Dashboard
 
@@ -484,6 +488,7 @@ The model every engine implements:
 - **MAC-learning switch** — each switch pre-seeds its forwarding table from the topology wiring, eliminating spurious flooding toward silent endpoints (e.g. a server that only receives).  Dynamic learning still operates for traffic through intermediate switches.
 - **Store-and-forward model** — transmission delay + propagation delay per hop.
 - **Queuing** — each link direction has its own egress queue with 8 strict 802.1Q priority classes (FIFO within a class, non-preemptive); `qos="fifo"` on a switch ignores priorities. `queue_depth` reports buffered frames at the switch's outbound ports.
+- **Bounded buffers** — a switch with `buffer` (bytes per port) drops a frame that does not fit, with tail drop: delay is capped and loss appears, as on real switches near saturation ([ADR-0011](https://jwszolek.github.io/SMOLPy/adr/0011-bounded-switch-buffers/)). Without it queues are unbounded.
 - **Traffic shaping** — constant, Poisson, Pareto-burst and batch patterns; IMIX frame-size distribution.
 - **Live mode** (SimPy only) — simulation runs in 200 chunks (~8 s total wall time); the dashboard reads shared metric arrays between chunks via Python's GIL.
 

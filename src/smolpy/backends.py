@@ -208,9 +208,14 @@ class Ns3Backend:
                     "pn_latency",
                     "pn_jitter",
                     "pn_watchdog_expiries",
+                    "drops",
+                    "drops_total",
+                    "frames_sent",
+                    "frames_received",
+                    "modbus_unanswered",
                 }
             ),
-            features=frozenset({"imix"}),
+            features=frozenset({"imix", "bounded_buffer"}),
         )
 
     def run(self, scenario: Scenario) -> SimulationResult:

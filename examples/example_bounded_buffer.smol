@@ -1,0 +1,39 @@
+# Bounded switch buffers (ADR-0011): a 100 Mb/s bottleneck near full load.
+#
+# A Raspberry Pi on a 1 Gb/s port sends Poisson UDP traffic of 1518 B frames
+# to a laptop on a 100 Mb/s port, at 99.6 % of that port; the laptop polls a
+# Modbus server on the Pi every 10 ms. The switch holds 115 000 B per port:
+# the laptop's queue never holds more than 75 frames, so the Modbus round trip
+# stays under 9.4 ms, and the UDP frames that do not fit are dropped.
+#
+# Remove buffer= to see the same load with an unbounded queue: nothing is
+# dropped, and the round trip grows to tens of ms.
+#
+# It runs headless, so on every backend: --backend rust, or --backend ns3 to
+# run the Modbus polls over ns-3's TCP.
+
+network "bottleneck" {
+
+    switch       sw     ports=3 buffer=115000
+    adapter      pi     ip=10.0.0.1
+    modbus_slave server ip=10.0.0.3 unit_id=1
+    adapter      laptop ip=10.0.0.2
+
+    link pi     -- sw speed=1000 length=2
+    link server -- sw speed=1000 length=2
+    link laptop -- sw speed=100  length=2
+
+    # 8095 frames/s of 1518 B, 1538 B on the wire: 99.6 % of 100 Mb/s
+    flow pi     -> laptop rate=8095 size=1518 pattern=poisson
+    poll laptop -> server register=0 count=10 rate=100
+
+    observe modbus_latency    on laptop every=100
+    observe modbus_unanswered on laptop every=1000
+    observe frames_sent       on pi     every=1000
+    observe frames_received   on laptop every=1000
+    observe drops             on sw     every=100
+    observe drops_total       on sw     every=1000
+    observe queue_depth       on sw     every=100
+
+    simulate duration=30000 mode=headless
+}

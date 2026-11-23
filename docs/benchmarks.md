@@ -27,6 +27,10 @@ uv run python -m benchmarks summarize benchmarks/results/<file>.json
 uv run python -m benchmarks load --label tcp-under-load
 uv run python -m benchmarks load-summary benchmarks/results/<file>.json
 
+# bounded switch buffers: the testbed of ADR-0011 on SimPy, Rust and ns-3
+uv run python -m benchmarks loss
+uv run python -m benchmarks loss-summary benchmarks/results/<file>.json
+
 # profiling (reports go to benchmarks/profiles/, not committed)
 uv run python -m benchmarks profile --scenario B3 --frames 1M --tool cprofile
 uv run python -m benchmarks profile --scenario B1 --frames 1M --metrics on --tool tracemalloc
@@ -55,7 +59,7 @@ With **metrics on**, each scenario adds a representative set of `observe()` stat
 
 B1–B3 make up the regular suite (`run` without `--scenario`). B4 is the research-scale scenario for the extended Rust decision gate (ADR-0006 §6). It is run on its own, at 100 M frames.
 
-**Why B4 starts converged.** With address learning, every switch floods the first frames to each of the 10 000 destinations. Each flooded frame reaches ~200 access switches × ~50 ports. Queues are unbounded, so all these copies wait in memory. At 1 M frames the result is 329 events per frame instead of 25, 45 min instead of 1 min, and 12 GB peak memory. That cost grows with stations × ports, so it is a start-up artefact of the model, not the scale effect B4 is meant to measure. With `mac_table="topology"`, B4 at 1 M frames takes 60 s and 203 MB, at 24.8 events per frame.
+**Why B4 starts converged.** With address learning, every switch floods the first frames to each of the 10 000 destinations. Each flooded frame reaches ~200 access switches × ~50 ports. B4's switches have no `buffer`, so their queues are unbounded and all these copies wait in memory. At 1 M frames the result is 329 events per frame instead of 25, 45 min instead of 1 min, and 12 GB peak memory. That cost grows with stations × ports, so it is a start-up artefact of the model, not the scale effect B4 is meant to measure. With `mac_table="topology"`, B4 at 1 M frames takes 60 s and 203 MB, at 24.8 events per frame.
 
 ## Baseline
 

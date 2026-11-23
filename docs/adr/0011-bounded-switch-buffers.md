@@ -1,6 +1,6 @@
 # ADR-0011: Bounded Switch Buffers with Frame Loss
 
-**Status:** Proposed  
+**Status:** Accepted  
 **Date:** 2026-11-23  
 **Amends:** ADR-0007 (a new optional field of the IR, which stays version 2), ADR-0004 (the `smol-ns3` line format becomes version 2), [Model Semantics](../model-semantics.md) §3, §5, §8 and §9  
 **Roadmap:** the candidate "Bounded switch buffers with frame loss"
@@ -137,6 +137,15 @@ The ns-3 backend does not use ns-3 queues for switches. Links and switches are S
 - **Expected agreement:**
     - Ethernet over UDP and PROFINET RT stay bit-exact with SimPy, drops included, stochastic scenarios with the same seed included;
     - Modbus and MQTT differ by TCP, as now, and now also by its retransmissions.
+
+*As built (2026-11-23):*
+- **The deferred start changed no earlier result.** Every earlier ns-3 test still passes, the nanosecond-exact TCP tests among them.
+- **Bit-exact with drops.** `tail-drop` is bit-exact on ns-3, and `random-drops` gives SimPy's run with the same seed.
+- **Under loss, TCP's sampling differs.** Over TCP a window metric can sample other windows than on SimPy, because TCP delivers late what SimPy loses. For a scenario with a bounded switch, `test_over_tcp` checks only that its instants are sampling instants.
+- **The testbed** ([Execution backends](../backends.md#bounded-switch-buffers)):
+    - with 115 000 B, only UDP frames are lost, and the three engines agree, Rust up to its own random draws;
+    - with a buffer that drops responses too, SimPy and Rust leave up to 4 % of the polls unanswered at ρ = 1.05;
+    - on ns-3 none is lost: three duplicate acknowledgements trigger a fast retransmit, and the poll is answered 30 to 48 ms after it was sent.
 
 ### Validation and tests
 
