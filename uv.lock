@@ -1598,7 +1598,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "simpy", specifier = ">=4.1" },
-    { name = "smolpy-engine-rs", marker = "extra == 'rust'", specifier = ">=1.10.3.dev0" },
+    { name = "smolpy-engine-rs", marker = "extra == 'rust'", specifier = ">=1.11.1.dev0" },
 ]
 provides-extras = ["dev", "docs", "rust"]
 
@@ -1612,15 +1612,15 @@ docs = [{ name = "mkdocs-material", specifier = ">=9" }]
 
 [[package]]
 name = "smolpy-engine-rs"
-version = "1.10.3.dev2"
+version = "1.11.1.dev2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/50/95/92ff5a5ba627f6aa6b32dc605c42a79213e7b02379343f7f805587e56e0c/smolpy_engine_rs-1.10.3.dev2.tar.gz", hash = "sha256:81d13b3609481a67d3654dcd4c08bfef5cd2ace0bcc453b5eaa5d45e3fc99f67", size = 32933, upload-time = "2026-11-23T09:34:52.537Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/af/996be18319ef4aa99e2ed962c61478a66e5b37895b9fc71679b5ef053e43/smolpy_engine_rs-1.11.1.dev2.tar.gz", hash = "sha256:b846474fb91c5d67107304ba56da518483690e404a8213bd7b0cd153be17fd28", size = 34193, upload-time = "2026-11-23T19:19:11.211Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/74/3f/1ea29284ff26e946a5041966525346f3baccc78cccf2e7ae78ffabcd9acb/smolpy_engine_rs-1.10.3.dev2-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:985425b403cd0e500f01b18d2b471e801fdc88af00d7e6ac9e2d1b8688f41ff1", size = 352161, upload-time = "2026-11-23T09:34:47.247Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/ab/6f23445b89eeb4f24196ad561eeb0bdf236b39f1c99ec38ad88bf151f13f/smolpy_engine_rs-1.10.3.dev2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:afa653f120a1ffad08ca7648087c606f09deace59f75f5175c3b0d0a47a35085", size = 330252, upload-time = "2026-11-23T09:34:48.352Z" },
-    { url = "https://files.pythonhosted.org/packages/b2/d4/d2b2995b777415829fa04ec33ea19613168fd6b5fe472cec0096f41e3616/smolpy_engine_rs-1.10.3.dev2-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:5983182268acb53f7e1351367c8616658cb14fe8d800d29e2e42afa969f6550f", size = 358010, upload-time = "2026-11-23T09:34:49.421Z" },
-    { url = "https://files.pythonhosted.org/packages/96/75/be806fbfecf2d8e41c726bff8d8a93b3e1f69c3559738f789ba3573fafff/smolpy_engine_rs-1.10.3.dev2-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:cf8ccf120317fee12bb26c1af2b3064fc89b40cacdff1cce3add913a87f75aba", size = 369398, upload-time = "2026-11-23T09:34:50.47Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/f7/44fc969cbaf63402ec5fd7455a6e86ca8a7af45d89f4d8484d9b4e88b6f2/smolpy_engine_rs-1.10.3.dev2-cp310-abi3-win_amd64.whl", hash = "sha256:847e461fbacf791d387ec4407115790346fc73e2c6c403301685845989977a0b", size = 270844, upload-time = "2026-11-23T09:34:51.459Z" },
+    { url = "https://files.pythonhosted.org/packages/f7/38/5a71b52f90a2ca347d4b23206ab13ca22e9a938472a8aac9c30f6ce887d2/smolpy_engine_rs-1.11.1.dev2-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:cb6abeb43ef613d0f64855ac179b413222b8cd460f8dd706f10f33000ecc0080", size = 354018, upload-time = "2026-11-23T19:19:06.054Z" },
+    { url = "https://files.pythonhosted.org/packages/02/5a/590800a2e3a187d1b0ed71387ce213c3468e993f60465b966d60449a677e/smolpy_engine_rs-1.11.1.dev2-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:a87a32193313b505c1ff317e33457666cea129b4a77b903c74d8e66c98e838be", size = 332386, upload-time = "2026-11-23T19:19:07.117Z" },
+    { url = "https://files.pythonhosted.org/packages/16/01/cdf686a58398725a50e776670bd70a27abdc8f5b00c40a8ac66f7eeaf919/smolpy_engine_rs-1.11.1.dev2-cp310-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:179289b0a626816b12f3b79c5097dfd0d7cd72ee4be311b1a784027674164082", size = 359635, upload-time = "2026-11-23T19:19:08.347Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/1e/5033ce00f9285a37b709f6e3b6ef9b70a50560a7e84854e2c3aa56a535ca/smolpy_engine_rs-1.11.1.dev2-cp310-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1f283d4aebd0e60bdbc2b35f6e346f20e1bdc5ecf581d211c174fb738889b7e7", size = 371217, upload-time = "2026-11-23T19:19:09.304Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/9c/4792472404bfba990e8b182be4e6d097debd874d946066bb34c97e116892/smolpy_engine_rs-1.11.1.dev2-cp310-abi3-win_amd64.whl", hash = "sha256:993dd0bc4f1b1ef937c83d8bd45307c1e4d13e19d65b14fa285be828dfa6d6d5", size = 272241, upload-time = "2026-11-23T19:19:10.38Z" },
 ]
 
 [[package]]

@@ -29,11 +29,11 @@ dev = ["pytest>=8", "ruff", "mypy"]
 docs = ["mkdocs-material>=9"]
 # The native Rust engine (ADR-0008), released together with smolpy and with
 # the same version. At import smolpy checks the IR version the module reads,
-# and each run checks its capabilities. Bounded switch buffers (ADR-0011)
-# come with the release after 1.10.2: the floor admits it and the development
-# builds that lead to it. The earliest of those predate the buffers, and a run
-# that needs them is refused there by the engine's capabilities.
-rust = ["smolpy-engine-rs>=1.10.3.dev0"]
+# and each run checks its capabilities. Polls with one request in flight
+# (ADR-0012) come with the release after 1.11.0: the floor admits it and the
+# development builds that lead to it. The earliest of those predate them, and
+# a run that needs them is refused there by the engine's capabilities.
+rust = ["smolpy-engine-rs>=1.11.1.dev0"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

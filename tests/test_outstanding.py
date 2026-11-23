@@ -7,6 +7,8 @@
   nothing changes; poll instants are skipped while a request is outstanding,
   and at the instant one completes; timeouts fire exactly at their instant;
   late responses are discarded; the counts are consistent.
+- Step 3: the Rust engine. The same tests where they need no SimPy internals,
+  and SimPy's results bit for bit with loss.
 """
 
 from __future__ import annotations
@@ -84,6 +86,13 @@ def test_a_bad_timeout_is_rejected(timeout) -> None:
 
 def test_one_nanosecond_is_the_shortest_timeout() -> None:
     validate(_master(1, 1e-6).to_scenario(duration=10))
+
+
+def test_a_timeout_fits_in_the_time_base() -> None:
+    """As a duration: 2^63 - 1 ns, which every engine can hold."""
+    validate(_master(1, 9.2e12).to_scenario(duration=10))
+    with pytest.raises(ScenarioError, match=r"timeout must be at most 2\^63 - 1 ns"):
+        _master(1, 9.3e12)
 
 
 def test_a_timeout_needs_one_request_in_flight() -> None:
@@ -247,9 +256,12 @@ def _pair(
     return net.to_scenario(duration=duration)
 
 
-def _final(sc: Scenario) -> dict[str, float | None]:
+ENGINES = ["simpy", "rust"]
+
+
+def _final(sc: Scenario, engine: str = "simpy") -> dict[str, float | None]:
     """Each metric's one sample, None for an empty window."""
-    result = backends.get("simpy").run(sc)
+    result = backends.run(sc, _backend(engine).name)
     return {k.split(":")[0]: (v[-1][1] if v else None) for k, v in result.metrics.items()}
 
 
@@ -285,20 +297,25 @@ def _shared_port(outstanding: int | None, timeout_ms: float | None) -> Scenario:
     return net.to_scenario(duration=500, seed=3)
 
 
+@pytest.mark.parametrize("engine", ENGINES)
 @pytest.mark.parametrize("timeout_ms", [None, 5.0])
-def test_without_loss_and_under_the_period_nothing_changes(timeout_ms: float | None) -> None:
-    open_loop = backends.get("simpy").run(_shared_port(None, None))
-    closed = backends.get("simpy").run(_shared_port(1, timeout_ms))
+def test_without_loss_and_under_the_period_nothing_changes(
+    timeout_ms: float | None, engine: str
+) -> None:
+    b = _backend(engine)
+    open_loop = b.run(_shared_port(None, None))
+    closed = b.run(_shared_port(1, timeout_ms))
     assert closed.metrics == open_loop.metrics
     if timeout_ms is None:  # a timeout is an event of its own
         assert closed.stats.events == open_loop.stats.events
 
 
-def test_an_instant_is_skipped_while_a_request_is_outstanding() -> None:
+@pytest.mark.parametrize("engine", ENGINES)
+def test_an_instant_is_skipped_while_a_request_is_outstanding(engine: str) -> None:
     """RTT = 2.5 periods: each request is sent at instant 3k + 1, and the two
     instants after it are skipped."""
     rate = 62_500  # 16 us
-    final = _final(_pair(rate))
+    final = _final(_pair(rate), engine)
     n = _instants(rate, 1.0)
     sent = len(range(1, n + 1, 3))
     assert (n, sent) == (62, 21)
@@ -309,17 +326,19 @@ def test_an_instant_is_skipped_while_a_request_is_outstanding() -> None:
     assert final["frames_received"] == sent - 1
 
 
-def test_open_loop_sends_at_every_instant() -> None:
-    final = _final(_pair(62_500, outstanding=None))
+@pytest.mark.parametrize("engine", ENGINES)
+def test_open_loop_sends_at_every_instant(engine: str) -> None:
+    final = _final(_pair(62_500, outstanding=None), engine)
     assert final["modbus_skipped"] == 0
     assert final["frames_received"] == 59  # sent at 16k us, answered 40 us later
 
 
-def test_a_response_at_a_poll_instant_does_not_free_it() -> None:
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_response_at_a_poll_instant_does_not_free_it(engine: str) -> None:
     """RTT = period: each response arrives at the next poll instant, which is
     skipped, so every other instant sends."""
     rate = 25_000  # 40 us
-    final = _final(_pair(rate))
+    final = _final(_pair(rate), engine)
     n = _instants(rate, 1.0)
     assert final["modbus_skipped"] == n // 2
     assert final["frames_received"] == n - n // 2
@@ -334,8 +353,9 @@ def test_a_response_at_a_poll_instant_does_not_free_it() -> None:
         (0.040001, 0),  # 1 ns later it is in time
     ],
 )
-def test_a_response_at_the_timeout_is_late(timeout_ms: float, timeouts: int) -> None:
-    final = _final(_pair(10_000, timeout_ms=timeout_ms))  # one request per 100 us
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_response_at_the_timeout_is_late(timeout_ms: float, timeouts: int, engine: str) -> None:
+    final = _final(_pair(10_000, timeout_ms=timeout_ms), engine)  # one request per 100 us
     assert final["modbus_timeouts"] == timeouts
     assert final["frames_received"] == 9  # the NIC accepts late responses too
     assert final["modbus_unanswered"] == timeouts
@@ -349,11 +369,14 @@ def test_a_response_at_the_timeout_is_late(timeout_ms: float, timeouts: int) -> 
         (0.019999, 0),  # 1 ns earlier, the next instant sends
     ],
 )
-def test_a_timeout_fires_exactly_after_its_time(timeout_ms: float, skipped: int) -> None:
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_timeout_fires_exactly_after_its_time(
+    timeout_ms: float, skipped: int, engine: str
+) -> None:
     """Period 20 us, RTT 40 us: every request times out, and the timeout
     instant decides whether the next poll instant is free."""
     rate = 50_000
-    final = _final(_pair(rate, timeout_ms=timeout_ms))
+    final = _final(_pair(rate, timeout_ms=timeout_ms), engine)
     n = _instants(rate, 1.0)
     sent = n - skipped
     assert final["modbus_skipped"] == skipped
@@ -444,5 +467,31 @@ def test_without_a_timeout_a_lost_response_stops_the_pair(
     assert c.modbus_skipped > c.modbus_requests  # every instant after the loss
 
 
-def test_simpy_runs_one_request_in_flight() -> None:
-    backends.check(_master().to_scenario(duration=10), "simpy")
+@pytest.mark.parametrize("engine", ENGINES)
+def test_the_engine_runs_one_request_in_flight(engine: str) -> None:
+    _backend(engine)
+    backends.check(_master().to_scenario(duration=10), engine)
+
+
+# --- step 3: the Rust engine ---
+
+
+@pytest.mark.parametrize("timeout_ms", [None, 3.0, 0.5, 0.3, 1e-6])
+def test_rust_gives_simpys_results_with_loss(timeout_ms: float | None) -> None:
+    """Lost, late and in-time responses, timeouts and skipped instants, and
+    open-loop traffic beside them: the same samples, event counts included."""
+    rust = _backend("rust")
+    sc = _lossy(timeout_ms, every=0.5).to_scenario(duration=100)
+    simpy_run, rust_run = backends.get("simpy").run(sc), rust.run(sc)
+    assert rust_run.metrics == simpy_run.metrics
+    assert rust_run.stats.events == simpy_run.stats.events
+
+
+def test_a_timeout_past_the_end_is_never_processed() -> None:
+    """The longest timeout, far beyond the run: an event that never comes, on
+    both engines."""
+    rust = _backend("rust")
+    sc = _pair(62_500, timeout_ms=9.2e12)
+    simpy_run, rust_run = backends.get("simpy").run(sc), rust.run(sc)
+    assert rust_run.metrics == simpy_run.metrics
+    assert rust_run.stats.events == simpy_run.stats.events
