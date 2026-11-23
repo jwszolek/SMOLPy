@@ -3,6 +3,10 @@
 - Step 1: the scenario. ``outstanding`` and ``timeout`` in the Python API and
   in .smol, their validation, the IR (still version 2: optional fields,
   written only when set) and the capability that a backend needs to run them.
+- Step 2: the reference engine. Without loss and with an RTT under the period
+  nothing changes; poll instants are skipped while a request is outstanding,
+  and at the instant one completes; timeouts fire exactly at their instant;
+  late responses are discarded; the counts are consistent.
 """
 
 from __future__ import annotations
@@ -13,7 +17,9 @@ from smolpy import Network, backends
 from smolpy.lang import SMOLSemanticError
 from smolpy.lang.interpreter import interpret_to_scenario
 from smolpy.model import Poll, Scenario
+from smolpy.model import timebase as tb
 from smolpy.model.validate import ScenarioError, validate
+from smolpy.sim import engine
 
 
 def _master(
@@ -208,3 +214,235 @@ def test_a_backend_without_the_feature_rejects_one_request_in_flight(
 def test_an_open_loop_poll_runs_as_before(name: str) -> None:
     _backend(name)
     backends.check(_master(None, None).to_scenario(duration=10), name)
+
+
+# --- step 2: the reference engine ---
+
+# Two 100 Mb/s hops of 632 m each way: a request (69 B) and a response of ten
+# registers (86 B) take 2 x 6 160 + 2 x 7 520 ns on the wire and 4 x 3 160 ns
+# of propagation, so the round trip is exactly 40 us.
+LONG = 632
+RTT_NS = 40_000
+COUNTS = ("modbus_unanswered", "modbus_timeouts", "modbus_skipped", "frames_received")
+
+
+def _pair(
+    rate: float,
+    outstanding: int | None = 1,
+    timeout_ms: float | None = None,
+    length: float = LONG,
+    duration: float = 1.0,
+) -> Scenario:
+    """A master polling a slave across one switch, sampled once at the end."""
+    net = Network("pair")
+    sw = net.switch("sw", ports=2)
+    m = net.adapter("m", ip="10.0.0.1")
+    s = net.modbus_slave("s", ip="10.0.0.2", unit_id=1)
+    net.link(m, sw, speed=100, length=length)
+    net.link(s, sw, speed=100, length=length)
+    m.polls(s, register=0, count=10, rate=rate, outstanding=outstanding, timeout_ms=timeout_ms)
+    end = duration - 0.001
+    for metric in ("modbus_latency", *COUNTS):
+        net.observe(metric, on=m, every=end)  # type: ignore[arg-type]
+    return net.to_scenario(duration=duration)
+
+
+def _final(sc: Scenario) -> dict[str, float | None]:
+    """Each metric's one sample, None for an empty window."""
+    result = backends.get("simpy").run(sc)
+    return {k.split(":")[0]: (v[-1][1] if v else None) for k, v in result.metrics.items()}
+
+
+def _instants(rate: float, duration_ms: float, delay_ms: float = 0.0) -> int:
+    """Poll instants in [0, duration)."""
+    end = tb.ms_to_ns(duration_ms)
+    n = 0
+    for t in tb.instants(tb.ms_to_ns(delay_ms), tb.interval_ns(rate)):
+        if t >= end:
+            return n
+        n += 1
+    raise AssertionError("unreachable")
+
+
+def _shared_port(outstanding: int | None, timeout_ms: float | None) -> Scenario:
+    """Polls to two slaves sharing the master's port with UDP traffic, every
+    round trip far under the period."""
+    net = Network("shared")
+    sw = net.switch("sw", ports=4)
+    m = net.adapter("m", ip="10.0.0.1")
+    cam = net.adapter("cam", ip="10.0.0.4")
+    for node in (m, cam):
+        net.link(node, sw, speed=100, length=20)
+    for i, (rate, count) in enumerate(((100, 10), (250, 60)), start=2):
+        s = net.modbus_slave(f"s{i}", ip=f"10.0.0.{i}", unit_id=i)
+        net.link(s, sw, speed=100, length=20)
+        m.polls(
+            s, register=0, count=count, rate=rate, outstanding=outstanding, timeout_ms=timeout_ms
+        )
+    cam.sends(m, rate=4_000, size=1_200, pattern="poisson")
+    for metric in ("modbus_latency", "modbus_unanswered", "latency", "throughput"):
+        net.observe(metric, on=m, every=5)  # type: ignore[arg-type]
+    return net.to_scenario(duration=500, seed=3)
+
+
+@pytest.mark.parametrize("timeout_ms", [None, 5.0])
+def test_without_loss_and_under_the_period_nothing_changes(timeout_ms: float | None) -> None:
+    open_loop = backends.get("simpy").run(_shared_port(None, None))
+    closed = backends.get("simpy").run(_shared_port(1, timeout_ms))
+    assert closed.metrics == open_loop.metrics
+    if timeout_ms is None:  # a timeout is an event of its own
+        assert closed.stats.events == open_loop.stats.events
+
+
+def test_an_instant_is_skipped_while_a_request_is_outstanding() -> None:
+    """RTT = 2.5 periods: each request is sent at instant 3k + 1, and the two
+    instants after it are skipped."""
+    rate = 62_500  # 16 us
+    final = _final(_pair(rate))
+    n = _instants(rate, 1.0)
+    sent = len(range(1, n + 1, 3))
+    assert (n, sent) == (62, 21)
+    assert final["modbus_skipped"] == n - sent
+    assert final["modbus_latency"] == RTT_NS / 1_000  # every RTT is exact
+    # the last request, sent at 976 us, is in flight at the end
+    assert final["modbus_unanswered"] == 1
+    assert final["frames_received"] == sent - 1
+
+
+def test_open_loop_sends_at_every_instant() -> None:
+    final = _final(_pair(62_500, outstanding=None))
+    assert final["modbus_skipped"] == 0
+    assert final["frames_received"] == 59  # sent at 16k us, answered 40 us later
+
+
+def test_a_response_at_a_poll_instant_does_not_free_it() -> None:
+    """RTT = period: each response arrives at the next poll instant, which is
+    skipped, so every other instant sends."""
+    rate = 25_000  # 40 us
+    final = _final(_pair(rate))
+    n = _instants(rate, 1.0)
+    assert final["modbus_skipped"] == n // 2
+    assert final["frames_received"] == n - n // 2
+    assert final["modbus_unanswered"] == 0
+    assert final["modbus_latency"] == RTT_NS / 1_000
+
+
+@pytest.mark.parametrize(
+    "timeout_ms, timeouts",
+    [
+        (0.04, 9),  # a response at exactly s + timeout is late
+        (0.040001, 0),  # 1 ns later it is in time
+    ],
+)
+def test_a_response_at_the_timeout_is_late(timeout_ms: float, timeouts: int) -> None:
+    final = _final(_pair(10_000, timeout_ms=timeout_ms))  # one request per 100 us
+    assert final["modbus_timeouts"] == timeouts
+    assert final["frames_received"] == 9  # the NIC accepts late responses too
+    assert final["modbus_unanswered"] == timeouts
+    assert final["modbus_latency"] == (None if timeouts else RTT_NS / 1_000)
+
+
+@pytest.mark.parametrize(
+    "timeout_ms, skipped",
+    [
+        (0.02, 24),  # the timeout falls on the next poll instant, which is skipped
+        (0.019999, 0),  # 1 ns earlier, the next instant sends
+    ],
+)
+def test_a_timeout_fires_exactly_after_its_time(timeout_ms: float, skipped: int) -> None:
+    """Period 20 us, RTT 40 us: every request times out, and the timeout
+    instant decides whether the next poll instant is free."""
+    rate = 50_000
+    final = _final(_pair(rate, timeout_ms=timeout_ms))
+    n = _instants(rate, 1.0)
+    sent = n - skipped
+    assert final["modbus_skipped"] == skipped
+    # the last request is outstanding at the end; all others timed out
+    assert final["modbus_timeouts"] == sent - 1
+    assert final["modbus_unanswered"] == sent
+    assert final["modbus_latency"] is None  # late responses are not counted
+
+
+def _lossy(timeout_ms: float | None, every: float = 1.0) -> Network:
+    """Polls through a bounded port that a constant flow overloads: some
+    responses are lost, some are late."""
+    net = Network("lossy")
+    sw = net.switch("sw", ports=4, buffer=6 * 1_500 + 40)
+    m = net.adapter("m", ip="10.0.0.1")
+    s = net.modbus_slave("s", ip="10.0.0.2", unit_id=1)
+    cam = net.adapter("cam", ip="10.0.0.3")
+    net.link(m, sw, speed=100, length=20)
+    net.link(s, sw, speed=1_000, length=20)
+    net.link(cam, sw, speed=1_000, length=20)
+    cam.sends(m, rate=9_000, size=1_500)  # 110 % of the master's port
+    m.polls(s, register=0, count=20, rate=500, outstanding=1, timeout_ms=timeout_ms)
+    for metric in ("modbus_latency", *COUNTS):
+        net.observe(metric, on=m, every=every)  # type: ignore[arg-type]
+    return net
+
+
+class _Recorded(engine._AdapterCounters):
+    made: list[engine._AdapterCounters] = []
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.made.append(self)
+
+
+def _counters(sc: Scenario, monkeypatch: pytest.MonkeyPatch) -> engine._AdapterCounters:
+    """The master's counters at the end of a run."""
+    _Recorded.made = []
+    monkeypatch.setattr(engine, "_AdapterCounters", _Recorded)
+    backends.get("simpy").run(sc)
+    return next(c for c in _Recorded.made if c.transactions)
+
+
+@pytest.mark.parametrize("timeout_ms", [3.0, 1.0, 0.5])
+def test_the_counts_are_consistent(timeout_ms: float, monkeypatch: pytest.MonkeyPatch) -> None:
+    sc = _lossy(timeout_ms).to_scenario(duration=200)
+    c = _counters(sc, monkeypatch)
+    (t,) = c.transactions.values()
+    assert c.modbus_timeouts > 0
+    assert c.modbus_requests + c.modbus_skipped == _instants(500, 200)
+    assert c.modbus_requests - c.modbus_responses == c.modbus_timeouts + t.outstanding
+    samples = backends.get("simpy").run(sc).metrics
+    for (_, unanswered), (_, timeouts) in zip(
+        samples["modbus_unanswered:m"], samples["modbus_timeouts:m"], strict=True
+    ):
+        assert unanswered - timeouts in (0, 1)  # the one outstanding, if any
+
+
+def test_late_responses_are_discarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A timeout under the queueing delay: some responses arrive after it,
+    and are discarded, the latency of the others is under it."""
+    discarded: list[int] = []
+    accept = engine._Transaction.accept
+
+    def counting(self: engine._Transaction, frame: engine._Frame, now: int) -> bool:
+        ok = accept(self, frame, now)
+        if not ok:
+            discarded.append(now - self.sent_at)
+        return ok
+
+    monkeypatch.setattr(engine._Transaction, "accept", counting)
+    timeout_ms = 0.3
+    sc = _lossy(timeout_ms, every=0.1).to_scenario(duration=200)
+    result = backends.get("simpy").run(sc)
+    assert discarded and all(late >= tb.ms_to_ns(timeout_ms) for late in discarded)
+    rtts = [v for _, v in result.metrics["modbus_latency:m"]]
+    assert rtts and max(rtts) < timeout_ms * 1_000
+
+
+def test_without_a_timeout_a_lost_response_stops_the_pair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    c = _counters(_lossy(None).to_scenario(duration=200), monkeypatch)
+    (t,) = c.transactions.values()
+    assert t.outstanding
+    assert c.modbus_requests - c.modbus_responses == 1
+    assert c.modbus_timeouts == 0
+    assert c.modbus_skipped > c.modbus_requests  # every instant after the loss
+
+
+def test_simpy_runs_one_request_in_flight() -> None:
+    backends.check(_master().to_scenario(duration=10), "simpy")

@@ -128,19 +128,19 @@ On the wire it is preceded by a preamble and SFD and followed by an inter-frame 
 |---|---|
 | Adapter | counts it for its metrics (any frame kind); PROFINET frames also go to its PROFINET consumer |
 | MQTT broker | for a PUBLISH: one copy to every subscriber of its topic, in subscriber order, then a PUBACK to the publisher if `qos = 1`. A topic without a route is not forwarded. Other frames are ignored. |
-| Modbus slave | for a request with its `unit_id`: one response to the requester |
+| Modbus slave | for a request with its `unit_id`: one response to the requester, with the request's MBAP transaction id |
 | PROFINET device | passes cyclic frames of its ARs to its PROFINET consumer |
 
 An end station sends everything over its single link, in the egress queue order of [§3](#3-links-and-egress-queues). Its egress queue is unbounded.
 
 **When a frame is lost** at a bounded switch, nothing is retransmitted: the model has no transport layer ([ADR-0011](adr/0011-bounded-switch-buffers.md)).
-- **Modbus:** a lost request or response leaves its poll without a response. The master does not retry, and its next polls go out on schedule.
+- **Modbus:** a lost request or response leaves its poll without a response, and the master does not retry. An open-loop poll sends its next requests on schedule. A poll with `outstanding=1` waits for its timeout ([§6](#6-traffic-sources)), or forever without one.
 - **MQTT:** a lost PUBLISH is neither forwarded nor acknowledged. A lost copy is lost to its subscriber. A lost PUBACK changes nothing.
 - **PROFINET RT:** a lost cyclic frame leaves a gap, and the watchdog expires if it exceeds `hold × cycle` ([§7](#7-profinet-consumer)).
 
 The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost segments ([Execution backends](backends.md)).
 
-*Tests: `test_a_lost_poll_stays_unanswered`, `test_a_lost_profinet_frame_expires_the_watchdog` in `test_buffers.py`.*
+*Tests: `test_a_lost_poll_stays_unanswered`, `test_a_lost_profinet_frame_expires_the_watchdog` in `test_buffers.py`; `test_without_a_timeout_a_lost_response_stops_the_pair` in `test_outstanding.py`.*
 
 ## 6. Traffic sources
 
@@ -158,10 +158,19 @@ The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost se
 | `Flow`, `batch` | groups at Poisson instants with mean gap `T · E[X]`. Each group is X frames queued at the same instant, X drawn per group from the batch distribution. The long-run rate is `rate`. |
 | `Flow`, `bursty` | repeated ON/OFF cycles: L = max(1, ⌊Pareto(1.5)⌋) frames spaced `T/4` (the first one `T/4` after the cycle starts), then a silence of `T · L · U(0.3, 1.2)`. A cycle lasts `T · L` on average, so the long-run rate is `rate`. Frame *j* of a cycle is at `round(j · T/4)` after the cycle starts, and the silence is rounded to ns. |
 | `Publish` | one PUBLISH at `delay + T`, `delay + 2T`, … |
-| `Poll` | one request at `delay + T`, `delay + 2T`, … |
+| `Poll` | one request at `delay + T`, `delay + 2T`, …; with `outstanding=1`, only at the instants when the pair is free (below) |
 | `ProfinetAR` | the controller sends an output frame, and the device an input frame, at `delay`, `delay + cycle`, `delay + 2·cycle`, … Note that the first frame goes out at `delay`, not one cycle later. |
 
-*Tests: `test_constant_flow_first_frame_after_one_interval`, `test_profinet_first_frame_at_delay`, `test_bursty_long_run_rate`, `test_source_ids`, `test_stream_seed_is_a_sha256_prefix`, `test_adding_a_source_does_not_change_the_others`, `test_run_seed_selects_the_draws`.*
+**One request in flight** ([ADR-0012](adr/0012-modbus-one-request-in-flight.md)). A poll with `outstanding=1` keeps at most one request of its master–slave pair **outstanding**: sent, and neither answered nor timed out.
+- **Poll instants.** At each instant of its schedule, the request is sent if no request is outstanding and the previous one did not complete at that same instant. Otherwise the instant is **skipped** and counted. The schedule itself does not change, so it does not drift.
+- **Transaction ids.** The requests of a pair carry consecutive MBAP transaction ids from 0, and a response carries its request's id.
+- **A response is accepted** if it carries the outstanding id and arrives at `a < s + τ`, where `s` is when the request was sent and `τ` the timeout, rounded to ns. It completes the transaction at `a`.
+- **A timeout** fires at `s + τ` if the request is still outstanding: it counts as timed out and completes the transaction at `s + τ`.
+- **Any other response is late and discarded:** it has a stale id or arrived at or after `s + τ`. Like every frame, it counts as accepted by the NIC (`frames_received`, `bytes_received`, `throughput`, `latency`). It is not a response for `modbus_latency` or `modbus_unanswered`.
+- **Without `timeout`** an outstanding request is waited for forever.
+- **One poll per pair.** A pair with `outstanding=1` has one poll statement (validation).
+
+*Tests: `test_constant_flow_first_frame_after_one_interval`, `test_profinet_first_frame_at_delay`, `test_bursty_long_run_rate`, `test_source_ids`, `test_stream_seed_is_a_sha256_prefix`, `test_adding_a_source_does_not_change_the_others`, `test_run_seed_selects_the_draws`; one request in flight in `test_outstanding.py`: `test_an_instant_is_skipped_while_a_request_is_outstanding`, `test_a_timeout_fires_exactly_after_its_time`, `test_a_response_at_the_timeout_is_late`, `test_without_loss_and_under_the_period_nothing_changes`.*
 
 ## 7. PROFINET consumer
 
@@ -188,7 +197,7 @@ The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost se
 | `latency` | mean of (arrival − origin time) over frames the adapter accepted in the window, of any kind. *Window metric.* | µs |
 | `bytes_received` | total frame bytes the adapter accepted so far / 10⁶ | MB |
 | `bytes_sent` | total frame bytes whose transmission on the adapter's link has completed so far / 10⁶ | MB |
-| `modbus_latency` | mean of (arrival − origin time) over Modbus responses the adapter accepted in the window: the round-trip time from generating the request. *Window metric.* | µs |
+| `modbus_latency` | mean of (arrival − origin time) over Modbus responses the adapter accepted in the window: the round-trip time from sending the request. A late response is not counted ([§6](#6-traffic-sources)). *Window metric.* | µs |
 | `queue_depth` | frames waiting in all egress queues of the switch, not counting frames being transmitted | frames |
 | `utilization` | wire bits, frame + 20 B per frame, of the frames whose transmission completed on the links *into* the node in the window, as a share of those links' combined capacity over the window. A saturated link shows 100 %. | % |
 | `broker_queue` | frames delivered to the broker and not yet processed. The broker has no service time, so this is non-zero only for frames arriving at the sample instant itself. | frames |
@@ -199,7 +208,9 @@ The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost se
 | `drops_total` | frames the switch's egress buffers dropped so far | frames |
 | `frames_sent` | frames whose transmission on the adapter's link has completed so far | frames |
 | `frames_received` | frames the adapter accepted so far | frames |
-| `modbus_unanswered` | Modbus requests the adapter's polls have generated so far, less the responses it has accepted so far: lost polls plus polls in flight | polls |
+| `modbus_unanswered` | Modbus requests the adapter's polls have sent so far, less the responses it has accepted so far: lost polls plus polls in flight. With `outstanding=1`, requests that timed out plus those outstanding. | polls |
+| `modbus_timeouts` | requests of the adapter's polls that have timed out so far | polls |
+| `modbus_skipped` | poll instants the adapter's polls have skipped so far, because a request was outstanding | polls |
 
 A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)` pairs in time order.
 
@@ -212,20 +223,22 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
 - **`utilization`:** `wire_bits × 10⁵ / (Σ speed × W)` %, where `speed` is in Mb/s.
 
 **Frame bytes, not wire bytes.** The byte metrics count frames, header to FCS, without the preamble, SFD and gap, as switch and NIC counters do. So a saturated 100 Mb/s link carrying 64 B frames shows 76.2 Mb/s of `throughput` and 100 % `utilization`.
-- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`, `drops`, `drops_total`, `frames_sent`, `frames_received`, `modbus_unanswered`) as they are.
+- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`, `drops`, `drops_total`, `frames_sent`, `frames_received`, `modbus_unanswered`, `modbus_timeouts`, `modbus_skipped`) as they are.
+- **Polls with one request in flight.** For an adapter whose polls all have `outstanding=1`, `modbus_unanswered` is `modbus_timeouts` plus its pairs with a request outstanding, and its poll instants so far are its requests sent plus `modbus_skipped`.
 - **Loss of a flow** `a → b`, when `a` sends nothing else: `frames_sent:a − frames_received:b` is the frames dropped plus the frames in flight, which are at most the buffers on the path and a frame per link.
 
-*Tests: `test_metric_definitions`, `test_window_metrics_skip_empty_windows`, `test_modbus_latency_is_round_trip`, `test_mqtt_latency_is_end_to_end`, `test_watchdog_expiries_are_cumulative`; `test_loss_is_frames_sent_less_frames_received` in `test_buffers.py`.*
+*Tests: `test_metric_definitions`, `test_window_metrics_skip_empty_windows`, `test_modbus_latency_is_round_trip`, `test_mqtt_latency_is_end_to_end`, `test_watchdog_expiries_are_cumulative`; `test_loss_is_frames_sent_less_frames_received` in `test_buffers.py`; `test_the_counts_are_consistent` in `test_outstanding.py`.*
 
 ## 9. Simultaneous events
 
-**Events at the same simulated instant are processed in the order they were scheduled** (first in, first out). Two cases are observable:
+**Events at the same simulated instant are processed in the order they were scheduled** (first in, first out). These cases are observable:
 
 - **A frame arriving at exactly a sample instant** belongs to the window that ends there if its arrival was scheduled before the sample, and to the next window otherwise.
 - **Frames queued at the same instant on one egress queue** are served by priority, then in the order they were queued:
     - a batch group in draw order;
     - broker copies in subscriber order, then the PUBACK.
     - This holds on an idle port too: its transmitter takes a frame after the events already scheduled for the instant, so it takes the highest-priority frame queued by then.
+- **A poll with one request in flight** at the instant its previous request completes, by a response or a timeout, skips that instant, whichever event comes first. A response arriving at exactly its timeout is late, whichever comes first ([§6](#6-traffic-sources)). Neither rule depends on the order of events.
 - **Admissions to a bounded queue** at the same instant are decided in the order the frames are queued, each against the bytes queued at that moment ([§3](#3-links-and-egress-queues)). A frame the transmitter has taken no longer counts.
 
 **Start-up order** decides the scheduling order of the first events:

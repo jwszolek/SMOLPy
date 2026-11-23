@@ -31,6 +31,8 @@ _UNITS = {
     "frames_sent": "fr",
     "frames_received": "fr",
     "modbus_unanswered": "poll",  # 4 characters, as the report's columns allow
+    "modbus_timeouts": "poll",
+    "modbus_skipped": "poll",
 }
 
 

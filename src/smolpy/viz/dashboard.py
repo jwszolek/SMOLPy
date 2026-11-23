@@ -53,6 +53,8 @@ _UNITS = {
     "frames_sent": "frames",
     "frames_received": "frames",
     "modbus_unanswered": "polls",
+    "modbus_timeouts": "polls",
+    "modbus_skipped": "polls",
 }
 
 

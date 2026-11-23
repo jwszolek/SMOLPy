@@ -94,7 +94,7 @@ class SimPyBackend:
             traffic=_TRAFFIC_KINDS,
             patterns=_PATTERNS,
             metrics=frozenset(METRIC_TARGETS),
-            features=frozenset({"imix", "bounded_buffer"}),
+            features=frozenset({"imix", "bounded_buffer", "modbus_outstanding"}),
             dashboards=True,
         )
 

@@ -94,6 +94,9 @@ METRIC_TARGETS: dict[str, tuple[type, ...] | None] = {
     "frames_sent": (AdapterNode,),
     "frames_received": (AdapterNode,),
     "modbus_unanswered": (AdapterNode,),
+    # ADR-0012: one Modbus request in flight
+    "modbus_timeouts": (AdapterNode,),
+    "modbus_skipped": (AdapterNode,),
 }
 
 SWITCH_MODES = ("store-and-forward", "cut-through")
