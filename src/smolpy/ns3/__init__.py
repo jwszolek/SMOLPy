@@ -11,6 +11,10 @@ so runs do not touch the ns-3 tree and can run in parallel.
 metrics are computed from them here, with the reference engine's formulas,
 so each value is rounded once, as there (Model Semantics §8).
 
+ns-3's TCP is set to Linux's where that shapes how it recovers from a loss
+(ADR-0012): :class:`TcpSettings`, a property of the backend, not of the
+scenario.
+
 Locating ns-3: ``NS3_HOME`` names an ns-3 source tree built with its
 libraries in ``build/lib`` and headers in ``build/include``, as in the image
 ``ghcr.io/jwszolek/smolpy-ns3-base``. The C++ compiler is ``$CXX`` or ``g++``.
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import glob
 import hashlib
+import math
 import os
 import random
 import shutil
@@ -27,7 +32,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from fractions import Fraction
 from importlib import resources
 from pathlib import Path
@@ -47,7 +52,7 @@ from smolpy.model.streams import source_ids, stream_seed
 if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
 
-FORMAT_VERSION = 2  # 2: switch buffers (ADR-0011)
+FORMAT_VERSION = 3  # 2: switch buffers (ADR-0011); 3: one request in flight, TCP (ADR-0012)
 UDP_IP_BYTES = 8 + 20
 ETHERNET_BYTES = 14 + 4  # header and FCS
 PROGRAM = "smol-ns3"
@@ -57,6 +62,46 @@ MQTT_PORT = 1883
 
 class Ns3Unavailable(RuntimeError):
     """No usable ns-3 build or C++ compiler; the message says why."""
+
+
+@dataclass(frozen=True)
+class TcpSettings:
+    """ns-3's TCP where it differs from Linux's in how it recovers from a loss
+    (ADR-0012). The defaults are Linux's; ns-3's own are in brackets.
+
+    - *min_rto_ms*: the minimum retransmission timeout, ``TCP_RTO_MIN``
+      (ns-3: 1 s, RFC 6298).
+    - *clock_granularity_ms*: G in ns-3's ``RTO = SRTT + max(G, 4 RTTVAR)``.
+      At the minimum RTO, that is Linux's ``SRTT + RTTVAR`` with RTTVAR at
+      least ``rto_min`` (ns-3: 1 ms).
+    - *delayed_ack_ms*: how long a lone ACK waits, Linux's first value,
+      ``TCP_ATO_MIN`` (ns-3: 200 ms).
+    - *syn_rto_ms*: the first SYN's retransmission timeout,
+      ``TCP_TIMEOUT_INIT`` (ns-3: 3 s).
+
+    They describe the hosts' operating system, not the network, and SimPy and
+    Rust have no TCP, so they are not part of the scenario:
+    ``Ns3Backend(tcp=TcpSettings(min_rto_ms=1000))`` runs with others.
+    """
+
+    min_rto_ms: float = 200.0
+    clock_granularity_ms: float = 200.0
+    delayed_ack_ms: float = 40.0
+    syn_rto_ms: float = 1000.0
+
+    def __post_init__(self) -> None:
+        for f in fields(self):
+            value = getattr(self, f.name)
+            ok = isinstance(value, int | float) and not isinstance(value, bool)
+            if not ok or not math.isfinite(value) or not 1 <= tb.ms_to_ns(value) <= tb.MAX_NS:
+                raise ValueError(
+                    f"TcpSettings.{f.name} must be from 1 ns to 2^63 - 1 ns, in ms, got {value!r}"
+                )
+
+    def line(self) -> str:
+        """The ``tcp`` line of the smol-ns3 format."""
+        values = (self.min_rto_ms, self.clock_granularity_ms, self.delayed_ack_ms, self.syn_rto_ms)
+        return "tcp " + " ".join(str(tb.ms_to_ns(v)) for v in values)
 
 
 @dataclass(frozen=True)
@@ -214,14 +259,18 @@ def _sends(
             now += tb.draw_ns(mean_ns * burst_len * rng.uniform(0.3, 1.2))
 
 
-def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
+def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str, list[_Sampler]]:
     """The input of ``smol-ns3``, and the samplers its output feeds."""
     from smolpy.sim.engine import _topology_mac_table
 
     assert scenario.run is not None
     nodes = {n.name: n for n in scenario.nodes}
     index = {n.name: i for i, n in enumerate(scenario.nodes)}
-    lines = [f"smol-ns3 {FORMAT_VERSION}", f"duration {tb.ms_to_ns(scenario.run.duration_ms)}"]
+    lines = [
+        f"smol-ns3 {FORMAT_VERSION}",
+        f"duration {tb.ms_to_ns(scenario.run.duration_ms)}",
+        (tcp or TcpSettings()).line(),
+    ]
     for n in scenario.nodes:
         if isinstance(n, model.SwitchNode):
             lines.append(f"switch {n.buffer_bytes or 0}")  # 0: unbounded
@@ -294,9 +343,10 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
             if t.source in has_link:
                 c = connection(t.source, t.slave, MODBUS_PORT)
                 response = modbus_response_message_bytes(t.count)
+                timeout = 0 if t.timeout_ms is None else tb.ms_to_ns(t.timeout_ms)  # 0: none
                 lines.append(
                     f"poll {c} {MODBUS_REQUEST_MESSAGE_BYTES} {response}"
-                    f" {periodic(t.rate, t.delay_ms)}"
+                    f" {periodic(t.rate, t.delay_ms)} {t.outstanding or 0} {timeout}"
                 )
             continue
         if isinstance(t, model.Publish):
@@ -351,7 +401,14 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
             ok = isinstance(target, model.MqttBrokerNode)
         elif metric in ("pn_latency", "pn_jitter", "pn_watchdog_expiries"):
             ok = isinstance(target, model.AdapterNode | model.ProfinetDeviceNode)
-        elif metric in ("bytes_sent", "frames_sent", "frames_received", "modbus_unanswered"):
+        elif metric in (
+            "bytes_sent",
+            "frames_sent",
+            "frames_received",
+            "modbus_unanswered",
+            "modbus_timeouts",
+            "modbus_skipped",
+        ):
             ok = adapter and target.name in has_link
         elif metric == "queue_depth":
             ok = isinstance(target, model.SwitchNode)
@@ -414,6 +471,8 @@ def _metrics(
                 "drops_total",
                 "frames_sent",
                 "frames_received",
+                "modbus_timeouts",
+                "modbus_skipped",
             ):
                 out.append((t_ms, float(a)))
             elif s.metric == "drops":
@@ -429,12 +488,13 @@ def _metrics(
     return metrics, events
 
 
-def run(scenario: model.Scenario) -> SimulationResult:
+def run(scenario: model.Scenario, tcp: TcpSettings | None = None) -> SimulationResult:
+    """Run *scenario* on ns-3, with *tcp* or Linux's TCP settings."""
     from smolpy.core.network import RunStats, SimulationResult
 
     ns3 = locate()
     binary = program(ns3)
-    text, samplers = lower(scenario)
+    text, samplers = lower(scenario, tcp)
     started = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="smolpy-ns3-") as tmp:
         scenario_path, samples_path = Path(tmp) / "scenario.txt", Path(tmp) / "samples.txt"

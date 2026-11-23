@@ -132,3 +132,43 @@ def test_loss_run_and_summary(tmp_path) -> None:
     table = loss.summarize_loss(out)
     assert table.count("| simpy |") == 4  # two buffers, two loads
     assert "Buffer 115000 B" in table and "Buffer 113900 B" in table
+
+
+# --- the testbed of ADR-0012 (benchmarks.closed_loop) ---
+
+
+def test_closed_loop_scenario_is_t1_with_one_request_in_flight() -> None:
+    from benchmarks import closed_loop, loss
+    from smolpy.model import Poll, SwitchNode
+
+    sc = loss.scenario(0.99, 100, closed_loop.BUFFER, outstanding=1, timeout_ms=1_000)
+    (poll,) = [t for t in sc.traffic if isinstance(t, Poll)]
+    assert (poll.outstanding, poll.timeout_ms, poll.rate) == (1, 1_000, 100)
+    (sw,) = [n for n in sc.nodes if isinstance(n, SwitchNode)]
+    assert sw.buffer_bytes == 91_080  # 60 frames of 1 518 B
+    open_loop = loss.scenario(0.99, 100)
+    assert {o.metric for o in sc.observations} - {o.metric for o in open_loop.observations} == {
+        "modbus_timeouts",
+        "modbus_skipped",
+    }
+
+
+def test_closed_loop_run_and_summary(tmp_path) -> None:
+    from benchmarks import closed_loop
+
+    out = closed_loop.run_closed_loop(
+        [1.05], duration_ms=2_000, engines=["simpy"], out=tmp_path / "t.json", seeds=(1, 2)
+    )
+    doc = json.loads(out.read_text())
+    assert doc["format"] == "smolpy-closed-loop" and len(doc["runs"]) == 2 * 2
+    for r in doc["runs"]:
+        s = r["summary"]
+        assert s["sent"] + s["skipped"] == 199  # every poll instant: 10, 20, ... 1 990 ms
+        assert s["long_rtts_ms"] == []  # no TCP: a lost response is never late
+        if r["timeout_ms"] is None:
+            assert s["unanswered"] == 1 and s["timeouts"] == 0  # the first loss stops it
+        else:
+            assert s["unanswered"] - s["timeouts"] in (0, 1)
+    table = closed_loop.summarize_closed_loop(out)
+    assert "Timeout: none." in table and "Timeout: 1000 ms." in table
+    assert table.count("| simpy |") == 2

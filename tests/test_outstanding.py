@@ -9,13 +9,15 @@
   late responses are discarded; the counts are consistent.
 - Step 3: the Rust engine. The same tests where they need no SimPy internals,
   and SimPy's results bit for bit with loss.
+- Step 4: ns-3. Format 3 and the TCP settings; the same rules over real TCP,
+  which retransmits a lost response after Linux's RTO, as on the testbed.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from smolpy import Network, backends
+from smolpy import Network, backends, ns3
 from smolpy.lang import SMOLSemanticError
 from smolpy.lang.interpreter import interpret_to_scenario
 from smolpy.model import Poll, Scenario
@@ -495,3 +497,120 @@ def test_a_timeout_past_the_end_is_never_processed() -> None:
     simpy_run, rust_run = backends.get("simpy").run(sc), rust.run(sc)
     assert rust_run.metrics == simpy_run.metrics
     assert rust_run.stats.events == simpy_run.stats.events
+
+
+# --- step 4: ns-3 ---
+
+
+def _poll_line(sc: Scenario) -> str:
+    text, _ = ns3.lower(sc)
+    (line,) = (line for line in text.splitlines() if line.startswith("poll"))
+    return line
+
+
+def test_ns3_lowers_one_request_in_flight() -> None:
+    """Format 3: outstanding 0 or 1, and the timeout in ns, 0 for none."""
+    assert _poll_line(_master(1, 50.0).to_scenario(duration=10)).endswith(" 1 50000000")
+    assert _poll_line(_master(1, None).to_scenario(duration=10)).endswith(" 1 0")
+    assert _poll_line(_master(None, None).to_scenario(duration=10)).endswith(" 0 0")
+
+
+def test_ns3_tcp_settings() -> None:
+    sc = _master().to_scenario(duration=10)
+    assert ns3.lower(sc)[0].splitlines()[2] == "tcp 200000000 200000000 40000000 1000000000"
+    ns3_defaults = ns3.TcpSettings(
+        min_rto_ms=1000, clock_granularity_ms=1, delayed_ack_ms=200, syn_rto_ms=3000
+    )
+    assert ns3.lower(sc, ns3_defaults)[0].splitlines()[2] == (
+        "tcp 1000000000 1000000 200000000 3000000000"
+    )
+    assert backends.Ns3Backend(tcp=ns3_defaults).tcp == ns3_defaults
+    assert backends.REGISTRY["ns3"].tcp is None  # Linux's
+
+
+@pytest.mark.parametrize("value", [0, -1.0, 1e-7, float("inf"), float("nan"), True, "200"])
+def test_ns3_tcp_settings_are_positive_times(value) -> None:
+    with pytest.raises(ValueError, match="TcpSettings.min_rto_ms must be from 1 ns"):
+        ns3.TcpSettings(min_rto_ms=value)
+
+
+needs_ns3 = pytest.mark.skipif(
+    not backends.REGISTRY["ns3"].available(), reason="NS3_HOME names no ns-3 build"
+)
+
+
+@needs_ns3
+def test_ns3_without_loss_and_under_the_period_nothing_changes() -> None:
+    open_loop = backends.run(_shared_port(None, None), "ns3")
+    assert backends.run(_shared_port(1, 5.0), "ns3").metrics == open_loop.metrics
+
+
+@needs_ns3
+@pytest.mark.parametrize(
+    "rate, timeout_ms",
+    [
+        (25_000, None),  # each response arrives 2 ns after the next instant
+        (10_000, 0.04),  # each response arrives 2 ns after its timeout
+        (50_000, 0.02),  # each timeout falls on the next instant
+    ],
+)
+def test_ns3_follows_the_rules_at_exact_round_trips(rate: float, timeout_ms: float | None) -> None:
+    """TCP adds 1 ns per send to SimPy's 40 us round trip: no response moves
+    across a poll instant or a timeout, so the counts are SimPy's."""
+    sc = _pair(rate, timeout_ms=timeout_ms)
+    simpy_final, ns3_final = _final(sc), _final(sc, "ns3")
+    for metric in ("modbus_skipped", "modbus_timeouts", "modbus_unanswered"):
+        assert ns3_final[metric] == simpy_final[metric], metric
+
+
+@needs_ns3
+@pytest.mark.parametrize("timeout_ms", [None, 3.0, 0.5])
+def test_ns3_keeps_one_request_in_flight_with_loss(timeout_ms: float | None) -> None:
+    """At every sample, at most one request awaits a response; without a
+    timeout, TCP brings every lost response back."""
+    m = backends.run(_lossy(timeout_ms, every=0.5).to_scenario(duration=100), "ns3").metrics
+    timeouts = [v for _, v in m["modbus_timeouts:m"]]
+    awaiting = [u - t for (_, u), t in zip(m["modbus_unanswered:m"], timeouts, strict=True)]
+    assert set(awaiting) <= {0, 1}
+    assert timeouts[-1] == 0 if timeout_ms is None else timeouts[-1] > 0
+    # instants are skipped while a response is late, unless the timeout is
+    # under the period of 2 ms
+    assert (m["modbus_skipped:m"][-1][1] > 0) == (timeout_ms is None or timeout_ms > 2)
+
+
+def _testbed(timeout_ms: float | None = None, outstanding: int | None = 1) -> Scenario:
+    from benchmarks import closed_loop, loss
+
+    return loss.scenario(
+        0.99, 30_000, closed_loop.BUFFER, 1, outstanding=outstanding, timeout_ms=timeout_ms
+    )
+
+
+def _long_rtts(result, above_ms: float = 100.0) -> list[float]:
+    rtts = (v / 1_000 for _, v in result.metrics["modbus_latency:laptop"])
+    return [r for r in rtts if r > above_ms]
+
+
+@needs_ns3
+def test_ns3_a_lost_response_comes_back_after_linux_rto() -> None:
+    """The testbed of ADR-0012: with one request in flight no duplicate ACKs
+    follow a lost response, which TCP retransmits after the RTO, at least
+    200 ms after its first transmission; the hardware measured about 215 ms.
+    ns-3's own settings give 1 s, and an open-loop poll a fast retransmit."""
+    result = backends.run(_testbed(), "ns3")
+    long = _long_rtts(result)
+    assert long and all(200 < r < 230 for r in long)
+    assert result.metrics["modbus_unanswered:laptop"][-1][1] == 0
+    ns3_own = ns3.TcpSettings(
+        min_rto_ms=1000, clock_granularity_ms=1, delayed_ack_ms=200, syn_rto_ms=3000
+    )
+    own = backends.Ns3Backend(tcp=ns3_own).run(_testbed())
+    assert _long_rtts(own) and all(1_000 < r < 1_030 for r in _long_rtts(own))
+    assert not _long_rtts(backends.run(_testbed(outstanding=None), "ns3"), above_ms=50)
+
+
+@needs_ns3
+def test_ns3_a_timeout_under_the_rto_fires() -> None:
+    result = backends.run(_testbed(timeout_ms=100), "ns3")
+    assert result.metrics["modbus_timeouts:laptop"][-1][1] > 0
+    assert not _long_rtts(result, above_ms=100)  # late responses are discarded

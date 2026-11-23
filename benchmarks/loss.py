@@ -65,8 +65,11 @@ def scenario(
     duration_ms: float = DURATION_MS,
     buffer: int | None = BUFFER,
     seed: int = SEEDS[0],
+    outstanding: int | None = None,
+    timeout_ms: float | None = None,
 ) -> Scenario:
-    """T1 with the UDP stream at *rho* of the laptop's port."""
+    """T1 with the UDP stream at *rho* of the laptop's port; its polls open
+    loop, or with one request in flight (ADR-0012, ``benchmarks.closed_loop``)."""
     net = Network("T1")
     sw = net.switch("sw", ports=3, buffer=buffer)
     pi = net.adapter("pi", ip="10.0.0.1")
@@ -77,10 +80,20 @@ def scenario(
     net.link(laptop, sw, speed=LAPTOP_MBPS, length=2)
     rate = rho * LAPTOP_MBPS * 1e6 / ((FRAME + WIRE_OVERHEAD_BYTES) * 8)
     pi.sends(laptop, rate=rate, size=FRAME, pattern="poisson")
-    laptop.polls(server, register=0, count=REGISTERS, rate=POLL_RATE)
+    laptop.polls(
+        server,
+        register=0,
+        count=REGISTERS,
+        rate=POLL_RATE,
+        outstanding=outstanding,
+        timeout_ms=timeout_ms,
+    )
     net.observe("modbus_latency", on=laptop, every=1)
     end = duration_ms - 1  # the last sample, at the end of the run
     net.observe("modbus_unanswered", on=laptop, every=end)
+    if outstanding is not None:
+        net.observe("modbus_timeouts", on=laptop, every=end)
+        net.observe("modbus_skipped", on=laptop, every=end)
     net.observe("frames_sent", on=pi, every=end)
     net.observe("drops_total", on=sw, every=end)
     return net.to_scenario(duration=duration_ms, seed=seed)

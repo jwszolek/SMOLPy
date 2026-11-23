@@ -79,8 +79,9 @@ def _network() -> Network:
 def test_lowering() -> None:
     text, samplers = ns3.lower(_network().to_scenario(duration=10))
     assert text.splitlines() == [
-        "smol-ns3 2",
+        "smol-ns3 3",
         "duration 10000000",
+        "tcp 200000000 200000000 40000000 1000000000",  # Linux's TCP (ADR-0012)
         "switch 0",  # unbounded
         "adapter 02:00:0a:00:00:01 10.0.0.1",
         "adapter 02:00:0a:00:00:02 10.0.0.2",
@@ -133,7 +134,7 @@ def test_random_flows_list_their_frames() -> None:
     a.sends(b, rate=500, size="imix", delay_ms=1)
     text, _ = ns3.lower(net.to_scenario(duration=100))
     lines = text.splitlines()
-    assert lines[5] == "link 1 0 100 1 5 960 1 0"  # the switch's end is FIFO
+    assert lines[6] == "link 1 0 100 1 5 960 1 0"  # the switch's end is FIFO
     batch, imix = (line.split() for line in lines if line.startswith("sends"))
     assert batch[:4] == ["sends", "1", "10.0.0.2", "4"]
     sends = list(zip(batch[5::2], batch[6::2], strict=True))
@@ -167,7 +168,7 @@ def test_lowering_modbus_and_mqtt() -> None:
     net.observe("broker_queue", on=broker, every=1)
     text, samplers = ns3.lower(net.to_scenario(duration=10))
     lines = text.splitlines()
-    assert lines[3:6] == [  # every node with an IP address is a host
+    assert lines[4:7] == [  # every node with an IP address is a host
         "adapter 02:00:0a:00:00:01 10.0.0.1",
         "adapter 02:00:0a:00:00:02 10.0.0.2",
         "adapter 02:00:0a:00:00:03 10.0.0.3",
@@ -177,8 +178,8 @@ def test_lowering_modbus_and_mqtt() -> None:
         "connect 1 3 1883",  # scada, the MQTT client
         "publish 0 82 1 0 0 10000000 3",  # 2 + 2 + 12 characters + 2 + 64 B
         "connect 1 2 502",
-        "poll 1 11 128 0 2500000 1",  # MBAP, FC and count, and 60 registers
-        "poll 1 11 10 500000 5000000 1",  # the same connection
+        "poll 1 11 128 0 2500000 1 0 0",  # MBAP, FC and count, and 60 registers; open loop
+        "poll 1 11 10 500000 5000000 1 0 0",  # the same connection
         "connect 4 3 1883",  # hmi, a subscriber
         "route 3 0 2 0",  # hmi's and scada's connections; lonely has none
         "publish 2 25 0 1 0 10000000 1",
@@ -199,10 +200,8 @@ def test_it_runs_the_whole_model(fake_ns3) -> None:
     headless only."""
     ns3_caps = backends.REGISTRY["ns3"].capabilities()
     simpy_caps = backends.REGISTRY["simpy"].capabilities()
-    # ADR-0012 step 4 brings one request in flight and its metrics to ns-3
-    later = {"modbus_outstanding", "modbus_timeouts", "modbus_skipped"}
     for field in ("nodes", "traffic", "patterns", "metrics", "features"):
-        assert getattr(ns3_caps, field) == getattr(simpy_caps, field) - later, field
+        assert getattr(ns3_caps, field) == getattr(simpy_caps, field), field
     assert ns3_caps.priorities and not ns3_caps.dashboards and not ns3_caps.notes
 
 
