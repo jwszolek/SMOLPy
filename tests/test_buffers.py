@@ -6,6 +6,7 @@
 - Step 2: the reference engine. The admission rule, what a buffer that is
   never full changes (nothing), the bound on delay, the loss metrics, the
   protocols on loss, and an M/D/1/K queue against its analytical solution.
+- Step 3: the Rust engine, bit for bit with SimPy down to the event count.
 """
 
 from __future__ import annotations
@@ -187,12 +188,6 @@ def test_no_engine_runs_a_bounded_switch_as_unbounded_when_called_directly() -> 
     sc = _cell().to_scenario(duration=10)
     with pytest.raises(ValueError, match="does not support bounded switch buffers"):
         ns3.lower(sc)
-    try:
-        import smolpy_engine_rs
-    except ImportError:
-        return
-    with pytest.raises(ValueError, match="does not support bounded switch buffers"):
-        smolpy_engine_rs.run(sc.to_json())
 
 
 @pytest.mark.parametrize("name", ["simpy", "rust", "ns3"])
@@ -397,6 +392,7 @@ def _polled(buffer: int | None) -> Network:
     laptop.polls(server, register=0, count=10, rate=100)
     net.observe("modbus_unanswered", on=laptop, every=100)
     net.observe("modbus_latency", on=laptop, every=100)
+    net.observe("drops_total", on=sw, every=100)
     return net
 
 
@@ -545,3 +541,73 @@ def test_one_port_is_an_md1k_queue(rho: float, k: int) -> None:
 
 def runs_of(runs: list[tuple[float, float]], i: int) -> list[float]:
     return [r[i] for r in runs]
+
+
+# --- step 3: Rust, bit for bit ---
+
+
+def _deterministic_losses() -> dict[str, Scenario]:
+    from tests.equivalence.scenarios import lossy_protocols, tail_drop
+
+    def bottleneck() -> Scenario:
+        """Four constant sources reach one full port at the same instants;
+        flooded copies; a priority flow; three bounded switches."""
+        net = Network("ties")
+        core = net.switch("core", ports=6, buffer=3 * SIZE + 64)
+        edge = net.switch("edge", ports=3, buffer=2 * SIZE, qos="fifo")
+        far = net.switch("far", ports=2, buffer=1_522)
+        sink = net.adapter("sink", ip="10.0.0.1")
+        hosts = [net.adapter(f"h{i}", ip=f"10.0.0.{i + 2}") for i in range(4)]
+        for h in hosts:
+            net.link(h, core, speed=1_000, length=5)
+        net.link(sink, core, speed=100, length=5)
+        net.link(core, edge, speed=100, length=5)
+        lone = net.adapter("lone", ip="10.0.0.9")
+        net.link(edge, far, speed=10, length=5)
+        net.link(lone, far, speed=10, length=5)
+        for i, h in enumerate(hosts):
+            h.sends(sink, rate=2_500, size=SIZE)  # all four: the same instants
+            h.sends(lone, rate=300, size=64 + 100 * i, priority=i)
+        net.observe("drops", on=core, every=1)
+        for sw in (core, edge, far):
+            net.observe("drops_total", on=sw, every=1)
+            net.observe("queue_depth", on=sw, every=0.5)
+        net.observe("frames_received", on=sink, every=1)
+        net.observe("frames_received", on=lone, every=1)
+        net.observe("latency", on=lone, every=1)
+        return net.to_scenario(duration=30)
+
+    return {
+        "ties": bottleneck(),
+        "tail-drop": tail_drop(),
+        "lossy-protocols": lossy_protocols(),
+        "testbed": _polled_constant(),
+    }
+
+
+def _polled_constant() -> Scenario:
+    """The testbed with a constant UDP stream instead of Poisson: Rust draws
+    random numbers from its own generator, so only deterministic traffic can
+    be compared bit for bit."""
+    import dataclasses
+
+    from smolpy.model import Flow
+
+    sc = _polled(75 * SIZE + 50).to_scenario(duration=1_500)
+    traffic = tuple(
+        dataclasses.replace(t, pattern="constant") if isinstance(t, Flow) else t for t in sc.traffic
+    )
+    return dataclasses.replace(sc, traffic=traffic)
+
+
+@pytest.mark.parametrize("name", ["ties", "tail-drop", "lossy-protocols", "testbed"])
+def test_rust_drops_what_simpy_drops(name: str) -> None:
+    _backend("rust")
+    sc = _deterministic_losses()[name]
+    simpy = backends.run(sc, "simpy")
+    rust = backends.run(sc, "rust")
+    assert any(v for k, s in simpy.metrics.items() if k.startswith("drops_total") for _, v in s), (
+        "the scenario drops frames"
+    )
+    assert rust.metrics == simpy.metrics
+    assert rust.stats.events == simpy.stats.events
