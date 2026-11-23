@@ -52,7 +52,8 @@ class Capabilities:
     traffic: frozenset[str]
     patterns: frozenset[str]  # of flows
     metrics: frozenset[str]
-    features: frozenset[str] = frozenset()  # "imix": IMIX frame sizes
+    # "imix": IMIX frame sizes; "bounded_buffer": switch buffers (ADR-0011)
+    features: frozenset[str] = frozenset()
     priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
     dashboards: bool = False  # the live and text modes of simulate()
@@ -278,6 +279,9 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
     for i, node in enumerate(scenario.nodes):
         if node.kind not in caps.nodes:
             raise unsupported(node, label(node.kind), ("nodes", i))
+        bounded = getattr(node, "buffer_bytes", None) is not None
+        if bounded and "bounded_buffer" not in caps.features:
+            raise unsupported(node, "bounded switch buffers", ("nodes", i))
     for i, link in enumerate(scenario.links):
         if not link.duplex and not caps.half_duplex:
             raise unsupported(link, "half-duplex links", ("links", i))

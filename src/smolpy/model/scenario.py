@@ -26,6 +26,11 @@ from smolpy.core.batch import BatchSpec
 FORMAT = "smol-ir"
 VERSION = 2  # 2: Ethernet frames on the wire (ADR-0010)
 
+# Optional fields that are left out of the JSON while they hold their default,
+# so that documents not using them read as before, in older readers too
+# (ADR-0011: switch buffers).
+_OMITTED_WHEN_UNSET = {"buffer_bytes"}
+
 SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
 MacTableMode = Literal["learning", "topology"]
@@ -48,7 +53,11 @@ class AdapterNode:
 
 @dataclass(frozen=True)
 class SwitchNode:
-    """Layer-2 switch: per-port egress queues and a MAC table."""
+    """Layer-2 switch: per-port egress queues and a MAC table.
+
+    *buffer_bytes* bounds each egress queue: the frame bytes waiting on a
+    port, the frame in transmission not counted. A frame that would exceed it
+    is dropped (ADR-0011). ``None`` is unbounded."""
 
     kind: ClassVar[str] = "switch"
     name: str
@@ -56,6 +65,7 @@ class SwitchNode:
     mode: SwitchMode = "store-and-forward"
     qos: SwitchQoS = "strict"
     mac_table: MacTableMode = "learning"
+    buffer_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -422,6 +432,8 @@ def _encode(obj: Any) -> dict[str, Any]:
         out["kind"] = kind
     for f in dataclasses.fields(obj):
         value = getattr(obj, f.name)
+        if f.name in _OMITTED_WHEN_UNSET and value is None:
+            continue
         if isinstance(value, BatchSpec):
             value = {"kind": value.kind, "param": value.param}
         elif isinstance(value, tuple):

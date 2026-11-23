@@ -224,6 +224,10 @@ def lower(scenario: model.Scenario) -> tuple[str, list[_Sampler]]:
     lines = [f"smol-ns3 {FORMAT_VERSION}", f"duration {tb.ms_to_ns(scenario.run.duration_ms)}"]
     for n in scenario.nodes:
         if isinstance(n, model.SwitchNode):
+            if n.buffer_bytes is not None:  # never run as unbounded (ADR-0011)
+                raise ValueError(
+                    f"switch {n.name!r}: the ns3 backend does not support bounded switch buffers"
+                )
             lines.append("switch")
         else:
             lines.append(f"adapter {n.mac} {n.ip}")  # a station, with IPv4

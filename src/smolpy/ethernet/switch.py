@@ -22,6 +22,10 @@ class Switch(Node):
     meanwhile. mac_table="topology" starts with the port towards every end
     station already known (shortest path), i.e. the converged state, and
     keeps learning on top of it.
+
+    buffer bounds every egress queue, in bytes: a frame that would take the
+    bytes waiting on its port beyond it is dropped (ADR-0011). None, the
+    default, is unbounded.
     """
 
     def __init__(
@@ -31,13 +35,17 @@ class Switch(Node):
         mode: SwitchMode = "store-and-forward",
         qos: SwitchQoS = "strict",
         mac_table: MacTableMode = "learning",
+        buffer: int | None = None,
     ) -> None:
         super().__init__(name)
         self.ports = ports
         self.mode = mode
         self.qos = qos
         self.mac_table_mode = mac_table
+        self.buffer = buffer
         check_node(self.to_spec())
 
     def to_spec(self) -> SwitchNode:
-        return SwitchNode(self.name, self.ports, self.mode, self.qos, self.mac_table_mode)
+        return SwitchNode(
+            self.name, self.ports, self.mode, self.qos, self.mac_table_mode, self.buffer
+        )

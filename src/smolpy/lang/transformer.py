@@ -43,6 +43,25 @@ def _coerce(raw: str) -> int | float | str:
     return raw
 
 
+_BYTE_SUFFIXES = {"kB": 10**3, "MB": 10**6, "KiB": 2**10, "MiB": 2**20}
+
+
+def _bytes(raw: Any) -> Any:
+    """A byte count with an optional suffix (``115kB``, ``112KiB``), as an int
+    when it is a whole number of bytes. Anything else is returned as it is,
+    for validation to reject with the scenario's own message."""
+    if isinstance(raw, str):
+        for suffix, factor in _BYTE_SUFFIXES.items():
+            if raw.endswith(suffix):
+                number = _coerce(raw[: -len(suffix)])
+                if isinstance(number, (int, float)) and not isinstance(number, bool):
+                    value = number * factor
+                    return int(value) if value == int(value) else value
+    if isinstance(raw, float) and raw == int(raw):
+        return int(raw)
+    return raw
+
+
 def _require(kwargs: dict[str, Any], key: str, *, file: str, line: int, stmt: str) -> Any:
     if key not in kwargs:
         raise SMOLSyntaxError(file, line, f"'{stmt}' is missing required argument '{key}'")
@@ -98,6 +117,7 @@ class _SmolTransformer(Transformer):
             line=meta.line,
             qos=str(kw.get("qos", "strict")),
             mac_table=str(kw.get("mac_table", "learning")),
+            buffer=_bytes(kw["buffer"]) if "buffer" in kw else None,
         )
 
     def mqtt_broker_decl(self, meta: Any, children: list) -> MqttBrokerDecl:

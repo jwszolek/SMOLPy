@@ -20,7 +20,17 @@ from collections.abc import Mapping
 from typing import Literal
 
 from smolpy.model import timebase
-from smolpy.model.frames import MIN_FRAME_BYTES, PN_CYCLES_MS, PN_MAX_IO_BYTES
+from smolpy.model.frames import (
+    IMIX_SIZES,
+    MAX_STANDARD_FRAME_BYTES,
+    MIN_FRAME_BYTES,
+    PN_CYCLES_MS,
+    PN_MAX_IO_BYTES,
+    flow_frame_size,
+    modbus_response_frame_size,
+    mqtt_publish_frame_size,
+    pn_frame_size,
+)
 from smolpy.model.scenario import (
     AdapterNode,
     Flow,
@@ -168,6 +178,13 @@ def check_node(node: NodeSpec) -> None:
         _one_of(node, "mode", node.mode, SWITCH_MODES)
         _one_of(node, "qos", node.qos, SWITCH_QOS)
         _one_of(node, "mac_table", node.mac_table, MAC_TABLES)
+        b = node.buffer_bytes
+        if b is not None and (not _integer(b) or b < MAX_STANDARD_FRAME_BYTES):
+            raise _fail(
+                node,
+                f"buffer must be a whole number of bytes, at least one maximum frame"
+                f" ({MAX_STANDARD_FRAME_BYTES} B), got {b!r}",
+            )
     if isinstance(node, ModbusSlaveNode):
         _in_range(node, "unit_id", node.unit_id, 0, 255)
 
@@ -227,6 +244,20 @@ def check_traffic(t: TrafficSpec, nodes: Mapping[str, NodeSpec] | None = None) -
         _in_range(t, "outputs", t.outputs, 1, PN_MAX_IO_BYTES)
         _in_range(t, "hold", t.hold, 1, 255)
     _non_negative(t, "delay", getattr(t, "delay_ms", 0.0))
+
+
+def _largest_frame(t: TrafficSpec) -> int:
+    """The largest frame *t* sends, in bytes (Model Semantics §2)."""
+    if isinstance(t, Flow):
+        size = max(s for s, _ in IMIX_SIZES) if t.size == "imix" else t.size
+        return flow_frame_size(size, t.priority)
+    if isinstance(t, Publish):
+        return mqtt_publish_frame_size(t.topic, t.payload, t.qos)
+    if isinstance(t, Poll):
+        return modbus_response_frame_size(t.count)
+    if isinstance(t, ProfinetAR):
+        return pn_frame_size(max(t.inputs, t.outputs))
+    return 0  # a route forwards PUBLISH frames, sized by their publish
 
 
 def _check_batch(t: Flow) -> None:
@@ -323,6 +354,16 @@ def validate(scenario: Scenario) -> None:
                 if (t.broker, t.topic) in routes:
                     raise _fail(t, "topic is routed twice")
                 routes.add((t.broker, t.topic))
+
+    largest = max((_largest_frame(t) for t in scenario.traffic), default=0)
+    for i, node in enumerate(scenario.nodes):
+        if isinstance(node, SwitchNode) and node.buffer_bytes is not None:
+            if node.buffer_bytes < largest:
+                raise ScenarioError(
+                    f"{describe(node)}: buffer {node.buffer_bytes} B is smaller than the"
+                    f" largest frame of the scenario, {largest} B, which it would always drop",
+                    ("nodes", i),
+                )
 
     observed: set[tuple[str, str]] = set()
     for i, o in enumerate(scenario.observations):
