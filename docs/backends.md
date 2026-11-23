@@ -28,6 +28,7 @@ All three run the whole model: every node and traffic kind, every traffic patter
 | Ethernet and PROFINET RT | reference | bit-exact | bit-exact |
 | Modbus TCP and MQTT | sized as TCP, without TCP's behaviour | bit-exact | over ns-3's TCP |
 | Bounded switch buffers ([ADR-0011](adr/0011-bounded-switch-buffers.md)) | reference: a lost message is lost | bit-exact | Ethernet and PROFINET bit-exact; TCP retransmits a lost segment |
+| Polls with one request in flight ([ADR-0012](adr/0012-modbus-one-request-in-flight.md)) | reference: a lost poll times out | bit-exact | over TCP, with Linux's RTO: a lost poll is answered late |
 
 A scenario outside a backend's capabilities is rejected before it runs, with the reason.
 
@@ -60,7 +61,28 @@ The cross-backend suite ([ADR-0009](adr/0009-batch-execution-and-cross-backend-v
 
 ### Modbus and MQTT over TCP
 
-Each Modbus master and slave, and each MQTT client and broker, share one persistent TCP connection, opened at the start. ns-3's TCP defaults apply: CUBIC, delayed acknowledgements, no Nagle. Timestamps are off, so that segments have the 20 B header SMOL sizes them with.
+Each Modbus master and slave, and each MQTT client and broker, share one persistent TCP connection, opened at the start. ns-3's TCP defaults apply, CUBIC, delayed acknowledgements and no Nagle, except where Linux's differ in how TCP recovers from a loss ([ADR-0012](adr/0012-modbus-one-request-in-flight.md)):
+
+| Setting | ns-3's default | Used, as Linux | `TcpSettings` field |
+|---|---|---|---|
+| Minimum retransmission timeout | 1 s | 200 ms | `min_rto_ms` |
+| Clock granularity of the RTO | 1 ms | 200 ms | `clock_granularity_ms` |
+| Delayed-ACK timeout | 200 ms | 40 ms | `delayed_ack_ms` |
+| SYN retransmission timeout | 3 s | 1 s | `syn_rto_ms` |
+
+- **The RTO.** ns-3 computes it as `max(SRTT + max(G, 4·RTTVAR), MinRto)`. With a granularity `G` of 200 ms that is Linux's `SRTT + 4·RTTVAR`, with the variance term at least 200 ms. So a lost segment on a fast network is retransmitted after about 200 ms plus the RTT, as on Linux.
+- **Other values.** `smolpy.ns3.TcpSettings` holds them, and `Ns3Backend` takes them. They are a backend option, not part of the scenario:
+
+    ```python
+    from smolpy.backends import Ns3Backend
+    from smolpy.ns3 import TcpSettings
+
+    result = Ns3Backend(tcp=TcpSettings(min_rto_ms=1_000, clock_granularity_ms=1)).run(scenario)
+    ```
+
+    With `min_rto_ms=1000`, `clock_granularity_ms=1`, `delayed_ack_ms=200` and `syn_rto_ms=3000`, ns-3's own defaults apply.
+
+Timestamps are off, so that segments have the 20 B header SMOL sizes them with.
 
 **At low load** the results are SimPy's, plus what TCP adds:
 - **1 ns per send.** A Modbus round trip, or a PUBLISH from publisher to subscriber, takes SimPy's time plus 2 ns.
@@ -76,9 +98,9 @@ Each Modbus master and slave, and each MQTT client and broker, share one persist
 | 0.95 | 1.283 → 1.283 ms | 0.806 → 0.807 ms | 1.4246 → 1.4247 MB |
 | 1.00 | 1.377 → 1.627 ms (+18 %) | 1.023 → 1.274 ms (+25 %) | 1.4246 → 1.4247 MB |
 | 1.10 | 864 → 847 ms (−2 %) | 864 → 851 ms (−2 %) | 1.2953 → 1.2704 MB (−2 %) |
-| 1.20 | 1584 → 1557 ms (−2 %) | 1583 → 1586 ms | 1.1872 → 1.1274 MB (−5 %) |
-| 1.35 | 2463 → 2455 ms | 2463 → 3057 ms (+24 %) | 1.0553 → 0.7781 MB (−26 %) |
-| 1.50 | 3166 → 3356 ms (+6 %) | 3167 → 4528 ms (+43 %) | 0.9499 → 0.5648 MB (−41 %) |
+| 1.20 | 1584 → 1557 ms (−2 %) | 1583 → 1585 ms | 1.1872 → 1.1269 MB (−5 %) |
+| 1.35 | 2463 → 2484 ms (+1 %) | 2463 → 3053 ms (+24 %) | 1.0553 → 0.7801 MB (−26 %) |
+| 1.50 | 3166 → 3356 ms (+6 %) | 3167 → 4553 ms (+44 %) | 0.9499 → 0.5714 MB (−40 %) |
 
 - **Below saturation**, ns-3 agrees with SimPy within 0.4 %.
 - **At ρ = 1.00** the link is exactly full on SimPy. ns-3's acknowledgements add about 0.7 % of the uplink: the sensor with QoS 1 acknowledges every second PUBACK. That overloads the link, so its queue grows slowly.
@@ -86,7 +108,7 @@ Each Modbus master and slave, and each MQTT client and broker, share one persist
 - **Heavily overloaded**, TCP's windows decide. A connection can have at most its congestion window (or the receiver's window) in flight, so its rate is at most window / RTT. As the RTT reaches seconds, that falls below the sensors' publishing rate. Their messages wait in their TCP send buffers, and the camera's UDP stream, which does not back off, takes more of the link. On SimPy every source keeps sending, and the switch's queue shares the link in proportion to what each one offers.
 - **No losses.** The switches of L1 have no `buffer`, so their queues are unbounded: nothing is dropped and TCP retransmits nothing. With bounded buffers, below, TCP reacts to losses as well.
 
-The results are in `benchmarks/results/*-tcp-under-load.json`. `python -m benchmarks load-summary <file>` prints their table.
+The results are in `benchmarks/results/*-tcp-under-load.json`, recorded with ns-3's own TCP settings. `python -m benchmarks load-summary <file>` prints their table. The table gives ns-3's means with Linux's settings: they are the same up to ρ = 1.1, and differ by at most 1.2 % above, where the queueing delay reaches seconds.
 
 ### Bounded switch buffers
 
@@ -129,7 +151,33 @@ Each load runs 30 simulated seconds with 5 seeds. The tables give means over the
 | 1.05 | 117.6 | 119.8 | 0 | 9.23 | 32.7 | 9.24 | 48.0 |
 
 - **SimPy and Rust lose polls.** A poll whose request or response is dropped is never answered, and the delay of the others stays capped by the buffer.
-- **ns-3 loses none.** TCP retransmits the lost response. A poll every 10 ms keeps segments flowing, so the next responses arrive out of order, and three duplicate acknowledgements trigger a fast retransmit, without waiting for the 1 s minimum timeout. The poll is answered 3 to 4 poll periods late, at 30 to 48 ms.
+- **ns-3 loses none.** TCP retransmits the lost response. A poll every 10 ms keeps segments flowing, so the next responses arrive out of order, and three duplicate acknowledgements trigger a fast retransmit, without waiting for the retransmission timeout. The poll is answered 3 to 4 poll periods late, at 30 to 48 ms.
 - **What to use.** For Modbus and MQTT under loss, SimPy and Rust count what a stack without retransmission would lose. They give a lower bound on delivery and say nothing about the delay of retransmission. ns-3 shows what a TCP stack does.
 
 The results are in `benchmarks/results/*-bounded-buffers.json`. `python -m benchmarks loss-summary <file>` prints their tables.
+
+### One request in flight
+
+A poll with `outstanding=1` waits for each response before it sends the next request ([Modbus TCP](modbus.md#one-request-in-flight), [ADR-0012](adr/0012-modbus-one-request-in-flight.md)). The engines apply the same rules: skipped instants, transaction ids, the timeout and late responses.
+- **Rust** gives SimPy's results bit for bit, with and without loss.
+- **ns-3** gives SimPy's counts when nothing is lost. TCP adds 1 ns per send, so a response is 2 ns later than on SimPy.
+- **With loss,** SimPy and Rust lose the request or the response, and the poll times out. On ns-3 TCP retransmits it.
+
+**Retransmission is slow here.** With one request in flight, nothing is sent while the master waits, so TCP has no later segments that could trigger a fast retransmit. It waits for the retransmission timeout, at least 200 ms with Linux's settings.
+
+`python -m benchmarks closed-loop` runs scenario T2: T1 above, with `buffer=91080` (60 frames of 1 518 B), so that a full queue drops responses, and the poll with `outstanding=1`, every 10 ms. Each load runs 30 simulated seconds with 5 seeds. With a timeout of 1 s, sums over the seeds:
+- **Affected:** the polls answered after more than 100 ms, timed out or unanswered, as a share of the requests sent.
+- **Long RTTs:** the round trips above 100 ms: their number, and their lowest, median and highest value, in ms.
+- **Dropped:** the frames the switch dropped, as a share of the UDP frames sent.
+
+| ρ | Affected, SimPy | Affected, Rust | Affected, ns-3 | Long RTTs, ns-3 | Dropped, ns-3 |
+|---|---|---|---|---|---|
+| 0.985 | 0.28 % (33 timeouts) | 0.21 % (26) | 0.28 % | 40: 210.0, 212.9, 216.5 | 0.31 % |
+| 0.99 | 0.31 % (35) | 0.33 % (36) | 0.34 % | 47: 210.2, 213.3, 217.2 | 0.46 % |
+| 0.996 | 0.56 % (54) | 0.45 % (44) | 0.61 % | 81: 210.1, 213.2, 217.3 | 0.69 % |
+
+- **On ns-3 a lost response comes back after the RTO,** 210 to 217 ms after its request. The hardware testbed of ADR-0011 measured about 215 ms. No poll times out, and none is left unanswered at the end beyond the one in flight. With ns-3's own settings the same responses come back after about 1 s.
+- **On SimPy and Rust a lost poll is a timeout,** followed by the 100 instants skipped while waiting for it. Without a timeout, polling stops at the first loss.
+- **More polls are affected than on the testbed,** which measured 0.18 % (3 of 1 680). The share follows the frames dropped, and the model drops 3 to 8 times more than the testbed's 0.09 % (ADR-0011). That gap is left open.
+
+The results are in `benchmarks/results/*-one-request-in-flight.json`. `python -m benchmarks closed-loop-summary <file>` prints their tables, without a timeout too.

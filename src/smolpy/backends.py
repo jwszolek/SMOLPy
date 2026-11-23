@@ -36,6 +36,7 @@ from smolpy.model import Scenario
 
 if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
+    from smolpy.ns3 import TcpSettings
 
 DEFAULT = "simpy"
 
@@ -165,9 +166,18 @@ class Ns3Backend:
     It runs the whole model, headless: Ethernet (adapters, switches and flows
     with every pattern, IMIX and 802.1Q priorities) over UDP, Modbus TCP and
     MQTT over ns-3's TCP, and PROFINET RT on layer 2.
+
+    *tcp* sets ns-3's TCP; by default it is Linux's where that shapes how it
+    recovers from a loss (``smolpy.ns3.TcpSettings``, ADR-0012). The registry
+    holds the default backend; ``Ns3Backend(tcp=...).run(scenario)`` runs with
+    others.
     """
 
     name = "ns3"
+
+    def __init__(self, tcp: TcpSettings | None = None) -> None:
+        self.tcp = tcp
+
     install = (
         "set NS3_HOME to a built ns-3 3.49 tree, or run in the image"
         " ghcr.io/jwszolek/smolpy-ns3-base"
@@ -214,16 +224,18 @@ class Ns3Backend:
                     "frames_sent",
                     "frames_received",
                     "modbus_unanswered",
+                    "modbus_timeouts",
+                    "modbus_skipped",
                 }
             ),
-            features=frozenset({"imix", "bounded_buffer"}),
+            features=frozenset({"imix", "bounded_buffer", "modbus_outstanding"}),
         )
 
     def run(self, scenario: Scenario) -> SimulationResult:
         from smolpy import ns3
 
         try:
-            return ns3.run(scenario)
+            return ns3.run(scenario, self.tcp)
         except ns3.Ns3Unavailable as exc:  # e.g. smol-ns3 cannot be built
             raise BackendUnavailable(f"the ns3 backend is not available: {exc}") from exc
 

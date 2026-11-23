@@ -227,3 +227,22 @@ Simulation: **10 s**
 | `fifo` | ~18 ms | ~46 ms | 936 — RT frames wait behind ~12 ms bursts, longer than the 6 ms watchdog |
 
 Also available as [`example_profinet.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_profinet.smol). See [PROFINET RT](profinet.md) for the general model.
+
+## 11. A bounded buffer at a 100 Mb/s bottleneck — [`example_bounded_buffer.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_bounded_buffer.smol)
+
+After the hardware testbed of [ADR-0011](adr/0011-bounded-switch-buffers.md): Poisson UDP of 1 518 B frames at 99.6 % of a 100 Mb/s port, and a Modbus poll every 10 ms through the same port. With `buffer=115000` the round trip stays under 9.4 ms and about 0.4 % of the UDP frames are dropped; no poll is lost. See [Execution backends](backends.md#bounded-switch-buffers).
+
+## 12. A Modbus master that waits for each response — [`example_modbus_timeout.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_modbus_timeout.smol)
+
+The same bottleneck at 99 % load, with `buffer=91080`, so that a full queue drops Modbus responses too, and the poll with `outstanding=1 timeout=1000` ([ADR-0012](adr/0012-modbus-one-request-in-flight.md)). Simulation: **30 s**, seed 42.
+
+| Backend | `modbus_timeouts` | `modbus_skipped` | Highest `modbus_latency` |
+|---|---|---|---|
+| `simpy` | 8 | 800 | 7.4 ms |
+| `rust` | 9 | 900 | 7.4 ms |
+| `ns3` | 0 | 210 | 216 ms |
+
+- **SimPy and Rust** do not retransmit: each lost request or response times out after 1 s, and the poll skips the 100 instants up to it. Rust draws its own random streams, so its counts differ.
+- **ns-3** runs the poll over TCP with Linux's minimum RTO of 200 ms: 11 lost responses are retransmitted and arrive 210 to 216 ms after their requests, and no poll times out.
+
+See [Modbus TCP](modbus.md#one-request-in-flight) for the model.

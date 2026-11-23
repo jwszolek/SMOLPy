@@ -124,7 +124,7 @@ smolpy backends                             # list backends and their capabiliti
 | `link speed= length=` | *Amended 2026-11-16: SMOL's own full-duplex Ethernet device and channel, not CSMA; see "Link model on ns-3" below.* Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`). *Since ADR-0010:* inter-frame gap = the time of 20 B at `speed` (preamble, SFD and gap, which CSMA does not model otherwise); CSMA adds the Ethernet header and FCS itself. *In ns-3.49 the gap is not an attribute: `Attach()` sets 12 B, so the generator calls `CsmaNetDevice::SetInterframeGap()` on each device after installing it.* |
 | `flow` | UDP application; payload sized so the on-wire frame matches `size` (constant, Poisson, bursty patterns; `imix` sizes). *As built:* the payload is `size` minus 46 B (Ethernet 18, IPv4 20, UDP 8), sent to port 9 of the destination, where a socket discards it. |
 | `publish` / `route` | MQTT publisher / broker Applications over one persistent TCP connection per client; QoS 1 sends PUBACK. *As built:* port 1883; subscribers connect to the broker as clients, and one connection carries all of a client's PUBLISH messages and copies (see "Modbus and MQTT over TCP" below). |
-| `poll` | Modbus TCP master / slave Applications over one persistent TCP connection per master–slave pair (port 502), MBAP transaction IDs, Read Holding Registers (FC 03). *As built:* without transaction IDs. Responses come back in order on the connection, so the master pairs them with its requests in that order. |
+| `poll` | Modbus TCP master / slave Applications over one persistent TCP connection per master–slave pair (port 502), MBAP transaction IDs, Read Holding Registers (FC 03). *As built:* without transaction IDs. Responses come back in order on the connection, so the master pairs them with its requests in that order. *Since [ADR-0012](0012-modbus-one-request-in-flight.md):* a poll with `outstanding=1` numbers its requests, and accepts a response only with the outstanding id and before its timeout. |
 | `observe` | Periodic sampler writing CSV rows |
 | `simulate mode=` | `headless` only; `text`/`live` are capability errors (results are post-processed after the run) |
 
@@ -221,7 +221,7 @@ docker run --rm -v "$PWD:/work" -w /work ghcr.io/jwszolek/smolpy:latest-ns3 run 
 ns-3.49's CSMA is a shared bus: the two ends of a link wait for each other, and a busy link backs off. SMOLPy's links are full duplex. With CSMA, ns-3 would differ from the other engines because of the link model, not because of the TCP/IP stack it is there to bring.
 
 - **Decision.** The ns-3 backend uses SMOL's own Ethernet device and channel, from the SMOL C++ module.
-    - The device is full duplex, with one egress queue per port. It is unbounded, or, on a switch with `buffer`, bounded with tail drop (*amended by [ADR-0011](0011-bounded-switch-buffers.md), 2026-11-23*). An idle port takes a queued frame after the events already scheduled for that instant, as the reference engine does; the `smol-ns3` line format is version 2.
+    - The device is full duplex, with one egress queue per port. It is unbounded, or, on a switch with `buffer`, bounded with tail drop (*amended by [ADR-0011](0011-bounded-switch-buffers.md), 2026-11-23*). An idle port takes a queued frame after the events already scheduled for that instant, as the reference engine does; the `smol-ns3` line format is version 2, and version 3 since [ADR-0012](0012-modbus-one-request-in-flight.md).
     - A frame is its IP packet plus 18 B, at least 64 B.
     - It occupies the wire for preamble, SFD and frame, and the next frame waits for the 12 B gap (ADR-0010).
     - Times are rounded as in Model Semantics §1.
@@ -253,6 +253,7 @@ What ns-3 is there for is its TCP. The backend therefore keeps everything else a
     - Every segment has a 20 B TCP header, as SMOL sizes Modbus and MQTT frames: the timestamp option is off. Window scaling and SACK stay on. They add 8 B to the SYN and SYN-ACK, and SACK blocks only to the acknowledgements of a loss, which SMOL's unbounded queues do not cause.
     - The segment size is Ethernet's 1460 B, not ns-3's default of 536 B.
 - **ns-3's defaults otherwise.** Congestion control is CUBIC. Delayed acknowledgements are every second segment or after 200 ms. Nagle is off (`TcpNoDelay`). The minimum RTO is 1 s.
+    - *Amended by [ADR-0012](0012-modbus-one-request-in-flight.md), 2026-11-23:* the settings that shape recovery from a loss are Linux's: a minimum RTO of 200 ms, a clock granularity of 200 ms, a delayed-ACK timeout of 40 ms and a SYN RTO of 1 s. They are a property of the backend, `smolpy.ns3.TcpSettings`, not of the scenario.
 - **Applications.**
     - They act at the instant a message arrives, as on SimPy.
     - They never block: the send buffer (1 GiB) holds what TCP cannot send yet.

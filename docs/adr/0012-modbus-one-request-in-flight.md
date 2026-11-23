@@ -9,7 +9,7 @@
 - ADR-0011: "Protocols when a frame is lost", for Modbus.
 - [Model Semantics](../model-semantics.md) §5, §6, §8 and §9.
 
-**Roadmap:** none. It came out of the ADR-0011 testbed.
+**Roadmap:** none before it; it came out of the ADR-0011 testbed. The roadmap now lists it as done, with `response_delay` as its next step.
 
 ---
 
@@ -180,6 +180,31 @@ poll <connection> <request B> <response B> <delay ns> <period num> <period den> 
 - **Timestamps stay off.** Linux sends them, but SMOL sizes every TCP frame without the 12 B option (Model Semantics §2). Frame sizes then agree across engines, and the RTO's RTT samples come from ACKs alone, by Karn's rule.
 - **Tail loss probe.** Linux's TLP is not in ns-3. With one segment in flight, its probe comes at `2·SRTT + rto_min`, capped at the RTO, so it is not earlier than the RTO. A lone lost response is therefore recovered at the RTO on both.
 - **The settings change how ns-3's TCP recovers, and so how ns-3 results look under loss.** Without loss, only the delayed ACK can change a result: a pure ACK now leaves after 40 ms instead of 200 ms when nothing piggybacks it. That moves frames on the wire at poll and publish periods above 40 ms. Step 4 records every ns-3 result that changes.
+
+*As built (2026-11-23):*
+- **The transaction slot.** It is in `Periodic`, above TCP: a poll whose slot is not free skips the instant, and a timeout is one event, scheduled after the request is handed to TCP. The id and the slot travel with the request's bytes and come back with the response's. A test checks that at every sample at most one request awaits a response, with loss and without a timeout.
+- **The rules hold over TCP.** TCP adds 1 ns per send to the round trip. At the exact round trips of the SimPy tests, no response therefore moves across a poll instant or a timeout, and the counts are SimPy's. `poll-timeouts` and `poll-tie` sample at SimPy's instants (`test_over_tcp`).
+- **The testbed case** (`python -m benchmarks closed-loop`, scenario T2, `benchmarks/results/2026-11-23-2106-…-one-request-in-flight.json`). 30 s per run, five seeds per load, no timeout and a timeout of 1 s:
+
+    | ρ | engine | polls affected | long RTTs: n, min, median, max (ms) | UDP frames dropped |
+    |---|---|---|---|---|
+    | 0.985 | ns-3 | 0.28 % | 40: 210.0, 212.9, 216.5 | 0.31 % |
+    | 0.99 | ns-3 | 0.34 % | 47: 210.2, 213.3, 217.2 | 0.46 % |
+    | 0.996 | ns-3 | 0.61 % | 81: 210.1, 213.2, 217.3 | 0.69 % |
+    | 0.985–0.996 | SimPy, Rust, timeout 1 s | 0.21–0.56 %, as timeouts | none | 0.28–0.68 % |
+    | 0.985, 0.996 | the testbed | 0.18 % (3 of 1 680) | about 215 | 0.09 % |
+
+    - **On ns-3 every lost response comes back after the RTO,** 210 to 217 ms after its request, as on the hardware. None times out at 1 s, and none is unanswered at the end beyond the one in flight.
+    - **For comparison, on the same scenario:**
+        - ns-3's own TCP settings give about 1 s;
+        - open-loop polls give a fast retransmit after 25 to 29 ms.
+    - **On SimPy and Rust a lost response is a timeout.** Without a timeout, polling stops at the first loss: of the 14 995 instants of a load, 5 polls are unanswered, one per seed, and the rest are skipped.
+    - **The share of polls affected is 1.5 to 3.4 times the hardware's.** It follows the share of frames dropped, which is 3 to 8 times the testbed's (ADR-0011); that gap stays open.
+- **Results that change with the TCP settings.** The recorded ns-3 benchmarks were run again against the code before this step:
+    - **T1 of ADR-0011 (open loop):** all 90 runs give the same values.
+    - **L1, TCP under load:** the same values up to ρ = 1.05. From ρ = 1.1 the uplink queue grows by seconds, and the RTO changes the means by at most 1.2 %. At ρ = 1.35, for example, the Modbus RTT goes from 2.455 s to 2.484 s.
+    - **ns-3's event counts grow by a constant** of a few hundred to a few thousand per run. ns-3 counts a cancelled event when its time comes, and each segment cancels and reschedules the retransmission timer. With a minimum RTO of 200 ms instead of 1 s, the timers set in the last 0.8 s of a run fall inside it.
+    - **No ns-3 test changed.** The delayed-ACK timeout changes nothing in the suite, whose periods are under 40 ms.
 
 **A backend option, not part of the scenario.** `smolpy.ns3.TcpSettings` holds the values above, with these defaults: minimum RTO, clock granularity, delayed-ACK timeout and SYN RTO. The program reads them from a `tcp` line of the format. `Ns3Backend(tcp=TcpSettings(min_rto_ms=1000))` runs with other values. They are not in the IR, for two reasons:
 - SimPy and Rust have no TCP to apply them to;

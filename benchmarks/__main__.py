@@ -9,6 +9,8 @@ python -m benchmarks load [--loads 0.5 0.9 1.0 1.2] [--duration 20000] [--backen
 python -m benchmarks load-summary benchmarks/results/<file>.json
 python -m benchmarks loss [--loads 0.93 0.996] [--duration 30000] [--backend simpy rust ns3]
 python -m benchmarks loss-summary benchmarks/results/<file>.json
+python -m benchmarks closed-loop [--loads 0.99] [--duration 30000] [--backend simpy rust ns3]
+python -m benchmarks closed-loop-summary benchmarks/results/<file>.json
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from benchmarks import loss
+from benchmarks import closed_loop, loss
 from benchmarks.load import DURATION_MS, LOADS, run_load, summarize_load
 from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
@@ -103,6 +105,22 @@ def main() -> None:
     loss_summ = sub.add_parser("loss-summary", help="markdown table of a loss results file")
     loss_summ.add_argument("file", type=Path)
 
+    closed = sub.add_parser(
+        "closed-loop", help="the testbed of ADR-0012, one Modbus request in flight, every engine"
+    )
+    closed.add_argument("--loads", nargs="+", type=float, default=list(closed_loop.LOADS))
+    closed.add_argument(
+        "--duration", type=float, default=closed_loop.DURATION_MS, help="simulated ms"
+    )
+    closed.add_argument("--backend", nargs="+", default=list(closed_loop.ENGINES))
+    closed.add_argument("--label", default="one-request-in-flight")
+    closed.add_argument("--out", type=Path, default=None)
+
+    closed_summ = sub.add_parser(
+        "closed-loop-summary", help="markdown tables of a closed-loop results file"
+    )
+    closed_summ.add_argument("file", type=Path)
+
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
@@ -125,6 +143,12 @@ def main() -> None:
         print(loss.summarize_loss(out))
     elif a.cmd == "loss-summary":
         print(loss.summarize_loss(a.file))
+    elif a.cmd == "closed-loop":
+        out = closed_loop.run_closed_loop(a.loads, a.duration, a.backend, a.label, a.out)
+        print(f"results written to {out}")
+        print(closed_loop.summarize_closed_loop(out))
+    elif a.cmd == "closed-loop-summary":
+        print(closed_loop.summarize_closed_loop(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
         r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)

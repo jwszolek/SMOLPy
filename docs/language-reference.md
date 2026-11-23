@@ -101,10 +101,22 @@ Must appear before the corresponding `publish` statement is simulated (declarati
 ### `poll` — Modbus TCP poll (Adapter master → ModbusSlave)
 
 ```
-poll <master> -> <slave> register=<addr> count=<n> [rate=<polls/s>] [delay=<ms>]
+poll <master> -> <slave> register=<addr> count=<n> [rate=<polls/s>] [delay=<ms>] [outstanding=1|unlimited] [timeout=<ms>]
 ```
 
 `rate` defaults to `1.0`, `delay` to `0`.
+
+`outstanding` sets how many requests of the pair may await a response ([ADR-0012](adr/0012-modbus-one-request-in-flight.md)). It defaults to `unlimited`: a request goes out at every poll instant, whatever happened to the previous one.
+
+`outstanding=1` models the usual Modbus TCP master, which waits for each response:
+- **Skipped instants.** A poll instant that comes while a request is awaiting its response is skipped and counted in `modbus_skipped`. The schedule does not drift.
+- **The timeout.** `timeout` is the response timeout in ms, and needs `outstanding=1`. A request still unanswered after `timeout` counts in `modbus_timeouts`, and the pair is free again. A response that comes later is discarded.
+- **Without `timeout`,** the master waits for ever. On SimPy and Rust, which do not retransmit, a lost request or response then stops that poll.
+- **One poll per pair.** A master can have only one `poll` with `outstanding=1` towards a given slave.
+
+```
+poll plc -> meter register=0 count=10 rate=100 outstanding=1 timeout=1000
+```
 
 ### `control` — PROFINET RT cyclic I/O (Adapter controller → ProfinetDevice)
 
@@ -138,6 +150,8 @@ observe <metric> on <node> every=<ms>
 | `frames_sent` | frames | Adapter |
 | `frames_received` | frames | Adapter |
 | `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
+| `modbus_timeouts` | polls | Adapter (master): requests that timed out so far, with `outstanding=1` |
+| `modbus_skipped` | polls | Adapter (master): poll instants skipped so far, because a request was outstanding |
 
 Observing a metric on the wrong node type (or a metric that doesn't exist) is a semantic error, caught before the simulation runs.
 

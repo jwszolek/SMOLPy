@@ -216,10 +216,26 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
 
 **Possible extensions:** a buffer pool shared by a switch's ports, limits per priority class, and a limit in frames.
 
+## One Modbus request in flight ([ADR-0012](adr/0012-modbus-one-request-in-flight.md))
+
+**Status: done.** A poll with `outstanding=1` keeps one request of its master–slave pair in flight, as the usual Modbus TCP master does, with an optional response `timeout`, on all three backends.
+
+1. **The scenario: done.** `outstanding` and `timeout` in the Python API and `.smol`, validated. They are optional IR fields, written only when set, so the IR stays version 2.
+2. **SimPy: done.** Skipped instants, MBAP transaction ids, the timeout, late responses discarded, and the metrics `modbus_timeouts` and `modbus_skipped`.
+3. **Rust: done.** Bit for bit with SimPy, with and without loss.
+4. **ns-3: done.** The same rules above ns-3's TCP, whose minimum RTO, clock granularity, delayed-ACK timeout and SYN timeout are now Linux's (`smolpy.ns3.TcpSettings`). Format 3 of `smol-ns3`.
+5. **Documentation and an example: done.** [`example_modbus_timeout.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_modbus_timeout.smol).
+
+**Why.** On the testbed of ADR-0011 a lost Modbus response came back after about 215 ms: the master waits for each response, so TCP has nothing more to send and retransmits only after its timeout. ns-3 showed a fast retransmit after 30 to 48 ms instead, because its polls were open loop, and its minimum RTO of 1 s would have given about 1 s. With one request in flight and Linux's settings, ns-3 gives 210 to 217 ms. The share of polls affected is higher than measured (0.28–0.61 % against 0.18 %), as the model loses more frames than the testbed; that is left open.
+
+**Possible extensions:**
+- **The slave's processing time** (`response_delay`), the natural next step: a slave now answers at once, where a real one takes time to read its registers. With one request in flight, that time adds to every round trip and bounds the poll rate.
+- A master that defers a poll instead of skipping it, reconnecting after a timeout, and windows of more than one request on a connection.
+
 ## Candidates (not yet scheduled)
 
 - PROFINET IRT / TSN scheduling.
 - PROFIBUS with a PROFINET gateway.
 - EtherNet/IP and OPC UA.
 - OMNeT++/INET backend.
-- Modbus write function codes and slave processing time.
+- Modbus write function codes, and the slave's processing time (`response_delay`, above).

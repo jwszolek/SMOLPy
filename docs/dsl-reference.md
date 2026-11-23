@@ -38,7 +38,7 @@ sw = net.switch("sw", ports=8, buffer=115_000)    # bytes per port
 - **Effect.** The queueing delay of a port is capped at about `buffer / speed`, and frames are lost instead. `drops` and `drops_total` count them, and `frames_sent` and `frames_received` give a flow's loss.
 - **Where.** The limit is per egress port, on switches only: end stations never drop a frame.
 - **Validation.** `buffer` must be a whole number of bytes, at least 1522 and at least the largest frame of the scenario.
-- **On loss there is no retransmission** on SimPy and Rust. A poll whose request or response is lost stays unanswered (`modbus_unanswered`). On ns-3, Modbus and MQTT run over TCP, which retransmits ([Execution backends](backends.md#bounded-switch-buffers)).
+- **On loss there is no retransmission** on SimPy and Rust. A poll whose request or response is lost stays unanswered (`modbus_unanswered`), or times out with `outstanding=1` and a timeout (below). On ns-3, Modbus and MQTT run over TCP, which retransmits ([Execution backends](backends.md#bounded-switch-buffers)).
 
 ## Traffic
 
@@ -59,6 +59,8 @@ broker.routes("plant/temp", to=[server])
 # Modbus TCP poll (master → slave, Read Holding Registers)
 plc.polls(slave, register=40001, count=10, rate=1.0)
 plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
+# ...waiting for each response, with a timeout of 1 s
+plc.polls(meter, register=0, count=10, rate=100, outstanding=1, timeout_ms=1_000)
 
 # PROFINET RT cyclic I/O (controller ↔ device), 4 ms update time
 plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
@@ -96,6 +98,16 @@ plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
 | `count` | int | Number of registers to read |
 | `rate` | float | Polls per second (default 1.0) |
 | `delay_ms` | float | Simulation time before polling starts (default 0) |
+| `outstanding` | int \| None | `1`: at most one request of the pair awaits a response; `None`: unlimited (default) |
+| `timeout_ms` | float \| None | Response timeout, with `outstanding=1` (default `None`: no timeout) |
+
+**One request in flight** ([ADR-0012](adr/0012-modbus-one-request-in-flight.md)). By default a poll is open loop: a request goes out at every instant of its schedule, whatever happened to the previous one. `outstanding=1` models the usual Modbus TCP master, which waits for each response:
+- **Skipped instants.** An instant that comes while a request is outstanding is skipped and counted in `modbus_skipped`. So is an instant at which the previous request completes. The schedule does not drift.
+- **The timeout.** A request without a response after `timeout_ms` counts in `modbus_timeouts`, and the pair is free again. A response that comes later is discarded: it counts as a frame received, not as a response.
+- **Without `timeout_ms`,** the master waits for ever. On SimPy and Rust, which do not retransmit, a lost request or response then stops the poll. On ns-3, TCP retransmits it ([Execution backends](backends.md#one-request-in-flight)).
+- **Validation.** `outstanding` is `1` or `None`, and `timeout_ms` needs `outstanding=1`. A master can poll a given slave only once with `outstanding=1`.
+
+The exact rules are in [Model Semantics](model-semantics.md#6-traffic-sources).
 
 ### `controls()` parameters
 
@@ -152,6 +164,8 @@ net.observe(metric, on=node, every=interval_ms)
 | `frames_sent` | frames | Adapter (sender) |
 | `frames_received` | frames | Adapter (receiver) |
 | `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
+| `modbus_timeouts` | polls | Adapter (master): requests that timed out so far, with `outstanding=1` |
+| `modbus_skipped` | polls | Adapter (master): poll instants skipped so far, because a request was outstanding |
 
 ## Simulation
 
@@ -181,7 +195,7 @@ result.export("out.csv", format="csv")   # explicit format override
 |---|---|
 | `"simpy"` | The reference implementation. It is the default, always installed, and runs the whole model, including the live and text dashboards. |
 | `"rust"` | The native engine of [ADR-0008](adr/0008-rust-des-engine-mvp.md), from the optional package `smolpy-engine-rs` (`pip install smolpy[rust]`). It runs headless. |
-| `"ns3"` | ns-3 ([ADR-0004](adr/0004-execution-backends.md)), the whole model. Ethernet (flows with every pattern, IMIX and 802.1Q priorities) runs on ns-3's IPv4/UDP stack, with random traffic drawn from SimPy's streams. PROFINET RT runs on layer 2. Both give SimPy's results bit for bit. Modbus TCP and MQTT run on ns-3's TCP, whose connection setup and acknowledgements make those results differ from SimPy's. It runs in the image `ghcr.io/jwszolek/smolpy:<version>-ns3`. Elsewhere it needs `NS3_HOME`, naming a built ns-3 3.49 tree, and a C++ compiler. It runs headless. |
+| `"ns3"` | ns-3 ([ADR-0004](adr/0004-execution-backends.md)), the whole model. Ethernet (flows with every pattern, IMIX and 802.1Q priorities) runs on ns-3's IPv4/UDP stack, with random traffic drawn from SimPy's streams. PROFINET RT runs on layer 2. Both give SimPy's results bit for bit. Modbus TCP and MQTT run on ns-3's TCP, set to Linux's in how it recovers from a loss ([Execution backends](backends.md#modbus-and-mqtt-over-tcp)); its connection setup, acknowledgements and retransmissions make those results differ from SimPy's. It runs in the image `ghcr.io/jwszolek/smolpy:<version>-ns3`. Elsewhere it needs `NS3_HOME`, naming a built ns-3 3.49 tree, and a C++ compiler. It runs headless. |
 
 - **What a backend can run is checked before the run.** Every backend declares what it supports: node kinds, traffic kinds, patterns and metrics. A scenario that uses anything else is rejected with a `ScenarioError` naming the element. A dashboard (`live=True` or `text=True`) on a headless backend is a `ValueError`.
 - **A missing backend is an error.** When a backend is not installed, selecting it raises `BackendUnavailable` with the install command.
@@ -189,7 +203,7 @@ result.export("out.csv", format="csv")   # explicit format override
 
 **The Rust backend** runs the whole model:
 - adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
-- Modbus TCP: slaves, `polls()` and `modbus_latency`;
+- Modbus TCP: slaves, `polls()`, open loop or with one request in flight, and `modbus_latency`;
 - MQTT: brokers, `publishes()` with QoS 0 and 1, `routes()` and `broker_queue`;
 - PROFINET RT: devices, `controls()` and its watchdog, `pn_latency`, `pn_jitter` and `pn_watchdog_expiries`;
 - every metric.
