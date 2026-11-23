@@ -58,14 +58,14 @@ Build a switch with `qos="fifo"` to make it ignore priorities and compare. In [`
 
 With prioritisation the RT frames overtake each burst; without it they wait behind ~12 ms of bulk data per burst — longer than the 6 ms watchdog.
 
-Only *bursts* make watchdogs expire. Under smooth overload, frames arrive later and later but still roughly once per cycle, so latency grows while the watchdog stays quiet. This matches the model, because frames are never dropped.
+Only *bursts* make watchdogs expire. Under smooth overload, frames arrive later and later but still roughly once per cycle, so latency grows while the watchdog stays quiet. This matches the model while switch queues are unbounded, because frames are then never dropped.
 
 ## Limitations
 
 - **RT only.** IRT (isochronous, time-scheduled, sub-millisecond) needs a TSN-style scheduling model and is not modelled.
 - **No AR establishment.** DCP naming, RPC connect and parameterisation are not modelled; cyclic exchange starts at `delay_ms`.
 - **Watchdog expiry is counted, the AR keeps running.** Real devices abort the AR and take much longer to reconnect.
-- **No frame loss.** Queues are unbounded, so frames are delayed but never dropped.
+- **Frame loss only with `buffer`.** Queues are unbounded by default, so frames are delayed but never dropped. A switch with `buffer` drops frames that do not fit, RT frames included, since one buffer serves all priorities; the watchdog then expires on the gap ([ADR-0011](adr/0011-bounded-switch-buffers.md)).
 - **8 strict classes.** Real switches often map the 8 priorities onto fewer hardware queues.
 - Acyclic record data, alarms, media redundancy (MRP) and shared devices are out of scope.
 

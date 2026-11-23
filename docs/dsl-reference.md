@@ -22,11 +22,23 @@ net.link(edge_sw, core_sw, speed=1_000, length=5)      # inter-switch uplink
 
 Every egress queue serves the eight 802.1Q priority classes strictly (higher first, FIFO within a class). `qos="fifo"` makes a switch ignore frame priorities on its outbound ports.
 
-By default a switch knows only its directly attached stations and learns the rest from source addresses. Until it has learned a destination, it floods frames for it to all other ports. In large networks this start-up flooding costs a lot of events and memory. Queues are unbounded, so nothing is dropped. `mac_table="topology"` starts the switch with the port towards every end station already known, i.e. in the converged state. Use it when you study steady-state behaviour rather than start-up:
+By default a switch knows only its directly attached stations and learns the rest from source addresses. Until it has learned a destination, it floods frames for it to all other ports. In large networks this start-up flooding costs a lot of events and memory; without a `buffer`, every flooded copy waits in memory. `mac_table="topology"` starts the switch with the port towards every end station already known, i.e. in the converged state. Use it when you study steady-state behaviour rather than start-up:
 
 ```python
 core = net.switch("core", ports=202, mac_table="topology")
 ```
+
+**Bounded buffers.** By default egress queues are unbounded, so nothing is ever dropped and delay grows without limit under overload. `buffer` bounds each egress queue of a switch, in frame bytes ([ADR-0011](adr/0011-bounded-switch-buffers.md)):
+
+```python
+sw = net.switch("sw", ports=8, buffer=115_000)    # bytes per port
+```
+
+- **Tail drop.** A frame that would take the bytes waiting on its port beyond `buffer` is dropped on arrival, whatever its priority. The frame being transmitted does not count.
+- **Effect.** The queueing delay of a port is capped at about `buffer / speed`, and frames are lost instead. `drops` and `drops_total` count them, and `frames_sent` and `frames_received` give a flow's loss.
+- **Where.** The limit is per egress port, on switches only: end stations never drop a frame.
+- **Validation.** `buffer` must be a whole number of bytes, at least 1522 and at least the largest frame of the scenario.
+- **On loss there is no retransmission** on SimPy and Rust. A poll whose request or response is lost stays unanswered (`modbus_unanswered`). On ns-3, Modbus and MQTT run over TCP, which retransmits ([Execution backends](backends.md#bounded-switch-buffers)).
 
 ## Traffic
 
@@ -126,7 +138,6 @@ net.observe(metric, on=node, every=interval_ms)
 |---|---|---|
 | `throughput` | Mb/s | Adapter |
 | `latency` | µs | Adapter |
-| `frame_loss` | % | Adapter |
 | `bytes_sent` | MB | Adapter (sender) |
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
@@ -136,6 +147,11 @@ net.observe(metric, on=node, every=interval_ms)
 | `pn_latency` | µs | Adapter (controller), ProfinetDevice |
 | `pn_jitter` | µs | Adapter (controller), ProfinetDevice |
 | `pn_watchdog_expiries` | count | Adapter (controller), ProfinetDevice |
+| `drops` | frames | Switch: dropped by its buffers in the window |
+| `drops_total` | frames | Switch: dropped by its buffers so far |
+| `frames_sent` | frames | Adapter (sender) |
+| `frames_received` | frames | Adapter (receiver) |
+| `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
 
 ## Simulation
 

@@ -1,6 +1,6 @@
 # SMOLPy Examples
 
-Ten ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, and PROFINET RT cyclic I/O.  Every example opens a live desktop dashboard as the simulation runs.
+Eleven ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, and a switch with a bounded buffer.  Every example opens a live desktop dashboard as the simulation runs.
 
 ## Prerequisites
 
@@ -369,6 +369,23 @@ result.report()
 result.export("results.csv")   # export all metrics (CSV or JSON)
 ```
 
+### 11. `example_bounded_buffer.smol` — A bounded buffer at a 100 Mb/s bottleneck
+
+```bash
+uv run smolpy run examples/example_bounded_buffer.smol
+```
+
+After a hardware testbed ([ADR-0011](https://jwszolek.github.io/SMOLPy/adr/0011-bounded-switch-buffers/)): a Raspberry Pi on a 1 Gb/s port sends Poisson UDP traffic of 1518 B frames to a laptop on a 100 Mb/s port, at 99.6 % of that port, while the laptop polls a Modbus server on the Pi every 10 ms. The switch holds `buffer=115000` bytes per port.
+
+- **The delay is capped.** The laptop's queue never holds more than 75 large frames, so the Modbus round trip stays under 9.4 ms.
+- **UDP is lost instead.** About 0.4 % of its frames are dropped (`drops`, `drops_total`; compare `frames_sent` on the Pi with `frames_received` on the laptop).
+- **No poll is lost.** A full queue still has room for a small response: `modbus_unanswered` stays at 0.
+- **Without `buffer`,** the same load is lossless, but the round trip grows to tens of ms.
+
+It runs headless (`mode=headless`), so on every backend: add `--backend rust`, or `--backend ns3` to run the polls over ns-3's TCP.
+
+---
+
 ### Multi-switch topology
 
 ```python
@@ -384,13 +401,17 @@ net.link(edge_sw, core_sw, speed=1_000, length=5)   # inter-switch uplink
 |---|---|---|
 | `throughput` | Mb/s | Adapter |
 | `latency` | µs | Adapter |
-| `frame_loss` | % | Adapter |
 | `bytes_sent` | MB | Adapter (sender) |
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
 | `utilization` | % | Any node |
 | `broker_queue` | msgs | MQTTBroker |
 | `modbus_latency` | µs | Adapter (master) |
+| `drops` | frames | Switch: dropped by its buffers in the window |
+| `drops_total` | frames | Switch: dropped by its buffers so far |
+| `frames_sent` | frames | Adapter (sender) |
+| `frames_received` | frames | Adapter (receiver) |
+| `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
 
 ### Traffic patterns
 

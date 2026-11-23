@@ -30,7 +30,7 @@ _UNITS = {
     "drops": "fr",  # drops_total too
     "frames_sent": "fr",
     "frames_received": "fr",
-    "modbus_unanswered": "polls",
+    "modbus_unanswered": "poll",  # 4 characters, as the report's columns allow
 }
 
 
