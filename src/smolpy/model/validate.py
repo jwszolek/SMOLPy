@@ -243,6 +243,7 @@ def check_traffic(t: TrafficSpec, nodes: Mapping[str, NodeSpec] | None = None) -
         _in_range(t, "register", t.register, 0, 65_535)
         _in_range(t, "count", t.count, 1, MODBUS_MAX_REGISTERS)
         _positive(t, "rate", t.rate)
+        _check_outstanding(t)
     elif isinstance(t, ProfinetAR):
         if t.cycle_ms not in PN_CYCLES_MS or not _integer(t.cycle_ms):
             raise _fail(t, f"cycle {t.cycle_ms!r} ms must be one of {list(PN_CYCLES_MS)} ms")
@@ -250,6 +251,21 @@ def check_traffic(t: TrafficSpec, nodes: Mapping[str, NodeSpec] | None = None) -
         _in_range(t, "outputs", t.outputs, 1, PN_MAX_IO_BYTES)
         _in_range(t, "hold", t.hold, 1, 255)
     _non_negative(t, "delay", getattr(t, "delay_ms", 0.0))
+
+
+def _check_outstanding(t: Poll) -> None:
+    """ADR-0012: *outstanding* is 1 or unset; a timeout needs it."""
+    if t.outstanding is not None and (not _integer(t.outstanding) or t.outstanding != 1):
+        raise _fail(t, f"outstanding must be 1 or unlimited, got {t.outstanding!r}")
+    if t.timeout_ms is None:
+        return
+    if t.outstanding is None:
+        raise _fail(t, "timeout needs outstanding=1")
+    _positive(t, "timeout", t.timeout_ms)
+    if not math.isfinite(t.timeout_ms) or timebase.ms_to_ns(t.timeout_ms) < 1:
+        raise _fail(
+            t, f"timeout must be at least 1 ns (0.000001 ms) and finite, got {t.timeout_ms!r}"
+        )
 
 
 def _largest_frame(t: TrafficSpec) -> int:
@@ -340,6 +356,7 @@ def validate(scenario: Scenario) -> None:
 
     ars: set[tuple[str, str]] = set()
     routes: set[tuple[str, str]] = set()
+    polled = Counter((t.source, t.slave) for t in scenario.traffic if isinstance(t, Poll))
     for i, t in enumerate(scenario.traffic):
         with _at("traffic", i):
             check_traffic(t, nodes)
@@ -356,6 +373,12 @@ def validate(scenario: Scenario) -> None:
                 if (t.controller, t.device) in ars:
                     raise _fail(t, f"{t.controller!r} already controls {t.device!r}")
                 ars.add((t.controller, t.device))
+            if isinstance(t, Poll) and t.outstanding is not None and polled[t.source, t.slave] > 1:
+                raise _fail(
+                    t,
+                    f"{t.source!r} polls {t.slave!r} more than once; with outstanding=1"
+                    " a master-slave pair has one poll",
+                )
             if isinstance(t, Route):
                 if (t.broker, t.topic) in routes:
                     raise _fail(t, "topic is routed twice")

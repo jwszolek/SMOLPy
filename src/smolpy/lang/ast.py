@@ -94,6 +94,8 @@ class PollDecl:
     count: int
     rate: float
     delay_ms: float
+    outstanding: int | float | str | None  # 1, or None for unlimited; validated later
+    timeout_ms: int | float | str | None  # ms, or None for no timeout
     line: int
 
 

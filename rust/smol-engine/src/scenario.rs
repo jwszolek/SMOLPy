@@ -1,5 +1,6 @@
 //! Reads Scenario IR JSON, format "smol-ir" version 2 (ADR-0007, ADR-0010),
-//! with the optional switch buffers of ADR-0011.
+//! with the optional switch buffers of ADR-0011. Polls with one request in
+//! flight (ADR-0012) are rejected.
 //!
 //! The scenario has already been validated by `smolpy.model.validate`; this
 //! reader is strict about structure (unknown fields, kinds and versions are
@@ -526,6 +527,12 @@ fn parse_traffic(value: Value, i: usize) -> Res<Traffic> {
                 None => Q::int(0),
                 Some(v) => number(&v, "poll: delay_ms")?,
             };
+            for field in ["outstanding", "timeout_ms"] {
+                match f.take_or(field) {
+                    None | Some(Value::Null) => {}
+                    Some(_) => return Err(unsupported("polls with one request in flight")),
+                }
+            }
             f.done()?;
             Ok(Traffic::Poll(Poll {
                 source,
@@ -713,6 +720,14 @@ mod tests {
                 .unwrap_err()
                 .contains("unknown field \"x\"")
         );
+        for field in ["\"outstanding\": 1", "\"timeout_ms\": 50.0"] {
+            let poll = format!(
+                "\"traffic\": [{{\"kind\": \"poll\", \"source\": \"tx\", \"slave\": \"rx\", \"register\": 0, \"count\": 10, \"rate\": 100, \"delay_ms\": 0.0, {field}}}, "
+            );
+            assert!(parse(&B1.replace("\"traffic\": [", &poll))
+                .unwrap_err()
+                .contains("polls with one request in flight"));
+        }
         let poisson = parse(&B1.replace("\"constant\"", "\"poisson\"")).unwrap();
         assert_eq!(poisson.flows[0].pattern, Pattern::Poisson);
         let imix = parse(&B1.replace("\"size\": 512", "\"size\": \"imix\"")).unwrap();

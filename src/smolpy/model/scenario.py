@@ -28,8 +28,8 @@ VERSION = 2  # 2: Ethernet frames on the wire (ADR-0010)
 
 # Optional fields that are left out of the JSON while they hold their default,
 # so that documents not using them read as before, in older readers too
-# (ADR-0011: switch buffers).
-_OMITTED_WHEN_UNSET = {"buffer_bytes"}
+# (ADR-0011: switch buffers; ADR-0012: one Modbus request in flight).
+_OMITTED_WHEN_UNSET = {"buffer_bytes", "outstanding", "timeout_ms"}
 
 SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
@@ -158,7 +158,12 @@ class Route:
 
 @dataclass(frozen=True)
 class Poll:
-    """Modbus TCP register reads of *slave* (``Adapter.polls``); *rate* in polls/s."""
+    """Modbus TCP register reads of *slave* (``Adapter.polls``); *rate* in polls/s.
+
+    *outstanding* is the number of requests the master keeps in flight: ``None``
+    for any number (open loop) or 1, which skips a poll instant while a request
+    is outstanding; *timeout_ms* is its response timeout, ``None`` for none
+    (ADR-0012)."""
 
     kind: ClassVar[str] = "poll"
     source: str
@@ -167,6 +172,8 @@ class Poll:
     count: int
     rate: float = 1.0
     delay_ms: float = 0.0
+    outstanding: int | None = None
+    timeout_ms: float | None = None
 
 
 @dataclass(frozen=True)
