@@ -207,28 +207,86 @@ class _Transaction:
 
 
 class _Account:
-    """A switch buffer account (ADR-0011, ADR-0013): what it holds of the
-    frames queued, in frame bytes or in frames, against its limit."""
+    """A switch buffer account (ADR-0011, ADR-0013, ADR-0014): what it holds
+    of the frames queued, in frame bytes, frames or cells, against its limit.
 
-    __slots__ = ("limit", "in_frames", "held")
+    With a *resume* level, a frame that does not fit puts the account in the
+    drop state if it holds more than that level; it then refuses every frame
+    until a release brings it to the level. It counts its drop episodes, the
+    runs of refusals with no admission between them, and its time in the
+    drop state."""
 
-    def __init__(self, limit: int, in_frames: bool) -> None:
+    __slots__ = (
+        "limit",
+        "unit",
+        "cell",
+        "resume",
+        "env",
+        "held",
+        "dropping",
+        "refused",
+        "episodes",
+        "since",
+        "drop_ns",
+    )
+
+    def __init__(
+        self,
+        limit: int,
+        unit: str,
+        env: _Environment,
+        cell: int | None = None,
+        resume: int | None = None,
+    ) -> None:
         self.limit = limit
-        self.in_frames = in_frames
+        self.unit = unit
+        self.cell = cell or 1
+        self.resume = resume
+        self.env = env
         self.held = 0
+        self.dropping = False  # the drop state
+        self.refused = False  # whether the last frame it decided was refused
+        self.episodes = 0
+        self.since = 0  # when it entered the drop state
+        self.drop_ns = 0  # its time in the drop state before `since`
+
+    def units(self, size: int) -> int:
+        """What a frame of *size* bytes takes of the account."""
+        if self.unit == "frames":
+            return 1
+        if self.unit == "cells":
+            return -(-size // self.cell)
+        return size
 
     def fits(self, size: int) -> bool:
-        return self.held + (1 if self.in_frames else size) <= self.limit
+        return self.held + self.units(size) <= self.limit
+
+    def admit(self, size: int) -> bool:
+        """Decide a frame: False if it is dropped, by tail drop or the drop
+        state; a refusal that follows an admission starts an episode."""
+        if self.fits(size) and not self.dropping:
+            self.refused = False
+            return True
+        if not self.refused:
+            self.refused = True
+            self.episodes += 1
+        if not self.dropping and self.resume is not None and self.held > self.resume:
+            self.dropping = True
+            self.since = self.env._now
+        return False
 
     def charge(self, size: int) -> None:
-        self.held += 1 if self.in_frames else size
+        self.held += self.units(size)
 
     def release(self, size: int) -> None:
-        self.held -= 1 if self.in_frames else size
+        self.held -= self.units(size)
+        if self.dropping and self.held <= self.resume:  # type: ignore[operator]
+            self.dropping = False
+            self.drop_ns += self.env._now - self.since
 
-
-def _account(limit: tuple[int, str] | None) -> _Account | None:
-    return None if limit is None else _Account(limit[0], limit[1] == "frames")
+    def drop_time_ns(self) -> int:
+        """Its time in the drop state so far."""
+        return self.drop_ns + (self.env._now - self.since if self.dropping else 0)
 
 
 class _Stored:
@@ -320,7 +378,7 @@ class _LinkChannel:
         """Queue *frame*; False if the egress account drops it."""
         egress = self.egress
         if egress is not None:
-            if not egress.fits(frame.size_bytes):
+            if not egress.admit(frame.size_bytes):
                 self.frames_dropped += 1  # tail drop: nothing is queued or scheduled
                 return False
             egress.charge(frame.size_bytes)
@@ -838,7 +896,7 @@ def _switch_forwarder(
                 out_channels[dst_port].enqueue(frame)
             continue
         account = ingress.accounts[frame.in_port]
-        if not account.fits(frame.size_bytes):
+        if not account.admit(frame.size_bytes):
             ingress.dropped += 1  # tail drop: no egress port is looked at
             continue
         stored = frame.stored = _Stored(account)
@@ -906,6 +964,29 @@ def _count_sampler(
         samples.append((tb.ns_to_ms(env.now), float(total - last if window else total)))
         if window:
             last = total
+
+
+def _episodes(
+    ports: list[_LinkChannel], ingress: _Ingress | None, metric: str
+) -> Callable[[], int]:
+    """A switch's drop episodes, or its accounts' time in the drop state in
+    ns, by its ingress or its egress accounts (ADR-0014)."""
+    if metric.startswith("ingress_"):
+        accounts = [] if ingress is None else list(ingress.accounts.values())
+    else:
+        accounts = [ch.egress for ch in ports if ch.egress is not None]
+    if metric.endswith("_episodes_total"):
+        return lambda: sum(a.episodes for a in accounts)
+    return lambda: sum(a.drop_time_ns() for a in accounts)
+
+
+def _time_sampler(
+    env: _Environment, ns: Callable[[], int], period: tb.Exact, samples: Samples
+) -> Generator[simpy.Event]:
+    """A time so far, in ms, rounded once."""
+    for tick in _ticks(env, period):
+        yield tick
+        samples.append((tb.ns_to_ms(env.now), ns() / tb.NS_PER_MS))
 
 
 def _dropped(ports: list[_LinkChannel], ingress: _Ingress | None, metric: str) -> Callable[[], int]:
@@ -1059,8 +1140,15 @@ def run_simulation(
         # only switches have buffer accounts; end stations never drop
         return isinstance(node, model.SwitchNode) and node.bounded
 
+    def _account(node: model.SwitchNode, ingress: bool) -> _Account | None:
+        limit = node.ingress_limit if ingress else node.egress_limit
+        if limit is None:
+            return None
+        resume = node.ingress_buffer_resume if ingress else node.buffer_resume
+        return _Account(limit[0], limit[1], env, node.cell_bytes, resume)
+
     def _egress(node: model.NodeSpec) -> _Account | None:
-        return _account(node.egress_limit) if isinstance(node, model.SwitchNode) else None
+        return _account(node, False) if isinstance(node, model.SwitchNode) else None
 
     # ingress accounts, by switch and port (ADR-0013)
     ingress: dict[str, _Ingress] = {
@@ -1110,7 +1198,7 @@ def run_simulation(
         for node, port in ((a, port_a), (b, port_b)):
             if node.name in ingress:
                 assert isinstance(node, model.SwitchNode)
-                ingress[node.name].accounts[port] = _account(node.ingress_limit)  # type: ignore[assignment]
+                ingress[node.name].accounts[port] = _account(node, True)  # type: ignore[assignment]
 
         out_channels[a.name][port_a] = ch_ab
         out_channels[b.name][port_b] = ch_ba
@@ -1342,6 +1430,18 @@ def run_simulation(
             dropped = _dropped(ports, ingress.get(target.name), obs.metric)
             window = obs.metric == "drops"
             env.process(_count_sampler(env, dropped, period, samples, window))
+        elif obs.metric in (
+            "ingress_drop_episodes_total",
+            "egress_drop_episodes_total",
+            "ingress_drop_time_total",
+            "egress_drop_time_total",
+        ) and isinstance(target, model.SwitchNode):
+            ports = list(out_channels[target.name].values())
+            count = _episodes(ports, ingress.get(target.name), obs.metric)
+            if obs.metric.endswith("_episodes_total"):
+                env.process(_count_sampler(env, count, period, samples))
+            else:
+                env.process(_time_sampler(env, count, period, samples))
         elif obs.metric == "frames_sent" and station:
             ch = adapter_out.get(target.name)
             if ch:

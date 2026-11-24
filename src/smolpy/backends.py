@@ -57,7 +57,8 @@ class Capabilities:
     # "modbus_outstanding": polls with one request in flight (ADR-0012);
     # "ingress_buffer": ingress accounts, "buffer_frames": limits in frames,
     # "station_flows": flows from and to any end station, and
-    # "slave_metrics": Modbus metrics on a slave (ADR-0013)
+    # "slave_metrics": Modbus metrics on a slave (ADR-0013); "buffer_cells":
+    # limits in cells, "buffer_hysteresis": resume levels (ADR-0014)
     features: frozenset[str] = frozenset()
     priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
@@ -90,6 +91,9 @@ _FEATURES = frozenset(
         "buffer_frames",
         "station_flows",
         "slave_metrics",
+        # ADR-0014
+        "buffer_cells",
+        "buffer_hysteresis",
     }
 )
 
@@ -243,6 +247,10 @@ class Ns3Backend:
                     "modbus_skipped",
                     "ingress_drops_total",
                     "egress_drops_total",
+                    "ingress_drop_episodes_total",
+                    "egress_drop_episodes_total",
+                    "ingress_drop_time_total",
+                    "egress_drop_time_total",
                 }
             ),
             features=_FEATURES,
@@ -328,9 +336,14 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
             raise unsupported(node, "bounded switch buffers", ("nodes", i))
         if ingress is not None and "ingress_buffer" not in caps.features:
             raise unsupported(node, "ingress buffer limits", ("nodes", i))
-        in_frames = any(lim is not None and lim[1] == "frames" for lim in (egress, ingress))
-        if in_frames and "buffer_frames" not in caps.features:
+        units = {lim[1] for lim in (egress, ingress) if lim is not None}
+        if "frames" in units and "buffer_frames" not in caps.features:
             raise unsupported(node, "buffer limits in frames", ("nodes", i))
+        if "cells" in units and "buffer_cells" not in caps.features:
+            raise unsupported(node, "buffer limits in cells", ("nodes", i))
+        resumes = (node.buffer_resume, node.ingress_buffer_resume)
+        if any(r is not None for r in resumes) and "buffer_hysteresis" not in caps.features:
+            raise unsupported(node, "buffer resume levels (hysteresis)", ("nodes", i))
     for i, link in enumerate(scenario.links):
         if not link.duplex and not caps.half_duplex:
             raise unsupported(link, "half-duplex links", ("links", i))

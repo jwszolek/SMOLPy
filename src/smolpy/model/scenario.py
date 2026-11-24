@@ -29,12 +29,19 @@ VERSION = 2  # 2: Ethernet frames on the wire (ADR-0010)
 # Optional fields that are left out of the JSON while they hold their default,
 # so that documents not using them read as before, in older readers too
 # (ADR-0011: switch buffers; ADR-0012: one Modbus request in flight;
-# ADR-0013: ingress accounts and limits in frames).
+# ADR-0013: ingress accounts and limits in frames; ADR-0014: cells and
+# resume levels).
 _OMITTED_WHEN_UNSET = {
     "buffer_bytes",
     "buffer_frames",
     "ingress_buffer_bytes",
     "ingress_buffer_frames",
+    # ADR-0014: cells and resume levels
+    "cell_bytes",
+    "buffer_cells",
+    "ingress_buffer_cells",
+    "buffer_resume",
+    "ingress_buffer_resume",
     "outstanding",
     "timeout_ms",
 }
@@ -66,9 +73,11 @@ class SwitchNode:
     Each port can have an egress account, of the frames queued on it
     (ADR-0011), and an ingress account, of the frames that entered on it and
     are still queued on any port (ADR-0013); the frame in transmission is in
-    neither. A limit bounds an account in bytes or in frames, at most one per
-    account; ``None`` everywhere is unbounded. A frame that does not fit is
-    dropped."""
+    neither. A limit bounds an account in bytes, frames or cells of
+    *cell_bytes* (ADR-0014), at most one per account; ``None`` everywhere is
+    unbounded. A frame that does not fit is dropped. With a resume level, in
+    its limit's unit, the account then drops every frame until a release
+    brings it to that level (ADR-0014)."""
 
     kind: ClassVar[str] = "switch"
     name: str
@@ -80,6 +89,11 @@ class SwitchNode:
     buffer_frames: int | None = None
     ingress_buffer_bytes: int | None = None
     ingress_buffer_frames: int | None = None
+    cell_bytes: int | None = None
+    buffer_cells: int | None = None
+    ingress_buffer_cells: int | None = None
+    buffer_resume: int | None = None
+    ingress_buffer_resume: int | None = None
 
     @property
     def bounded(self) -> bool:
@@ -87,22 +101,29 @@ class SwitchNode:
         return self.egress_limit is not None or self.ingress_limit is not None
 
     @property
-    def egress_limit(self) -> tuple[int, Literal["bytes", "frames"]] | None:
-        return _limit(self.buffer_bytes, self.buffer_frames)
+    def egress_limit(self) -> tuple[int, LimitUnit] | None:
+        return _limit(self.buffer_bytes, self.buffer_frames, self.buffer_cells)
 
     @property
-    def ingress_limit(self) -> tuple[int, Literal["bytes", "frames"]] | None:
-        return _limit(self.ingress_buffer_bytes, self.ingress_buffer_frames)
+    def ingress_limit(self) -> tuple[int, LimitUnit] | None:
+        return _limit(
+            self.ingress_buffer_bytes, self.ingress_buffer_frames, self.ingress_buffer_cells
+        )
+
+
+LimitUnit = Literal["bytes", "frames", "cells"]
 
 
 def _limit(
-    in_bytes: int | None, in_frames: int | None
-) -> tuple[int, Literal["bytes", "frames"]] | None:
-    """A limit and its unit; validation allows at most one of the two."""
+    in_bytes: int | None, in_frames: int | None, in_cells: int | None = None
+) -> tuple[int, LimitUnit] | None:
+    """A limit and its unit; validation allows at most one of the three."""
     if in_bytes is not None:
         return in_bytes, "bytes"
     if in_frames is not None:
         return in_frames, "frames"
+    if in_cells is not None:
+        return in_cells, "cells"
     return None
 
 

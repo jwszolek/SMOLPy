@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from smolpy import Frames, Network
+from smolpy import Cells, Frames, Network
 from smolpy.model import Scenario
 
 
@@ -492,6 +492,113 @@ def station_flows() -> Scenario:
     return net.to_scenario(duration=40)
 
 
+def cells_mixed() -> Scenario:
+    """Limits in cells and resume levels (ADR-0014): mixed frame sizes into
+    a switch whose ingress ports hold 24 cells of 128 B and resume at 16,
+    and whose egress ports hold 40 cells and resume at 30; PROFINET frames
+    beside them; and a FIFO edge switch with a resume level in bytes, which
+    a local camera overloads."""
+    net = Network("cells-mixed")
+    core = net.switch(
+        "core",
+        ports=4,
+        cell=128,
+        ingress_buffer=Cells(24),
+        ingress_resume=Cells(16),
+        buffer=Cells(40),
+        resume=Cells(30),
+    )
+    edge = net.switch("edge", ports=4, qos="fifo", buffer=6_000, resume=3_000)
+    left = net.adapter("left", ip="10.0.0.1")
+    right = net.adapter("right", ip="10.0.0.2")
+    srv = net.adapter("srv", ip="10.0.0.3")
+    plc = net.adapter("plc", ip="10.0.0.4")
+    io = net.profinet_device("io", ip="10.0.0.5")
+    cam = net.adapter("cam", ip="10.0.0.6")
+    net.link(left, core, speed=1_000, length=5)
+    net.link(right, core, speed=1_000, length=5)
+    net.link(srv, core, speed=100, length=10)
+    net.link(core, edge, speed=100, length=20)
+    net.link(plc, edge, speed=100, length=10)
+    net.link(io, edge, speed=100, length=10)
+    net.link(cam, edge, speed=1_000, length=10)
+    plc.controls(io, cycle=1, inputs=64, outputs=64, hold=2)
+    cam.sends(plc, rate=7_000, size=1_200, pattern="constant", delay_ms=0.01)
+    left.sends(srv, rate=6_000, size=1_500)
+    left.sends(srv, rate=8_000, size=200, priority=4, delay_ms=0.05)
+    right.sends(srv, rate=3_000, size=600)
+    right.sends(plc, rate=9_000, size=1_200, delay_ms=0.02)
+    for scope in ("ingress", "egress"):
+        for metric in ("drops_total", "drop_episodes_total", "drop_time_total"):
+            net.observe(f"{scope}_{metric}", on=core, every=2)
+    net.observe("egress_drops_total", on=edge, every=2)
+    net.observe("egress_drop_episodes_total", on=edge, every=2)
+    net.observe("egress_drop_time_total", on=edge, every=2)
+    net.observe("queue_depth", on=core, every=1)
+    net.observe("frames_received", on=srv, every=2)
+    net.observe("latency", on=srv, every=2)
+    net.observe("pn_watchdog_expiries", on=plc, every=2)
+    return net.to_scenario(duration=40)
+
+
+def hysteresis_tie() -> Scenario:
+    """A drop state entered and left at the instants of arrivals (ADR-0014):
+    two constant sources of 1230 B frames into one 100 Mb/s port, which
+    takes a frame every 100 us, B's link long enough (99 050 ns) that its
+    frames arrive exactly when the port takes one."""
+    net = Network("hysteresis-tie")
+    sw = net.switch(
+        "sw", ports=3, ingress_buffer=Frames(3), ingress_resume=Frames(1), mac_table="topology"
+    )
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    sink = net.adapter("sink", ip="10.0.0.3")
+    net.link(a, sw, speed=1_000, length=2)
+    net.link(b, sw, speed=1_000, length=19_810)
+    net.link(sink, sw, speed=100, length=2)
+    a.sends(sink, rate=10_000, size=1_230)
+    b.sends(sink, rate=10_000, size=1_230)
+    for metric in ("ingress_drops_total", "ingress_drop_episodes_total", "ingress_drop_time_total"):
+        net.observe(metric, on=sw, every=1)
+    net.observe("frames_received", on=sink, every=1)
+    net.observe("latency", on=sink, every=1)
+    return net.to_scenario(duration=20)
+
+
+def flood_drop_state() -> Scenario:
+    """Flooding during a drop state (ADR-0014): frames to a station behind a
+    second switch are flooded, while one egress port is in its drop state and
+    an ingress port in its own: the copy for that port is dropped, the others
+    are not, and an ingress drop state drops every copy."""
+    net = Network("flood-drop-state")
+    sw = net.switch(
+        "sw",
+        ports=4,
+        buffer=Frames(6),
+        resume=Frames(2),
+        ingress_buffer=Frames(5),
+        ingress_resume=Frames(2),
+    )
+    far = net.switch("far", ports=2)
+    a = net.adapter("a", ip="10.0.0.1")
+    c = net.adapter("c", ip="10.0.0.3")
+    d = net.adapter("d", ip="10.0.0.4")
+    b = net.adapter("b", ip="10.0.0.2")
+    net.link(a, sw, speed=1_000, length=5)
+    net.link(c, sw, speed=100, length=5)
+    net.link(d, sw, speed=1_000, length=5)
+    net.link(sw, far, speed=100, length=5)
+    net.link(b, far, speed=100, length=5)
+    a.sends(b, rate=9_000, size=1_500)
+    d.sends(c, rate=9_000, size=1_400, delay_ms=0.03)
+    for scope in ("ingress", "egress"):
+        for metric in ("drops_total", "drop_episodes_total", "drop_time_total"):
+            net.observe(f"{scope}_{metric}", on=sw, every=2)
+    net.observe("frames_received", on=b, every=2)
+    net.observe("frames_received", on=c, every=2)
+    return net.to_scenario(duration=40)
+
+
 def random_drops() -> Scenario:
     """Poisson traffic into a bounded port at 150 % of its link: the buffer
     is nearly always full, so delay is capped and its mean is precise."""
@@ -584,6 +691,9 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "ingress-drops": ingress_drops,
     "ingress-tie": ingress_tie,
     "station-flows": station_flows,
+    "cells-mixed": cells_mixed,
+    "hysteresis-tie": hysteresis_tie,
+    "flood-drop-state": flood_drop_state,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
     "random-load": random_load,

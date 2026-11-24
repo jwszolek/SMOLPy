@@ -263,6 +263,34 @@ The switch is SMOL's own (ADR-0011, ADR-0013):
 
   So the run lengths and the UDP loss are not an independent check of 668. The burst tests, the response loss and the batch ratio are. If they point to other values, those are reported beside the scenario's, not put into it.
 
+*As built (2026-11-24):*
+- **Nothing changes without the new parameters.**
+    - The benchmark hashes of B1–B4 are unchanged on SimPy and on Rust, event counts included.
+    - Every earlier test passes. One validation message changed, for three units instead of two, and the `switch` line of format 5.
+- **The `switch` line** has −1, not 0, for no resume level, since a resume level of 0 is valid.
+- **The identities hold exactly,** every sample and the event count, on SimPy, Rust and ns-3:
+    - in frames, `resume = limit − 1` gives tail drop's run, only the drop time being new;
+    - `cell` equal to the only frame size gives the run that `frames` gives, with and without a resume level.
+- **The exact chain,** one port, 9 000 B frames, five seeds of 40 000 frames:
+
+    | ρ, limit, resume | Loss: chain / simulated | Mean run | Time in system (services) |
+    |---|---|---|---|
+    | 1.1, 8, 4 | 0.1193 / 0.1190 ± 0.0016 | 4.672 / 4.636 ± 0.022 | 5.030 / 5.048 ± 0.023 |
+    | 0.95, 10, 5 | 0.0340 / 0.0332 ± 0.0007 | 5.114 / 5.235 ± 0.055 | 4.456 / 4.436 ± 0.039 |
+
+    The run distribution agrees within three times the sampling error expected of that many runs. The audit also checks every decision: each drop state is entered at a refusal above the resume level and left at the release that reaches it.
+- **Bit for bit across engines.** `cells-mixed`, `hysteresis-tie` and `flood-drop-state` are bit-exact on SimPy, Rust and ns-3, event counts included on Rust. On ns-3, random IMIX and bursty traffic through cells with resume levels gives SimPy's run with the same seed.
+    - `cells-mixed`: mixed sizes in cells, both scopes with resume levels, PROFINET.
+    - `hysteresis-tie`: arrivals at the instant of the release that ends a drop state. There the take comes first, so the frame is admitted.
+    - `flood-drop-state`: flooding during egress and ingress drop states.
+- **The testbed** ([Execution backends](../backends.md#cells-and-a-resume-threshold), `benchmarks/results/2026-11-24-1006-simpy-rust-ns3-jaws-zbook-buffer-cells.json`). At 8 100 frames/s, 5 seeds of 30 s:
+    - mean runs of 6.23–6.28, with 0.5 % single-frame runs on SimPy, against 6.4–6.7 and none;
+    - the Pi's polls lost or retransmitted at 0.40–0.55 %, against 0.44 %, and none of the Waveshare's;
+    - UDP loss of 0.64–0.74 %, against 0.55–0.66 %;
+    - in the batch case, a ratio of 0.56–0.65, against 0.55; tail drop gives 0, and frames 0.29–0.37.
+- **The burst test** puts the model's held frames a little below the measured ones, by up to 72 cells: a burst can end in a drop state. 770 cells resuming at 698 fit the bursts better and lower the UDP loss to 0.69 % on SimPy, with the same runs. That is reported beside the scenario, which keeps 740 and 668.
+- **The `smolpy-engine-rs` floor** stays `>=1.13.0` until the release that carries this ADR; 1.13 refuses these scenarios by its capabilities. Raise it at that release.
+
 ### Steps
 
 1. **The model:**

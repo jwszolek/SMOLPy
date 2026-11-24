@@ -123,6 +123,9 @@ class _Interpreter:
                         mac_table=d.mac_table,  # type: ignore[arg-type]
                         buffer=d.buffer,
                         ingress_buffer=d.ingress_buffer,
+                        cell=d.cell,
+                        resume=d.resume,
+                        ingress_resume=d.ingress_resume,
                     )
                 elif isinstance(d, smol_ast.MqttBrokerDecl):
                     net.mqtt_broker(d.name, ip=d.ip)

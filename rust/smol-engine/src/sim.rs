@@ -121,49 +121,102 @@ impl Frame {
     }
 }
 
+/// What a switch buffer account counts a frame as (ADR-0013, ADR-0014).
+#[derive(Clone, Copy, PartialEq)]
+enum Unit {
+    Bytes,
+    Frames,
+    /// cells of this many bytes, a frame taking ceil(bytes / cell)
+    Cells(u64),
+}
+
 /// A switch buffer account (`_Account`): what it holds of the frames queued,
-/// in frame bytes or in frames, against its limit.
+/// in frame bytes, frames or cells, against its limit. With a resume level,
+/// a frame that does not fit puts it in the drop state if it holds more than
+/// that level, and it then refuses every frame until a release brings it to
+/// the level (ADR-0014). It counts its drop episodes, the runs of refusals
+/// with no admission between them, and its time in the drop state.
 #[derive(Clone, Copy)]
 struct Account {
     limit: u64,
-    frames: bool,
+    unit: Unit,
+    resume: Option<u64>,
     held: u64,
+    dropping: bool,
+    refused: bool,
+    episodes: u64,
+    since: u64,
+    drop_ns: u64,
 }
 
 impl Account {
-    fn new(limit: Option<Limit>) -> Option<Account> {
-        limit.map(|l| match l {
-            Limit::Bytes(b) => Account {
-                limit: b,
-                frames: false,
-                held: 0,
-            },
-            Limit::Frames(n) => Account {
-                limit: n,
-                frames: true,
-                held: 0,
-            },
+    fn new(limit: Option<Limit>, cell: Option<u64>, resume: Option<u64>) -> Option<Account> {
+        let (limit, unit) = match limit? {
+            Limit::Bytes(b) => (b, Unit::Bytes),
+            Limit::Frames(n) => (n, Unit::Frames),
+            Limit::Cells(n) => (
+                n,
+                Unit::Cells(cell.expect("a limit in cells has a cell size")),
+            ),
+        };
+        Some(Account {
+            limit,
+            unit,
+            resume,
+            held: 0,
+            dropping: false,
+            refused: false,
+            episodes: 0,
+            since: 0,
+            drop_ns: 0,
         })
     }
 
-    fn unit(&self, size: u64) -> u64 {
-        if self.frames {
-            1
-        } else {
-            size
+    fn units(&self, size: u64) -> u64 {
+        match self.unit {
+            Unit::Bytes => size,
+            Unit::Frames => 1,
+            Unit::Cells(cell) => size.div_ceil(cell),
         }
     }
 
     fn fits(&self, size: u64) -> bool {
-        self.held + self.unit(size) <= self.limit
+        self.held + self.units(size) <= self.limit
+    }
+
+    /// Decide a frame: false if it is dropped, by tail drop or the drop
+    /// state; a refusal that follows an admission starts an episode.
+    fn admit(&mut self, size: u64, now: u64) -> bool {
+        if self.fits(size) && !self.dropping {
+            self.refused = false;
+            return true;
+        }
+        if !self.refused {
+            self.refused = true;
+            self.episodes += 1;
+        }
+        if !self.dropping && self.resume.is_some_and(|r| self.held > r) {
+            self.dropping = true;
+            self.since = now;
+        }
+        false
     }
 
     fn charge(&mut self, size: u64) {
-        self.held += self.unit(size);
+        self.held += self.units(size);
     }
 
-    fn release(&mut self, size: u64) {
-        self.held -= self.unit(size);
+    fn release(&mut self, size: u64, now: u64) {
+        self.held -= self.units(size);
+        if self.dropping && self.resume.is_some_and(|r| self.held <= r) {
+            self.dropping = false;
+            self.drop_ns += now - self.since;
+        }
+    }
+
+    /// Its time in the drop state up to `now`.
+    fn drop_time_ns(&self, now: u64) -> u64 {
+        self.drop_ns + if self.dropping { now - self.since } else { 0 }
     }
 }
 
@@ -444,6 +497,10 @@ enum Sampled {
     SlaveUnanswered(u32),
     SlaveTimeouts(u32),
     SlaveSkipped(u32),
+    /// a switch's drop episodes, or its accounts' time in the drop state in
+    /// ms, by these channels' egress accounts or its ingress accounts
+    /// (ADR-0014): (channels, switch, ingress, time)
+    Episodes(Vec<u32>, u32, bool, bool),
 }
 
 struct Sampler {
@@ -550,10 +607,11 @@ impl Engine {
         let s = &mut self.stores[store as usize];
         let f = s.pop()?;
         if let Some(c) = s.accounted {
+            let now = self.now;
             let fr = &mut self.frames[f as usize];
             let size = fr.size;
             if let Some(egress) = &mut self.channels[c as usize].egress {
-                egress.release(size);
+                egress.release(size, now);
             }
             if fr.stored >= 0 {
                 let st = fr.stored as u32;
@@ -562,7 +620,7 @@ impl Engine {
                 entry.copies -= 1;
                 if entry.copies == 0 {
                     let (w, port) = (entry.switch, entry.port);
-                    self.switches[w as usize].ingress[port as usize].release(size);
+                    self.switches[w as usize].ingress[port as usize].release(size, now);
                     self.stored_free.push(st);
                 }
             }
@@ -605,10 +663,11 @@ impl Engine {
 
     /// Queue a frame on a channel; false if its egress account drops it.
     fn enqueue(&mut self, chan: u32, f: u32) -> bool {
+        let now = self.now;
         let ch = &mut self.channels[chan as usize];
         if let Some(egress) = &mut ch.egress {
             let size = self.frames[f as usize].size;
-            if !egress.fits(size) {
+            if !egress.admit(size, now) {
                 // tail drop: nothing is queued or scheduled
                 ch.dropped += 1;
                 self.release(f);
@@ -860,7 +919,7 @@ impl Engine {
             None
         } else {
             let port = fr.in_port as u32;
-            if !sw.ingress[port as usize].fits(fr.size) {
+            if !sw.ingress[port as usize].admit(fr.size, self.now) {
                 sw.ingress_dropped += 1; // tail drop: no egress port is looked at
                 self.release(f);
                 return;
@@ -1293,6 +1352,23 @@ impl Engine {
             }
             Sampled::SlaveTimeouts(s) => (Some(self.slaves[*s as usize].timeouts as f64), 0),
             Sampled::SlaveSkipped(s) => (Some(self.slaves[*s as usize].skipped as f64), 0),
+            Sampled::Episodes(chans, w, ingress, time) => {
+                let accounts: Vec<&Account> = if *ingress {
+                    self.switches[*w as usize].ingress.iter().collect()
+                } else {
+                    chans
+                        .iter()
+                        .filter_map(|c| self.channels[*c as usize].egress.as_ref())
+                        .collect()
+                };
+                let v = if *time {
+                    let ns: u128 = accounts.iter().map(|a| a.drop_time_ns(now) as u128).sum();
+                    tb::ratio_f64(ns, tb::NS_PER_MS)
+                } else {
+                    accounts.iter().map(|a| a.episodes).sum::<u64>() as f64
+                };
+                (Some(v), 0)
+            }
         };
         let s = &mut self.samplers[i as usize];
         s.last_t = now;
@@ -1491,7 +1567,12 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
     let strict = |i: usize| !matches!(sc.nodes[i].kind, NodeKind::Switch { fifo: true, .. });
     // only switches have buffer accounts; end stations never drop
     let egress = |i: usize| match sc.nodes[i].kind {
-        NodeKind::Switch { buffer, .. } => Account::new(buffer),
+        NodeKind::Switch {
+            buffer,
+            cell,
+            buffer_resume,
+            ..
+        } => Account::new(buffer, cell, buffer_resume),
         _ => None,
     };
     let accounted = |i: usize| {
@@ -1593,8 +1674,14 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
     let _ = tx_procs;
     // ingress accounts, one per port (ADR-0013)
     for (i, node) in sc.nodes.iter().enumerate() {
-        if let NodeKind::Switch { ingress, .. } = node.kind {
-            if let Some(account) = Account::new(ingress) {
+        if let NodeKind::Switch {
+            ingress,
+            cell,
+            ingress_resume,
+            ..
+        } = node.kind
+        {
+            if let Some(account) = Account::new(ingress, cell, ingress_resume) {
                 let sw = &mut e.switches[role[i]];
                 sw.ingress = vec![account; sw.out.len()];
             }
@@ -1933,6 +2020,24 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 Some(Sampled::Drops(chans, w, which, obs.metric == Metric::Drops))
             }
             Metric::FramesSent => out_of(&e).map(Sampled::FramesSent),
+            Metric::IngressDropEpisodesTotal
+            | Metric::EgressDropEpisodesTotal
+            | Metric::IngressDropTimeTotal
+            | Metric::EgressDropTimeTotal
+                if is_switch(target) =>
+            {
+                let w = role[target] as u32;
+                let chans = e.switches[w as usize].out.iter().map(|(_, c)| *c).collect();
+                let ingress = matches!(
+                    obs.metric,
+                    Metric::IngressDropEpisodesTotal | Metric::IngressDropTimeTotal
+                );
+                let time = matches!(
+                    obs.metric,
+                    Metric::IngressDropTimeTotal | Metric::EgressDropTimeTotal
+                );
+                Some(Sampled::Episodes(chans, w, ingress, time))
+            }
             Metric::FramesReceived if adapter => Some(Sampled::FramesReceived(role[target] as u32)),
             Metric::ModbusUnanswered if adapter => {
                 Some(Sampled::ModbusUnanswered(role[target] as u32))

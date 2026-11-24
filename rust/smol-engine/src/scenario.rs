@@ -1,7 +1,7 @@
 //! Reads Scenario IR JSON, format "smol-ir" version 2 (ADR-0007, ADR-0010),
 //! with the optional switch buffers of ADR-0011, the optional `outstanding`
-//! and `timeout_ms` of polls (ADR-0012), and the ingress accounts and limits
-//! in frames of ADR-0013.
+//! and `timeout_ms` of polls (ADR-0012), the ingress accounts and limits in
+//! frames of ADR-0013, and the cells and resume levels of ADR-0014.
 //!
 //! The scenario has already been validated by `smolpy.model.validate`; this
 //! reader is strict about structure (unknown fields, kinds and versions are
@@ -31,20 +31,27 @@ pub enum NodeKind {
         mac: String,
     },
     /// `buffer`: the egress limit of each port, `ingress` its ingress limit
-    /// (ADR-0011, ADR-0013); None is unbounded
+    /// (ADR-0011, ADR-0013); None is unbounded. `cell` is the cell size of
+    /// limits in cells, and each resume level is in its limit's unit
+    /// (ADR-0014).
     Switch {
         fifo: bool,
         topology: bool,
         buffer: Option<Limit>,
         ingress: Option<Limit>,
+        cell: Option<u64>,
+        buffer_resume: Option<u64>,
+        ingress_resume: Option<u64>,
     },
 }
 
-/// A switch buffer limit, in frame bytes or in frames (ADR-0013).
+/// A switch buffer limit, in frame bytes, frames or cells (ADR-0013,
+/// ADR-0014).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Limit {
     Bytes(u64),
     Frames(u64),
+    Cells(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -157,10 +164,14 @@ pub enum Metric {
     ModbusSkipped,
     IngressDropsTotal,
     EgressDropsTotal,
+    IngressDropEpisodesTotal,
+    EgressDropEpisodesTotal,
+    IngressDropTimeTotal,
+    EgressDropTimeTotal,
 }
 
 impl Metric {
-    pub const ALL: [(&'static str, Metric); 20] = [
+    pub const ALL: [(&'static str, Metric); 24] = [
         ("throughput", Metric::Throughput),
         ("latency", Metric::Latency),
         ("bytes_sent", Metric::BytesSent),
@@ -181,6 +192,16 @@ impl Metric {
         ("modbus_skipped", Metric::ModbusSkipped),
         ("ingress_drops_total", Metric::IngressDropsTotal),
         ("egress_drops_total", Metric::EgressDropsTotal),
+        (
+            "ingress_drop_episodes_total",
+            Metric::IngressDropEpisodesTotal,
+        ),
+        (
+            "egress_drop_episodes_total",
+            Metric::EgressDropEpisodesTotal,
+        ),
+        ("ingress_drop_time_total", Metric::IngressDropTimeTotal),
+        ("egress_drop_time_total", Metric::EgressDropTimeTotal),
     ];
 
     pub fn name(self) -> &'static str {
@@ -251,6 +272,10 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "modbus_skipped",
         "ingress_drops_total",
         "egress_drops_total",
+        "ingress_drop_episodes_total",
+        "egress_drop_episodes_total",
+        "ingress_drop_time_total",
+        "egress_drop_time_total",
     ],
     features: &[
         "imix",
@@ -261,6 +286,9 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "buffer_frames",
         "station_flows",
         "slave_metrics",
+        // ADR-0014
+        "buffer_cells",
+        "buffer_hysteresis",
     ],
     notes: &[],
 };
@@ -497,31 +525,60 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 Some("topology") => true,
                 Some(other) => return Err(format!("switch {name}: unknown mac_table {other:?}")),
             };
-            let mut limit = |bytes: &str, frames: &str| -> Res<Option<Limit>> {
-                let mut take = |field: &str| -> Res<Option<u64>> {
-                    match f.take_or(field) {
-                        None | Some(Value::Null) => Ok(None),
-                        Some(v) => v
-                            .as_u64()
-                            .filter(|b| *b > 0)
-                            .map(Some)
-                            .ok_or_else(|| format!("switch {name}: {field} {v}")),
-                    }
-                };
-                match (take(bytes)?, take(frames)?) {
-                    (Some(_), Some(_)) => Err(format!("switch {name}: {bytes} and {frames}")),
-                    (Some(b), None) => Ok(Some(Limit::Bytes(b))),
-                    (None, Some(n)) => Ok(Some(Limit::Frames(n))),
-                    (None, None) => Ok(None),
+            let mut take = |field: &str, zero: bool| -> Res<Option<u64>> {
+                match f.take_or(field) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(v) => v
+                        .as_u64()
+                        .filter(|b| zero || *b > 0)
+                        .map(Some)
+                        .ok_or_else(|| format!("switch {name}: {field} {v}")),
                 }
             };
-            let buffer = limit("buffer_bytes", "buffer_frames")?;
-            let ingress = limit("ingress_buffer_bytes", "ingress_buffer_frames")?;
+            let mut limit = |prefix: &str| -> Res<Option<Limit>> {
+                let units = [
+                    take(&format!("{prefix}_bytes"), false)?.map(Limit::Bytes),
+                    take(&format!("{prefix}_frames"), false)?.map(Limit::Frames),
+                    take(&format!("{prefix}_cells"), false)?.map(Limit::Cells),
+                ];
+                let mut given = units.into_iter().flatten();
+                match (given.next(), given.next()) {
+                    (Some(_), Some(_)) => Err(format!("switch {name}: {prefix} in two units")),
+                    (l, _) => Ok(l),
+                }
+            };
+            let buffer = limit("buffer")?;
+            let ingress = limit("ingress_buffer")?;
+            let cell = take("cell_bytes", false)?;
+            let buffer_resume = take("buffer_resume", true)?;
+            let ingress_resume = take("ingress_buffer_resume", true)?;
+            let cells = |l: Option<Limit>| matches!(l, Some(Limit::Cells(_)));
+            if (cells(buffer) || cells(ingress)) != cell.is_some() {
+                return Err(format!(
+                    "switch {name}: cell_bytes with limits in cells only"
+                ));
+            }
+            for (limit, resume, what) in [
+                (buffer, buffer_resume, "buffer_resume"),
+                (ingress, ingress_resume, "ingress_buffer_resume"),
+            ] {
+                let below = match (limit, resume) {
+                    (_, None) => true,
+                    (None, Some(_)) => false,
+                    (Some(Limit::Bytes(l) | Limit::Frames(l) | Limit::Cells(l)), Some(r)) => r < l,
+                };
+                if !below {
+                    return Err(format!("switch {name}: {what} needs a limit above it"));
+                }
+            }
             NodeKind::Switch {
                 fifo,
                 topology,
                 buffer,
                 ingress,
+                cell,
+                buffer_resume,
+                ingress_resume,
             }
         }
         "modbus_slave" => {
@@ -785,7 +842,28 @@ mod tests {
             "\"learning\", \"ingress_buffer_bytes\": 4000, \"ingress_buffer_frames\": 6",
         ))
         .unwrap_err()
-        .contains("ingress_buffer_bytes and ingress_buffer_frames"));
+        .contains("ingress_buffer in two units"));
+        let cells = parse(&B1.replace(
+            "\"learning\"",
+            "\"learning\", \"cell_bytes\": 128, \"ingress_buffer_cells\": 740, \"ingress_buffer_resume\": 668",
+        ))
+        .unwrap();
+        assert!(matches!(
+            cells.nodes[0].kind,
+            NodeKind::Switch {
+                ingress: Some(Limit::Cells(740)),
+                cell: Some(128),
+                ingress_resume: Some(668),
+                buffer_resume: None,
+                ..
+            }
+        ));
+        assert!(parse(&B1.replace(
+            "\"learning\"",
+            "\"learning\", \"buffer_frames\": 4, \"buffer_resume\": 4",
+        ))
+        .unwrap_err()
+        .contains("buffer_resume needs a limit above it"));
         assert!(
             parse(&B1.replace("\"learning\"", "\"learning\", \"buffer_bytes\": -1"))
                 .unwrap_err()

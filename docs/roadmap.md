@@ -251,6 +251,23 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
 - **Limits in cells,** and both units for one account.
 - **Limits per priority class.**
 
+## Buffer limits in cells, with a resume threshold ([ADR-0014](adr/0014-buffer-cells-and-hysteresis.md))
+
+**Status: done.** A switch limit can be in cells of `cell` bytes, and each account can have a resume level: once full, it drops every frame until it has drained to that level. On all three backends.
+
+1. **The scenario: done.** `cell`, `Cells(n)` / `<n>cells`, `resume` and `ingress_resume`, validated. Optional IR fields, so the IR stays version 2.
+2. **SimPy: done.** Cells, the drop state, drop episodes and drop time. One port with a resume level matches the exact chain on (frames queued, drop state).
+3. **Rust: done.** Bit for bit with SimPy.
+4. **ns-3: done.** Ethernet and PROFINET bit for bit with SimPy. `smol-ns3` format 5.
+5. **The testbed, calibrated: done.** `example_ingress_buffer.smol` with 740 cells resuming at 668, the burst tests and the batch case ([Execution backends](backends.md#cells-and-a-resume-threshold)).
+
+**Why.** Burst tests with 512 B and 64 B frames showed that the testbed switch counts 128 B cells, not frames. Its losses come in runs of 6.4–6.7 frames, never one, and take small frames with them, which tail drop cannot do.
+
+**Still open:**
+- **Whether the LS108GP also limits its egress port, or shares a pool:** a testbed run with two Pis sending to the laptop at once is planned. Then a shared pool with dynamic thresholds, if the run shows one.
+- **Per-port metrics,** and a per-run metric: the run distribution now needs an audit of SimPy.
+- **A per-frame header in cells,** and limits per priority class.
+
 ## Candidates (not yet scheduled)
 
 - PROFINET IRT / TSN scheduling.

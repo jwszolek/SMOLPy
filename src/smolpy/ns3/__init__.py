@@ -53,8 +53,9 @@ if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
 
 # 2: switch buffers (ADR-0011); 3: one request in flight, TCP (ADR-0012);
-# 4: ingress accounts, limits in frames, the Modbus counts of a slave (ADR-0013)
-FORMAT_VERSION = 4
+# 4: ingress accounts, limits in frames, the Modbus counts of a slave (ADR-0013);
+# 5: cells, resume levels, drop episodes and drop time (ADR-0014)
+FORMAT_VERSION = 5
 UDP_IP_BYTES = 8 + 20
 ETHERNET_BYTES = 14 + 4  # header and FCS
 PROGRAM = "smol-ns3"
@@ -261,11 +262,12 @@ def _sends(
             now += tb.draw_ns(mean_ns * burst_len * rng.uniform(0.3, 1.2))
 
 
-def _limit(limit: tuple[int, str] | None) -> str:
-    """A switch limit of the format: its value and unit, b or f; 0 for none."""
-    if limit is None:
-        return "0 b"
-    return f"{limit[0]} {'f' if limit[1] == 'frames' else 'b'}"
+def _limit(limit: tuple[int, str] | None, resume: int | None) -> str:
+    """A switch limit of the format: its value, its unit, b, f or c, and its
+    resume level; 0 for no limit and -1 for no resume level."""
+    unit = "b" if limit is None else limit[1][0]
+    level = -1 if resume is None else resume
+    return f"{0 if limit is None else limit[0]} {unit} {level}"
 
 
 def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str, list[_Sampler]]:
@@ -282,7 +284,10 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
     ]
     for n in scenario.nodes:
         if isinstance(n, model.SwitchNode):
-            lines.append(f"switch {_limit(n.egress_limit)} {_limit(n.ingress_limit)}")
+            lines.append(
+                f"switch {n.cell_bytes or 1} {_limit(n.egress_limit, n.buffer_resume)}"
+                f" {_limit(n.ingress_limit, n.ingress_buffer_resume)}"
+            )
         else:
             lines.append(f"adapter {n.mac} {n.ip}")  # a station, with IPv4
 
@@ -436,6 +441,14 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
         elif metric in ("ingress_drops_total", "egress_drops_total"):
             ok = isinstance(target, model.SwitchNode)
             metric = metric.removesuffix("_total")
+        elif metric in (
+            "ingress_drop_episodes_total",
+            "egress_drop_episodes_total",
+            "ingress_drop_time_total",
+            "egress_drop_time_total",
+        ):
+            ok = isinstance(target, model.SwitchNode)
+            metric = metric.removesuffix("_total").replace("drop_episodes", "episodes")
         elif metric == "utilization":
             ok = bool(into.get(target.name))
             devices = " ".join(str(d) for d, _ in into.get(target.name, []))
@@ -492,6 +505,8 @@ def _metrics(
                 "drops_total",
                 "ingress_drops_total",
                 "egress_drops_total",
+                "ingress_drop_episodes_total",
+                "egress_drop_episodes_total",
                 "frames_sent",
                 "frames_received",
                 "modbus_timeouts",
@@ -500,6 +515,8 @@ def _metrics(
                 out.append((t_ms, float(a)))
             elif s.metric == "drops":
                 out.append((t_ms, float(a - last)))
+            elif s.metric in ("ingress_drop_time_total", "egress_drop_time_total"):
+                out.append((t_ms, a / tb.NS_PER_MS))
             elif s.metric == "modbus_unanswered":
                 out.append((t_ms, float(a - b)))
             elif s.metric == "utilization":

@@ -79,10 +79,10 @@ def _network() -> Network:
 def test_lowering() -> None:
     text, samplers = ns3.lower(_network().to_scenario(duration=10))
     assert text.splitlines() == [
-        "smol-ns3 4",
+        "smol-ns3 5",
         "duration 10000000",
         "tcp 200000000 200000000 40000000 1000000000",  # Linux's TCP (ADR-0012)
-        "switch 0 b 0 b",  # no egress or ingress limit
+        "switch 1 0 b -1 0 b -1",  # no limits and no resume levels
         "adapter 02:00:0a:00:00:01 10.0.0.1",
         "adapter 02:00:0a:00:00:02 10.0.0.2",
         "adapter 02:00:0a:00:00:03 10.0.0.3",

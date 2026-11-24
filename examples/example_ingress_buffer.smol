@@ -1,5 +1,6 @@
-# Ingress buffer accounting (ADR-0013): the port that congests the switch
-# loses its frames, and another port's frames to the same place do not.
+# Ingress buffer accounting (ADR-0013), in cells with a resume threshold
+# (ADR-0014): the port that congests the switch loses its frames, in runs,
+# and another port's frames to the same place do not.
 #
 # The testbed of ADR-0011 to ADR-0013, as measured: a TP-Link LS108GP. A
 # Raspberry Pi on a 1 Gb/s port sends Poisson UDP traffic of 1518 B frames to
@@ -9,15 +10,23 @@
 # port is polled every 20 ms. Both servers' responses are small, and both
 # queue on the laptop's port behind the UDP stream.
 #
-# The switch holds 60 frames per ingress port, whatever their size: the Pi's
-# port fills, and drops its UDP frames and its responses alike, while the
-# Waveshare's responses always fit. On the hardware 0.44 % of the Pi's polls
-# were retransmitted, none of the Waveshare's, and 0.66 % of the UDP frames
-# were lost.
+# The switch holds 740 cells of 128 B per ingress port, a frame taking
+# ceil(bytes / 128) of them: 12 for a UDP frame, 1 for a Modbus response.
+# When a frame does not fit, the port drops every frame arriving on it until
+# its occupancy is back at 668 cells, 6 full frames lower: so the Pi's UDP
+# frames are lost in runs of about 6, and its small responses with them,
+# while the Waveshare's port never fills. On the hardware 0.44 % of the Pi's
+# polls were retransmitted, none of the Waveshare's, 0.55-0.66 % of the UDP
+# frames were lost, in runs of 6.4-6.7 and never alone.
+#
+# ADR-0013's model, ingress_buffer=60frames, gives the same numbers for these
+# 1518 B frames, but holds 60 frames of any size: three times too few 512 B
+# frames, and twelve times too few 64 B ones, against the burst tests.
 #
 # The Modbus metrics observed on each slave count the polls of that slave.
-# Replace ingress_buffer=60frames with buffer=91080, one egress buffer of 60
-# full frames, to see the Waveshare lose responses too.
+# Replace the switch's limits with buffer=91080, one egress buffer of 60 full
+# frames, to see the Waveshare lose responses too. The runs are
+# ingress_drops_total / ingress_drop_episodes_total.
 #
 # It runs headless, so on every backend: --backend rust, or --backend ns3 to
 # run the polls over ns-3's TCP, where a lost response is retransmitted
@@ -25,7 +34,8 @@
 
 network "ingress" {
 
-    switch       sw        ports=3 ingress_buffer=60frames
+    switch       sw        ports=3 cell=128 ingress_buffer=740cells ingress_resume=668cells
+    # ADR-0013: switch sw ports=3 ingress_buffer=60frames
     modbus_slave pi        ip=10.0.0.1 unit_id=1
     modbus_slave waveshare ip=10.0.0.3 unit_id=1
     adapter      laptop    ip=10.0.0.2
@@ -43,8 +53,9 @@ network "ingress" {
     observe modbus_timeouts     on pi        every=1000
     observe modbus_timeouts     on waveshare every=1000
     observe frames_sent         on pi        every=1000
-    observe ingress_drops_total on sw        every=1000
-    observe egress_drops_total  on sw        every=1000
+    observe ingress_drops_total         on sw every=1000
+    observe ingress_drop_episodes_total on sw every=1000
+    observe ingress_drop_time_total     on sw every=1000
 
     simulate duration=30000 mode=headless
 }

@@ -211,3 +211,54 @@ def test_ingress_run_and_summary(tmp_path) -> None:
     assert by_model["egress"]["ingress_drops"] == 0 < by_model["egress"]["egress_drops"]
     table = ingress.summarize_ingress(out)
     assert table.count("| simpy |") == 2
+
+
+def test_cells_scenario_is_the_testbed_in_cells() -> None:
+    """T4 (ADR-0014): T3 with 740 cells of 128 B per ingress port resuming
+    at 668, beside tail drop in cells and 60 frames."""
+    from benchmarks import cells
+    from smolpy.model import Flow, SwitchNode
+
+    sc = cells.scenario("cells", duration_ms=100)
+    (sw,) = [n for n in sc.nodes if isinstance(n, SwitchNode)]
+    assert (sw.cell_bytes, sw.ingress_limit, sw.ingress_buffer_resume) == (128, (740, "cells"), 668)
+    (flow,) = [t for t in sc.traffic if isinstance(t, Flow)]
+    assert (flow.source, flow.rate, flow.pattern) == ("pi", 8_100, "poisson")
+    batch = cells.scenario("frames", rate=7_500, duration_ms=100, batch=8)
+    (flow,) = [t for t in batch.traffic if isinstance(t, Flow)]
+    assert flow.pattern == "batch" and flow.batch.param == 8
+
+
+def test_a_burst_fills_740_cells(tmp_path) -> None:
+    """A burst of 64 B frames, one cell each, at 239 000 frames/s for 4 000
+    frames: the port holds 740 cells, the frame in transmission and what
+    drained, about 2 480."""
+    from benchmarks import cells
+
+    tail = cells.burst("cells-tail", 64, 4_000, 239_454)
+    assert 740 + 2_400 < tail < 740 + 2_560
+    assert cells.burst("frames", 64, 4_000, 239_454) < tail - 600  # 60 frames hold far less
+    assert cells.burst("cells", 64, 40, 239_454) == 40  # under the limit nothing is lost
+
+
+def test_cells_run_and_summary(tmp_path) -> None:
+    from benchmarks import cells
+
+    out = cells.run_cells(
+        duration_ms=2_000,
+        engines=["simpy"],
+        out=tmp_path / "t.json",
+        seeds=(1,),
+        models=("cells", "cells-tail"),
+        data=tmp_path / "missing",  # no burst CSVs here
+    )
+    doc = json.loads(out.read_text())
+    assert doc["format"] == "smolpy-cells" and len(doc["runs"]) == 2 * 2
+    for r in doc["runs"]:
+        s = r["summary"]
+        assert s["waveshare"]["affected"] == 0  # its port never fills
+        assert s["episodes"] > 0 and s["run_lengths"]
+        if r["model"] == "cells-tail":
+            assert s["drop_time_ms"] == 0
+    table = cells.summarize_cells(out)
+    assert table.count("| simpy |") == 4

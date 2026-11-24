@@ -84,19 +84,26 @@ On the wire it is preceded by a preamble and SFD and followed by an inter-frame 
 - **`qos="fifo"`** on a switch puts every frame into one class on that switch's egress queues. All other nodes, including end stations, use the 8 classes.
 - **Queues are unbounded unless a switch sets `buffer` or `ingress_buffer`** ([ADR-0011](adr/0011-bounded-switch-buffers.md), [ADR-0013](adr/0013-ingress-buffer-accounting.md)). Without them no frame is ever dropped for lack of buffer.
 
-**Switch buffer accounts.** A switch can have two limits, each applying to each of its ports and each in bytes or in frames:
+**Switch buffer accounts.** A switch can have two limits, each applying to each of its ports and each in bytes, in frames or in cells:
 - **`buffer`, the egress account of a port:** the frames queued on that port.
 - **`ingress_buffer`, the ingress account of a port:** the frames that entered the switch on that port and are still queued on any of its ports.
 
 The rules:
 - **What an account holds.** A frame is queued from its admission until its port's transmitter takes it: these are the frames `queue_depth` counts. The frame in transmission is in neither account.
-- **Units.** In bytes, a frame counts its frame bytes ([§2](#2-frames)); in frames, a frame of any size counts 1.
-- **Room.** An account with limit `L` has room for a frame of `s` bytes if `q + s ≤ L` in bytes, with `q` the bytes it holds, or if `n + 1 ≤ L` in frames, with `n` the frames it holds.
+- **Units.** In bytes, a frame counts its frame bytes ([§2](#2-frames)); in frames, a frame of any size counts 1; in cells of the switch's `cell` bytes, a frame counts ⌈frame bytes / `cell`⌉ ([ADR-0014](adr/0014-buffer-cells-and-hysteresis.md)). At `cell=128`, 64 B, 512 B and 1 518 B frames count 1, 4 and 12.
+- **Room.** An account with limit `L` holding `q` has room for a frame that counts `u` if `q + u ≤ L`.
 - **Admission, at the instant the switch forwards a frame ([§4](#4-switches)):**
     1. **Ingress check.** If the frame's ingress port's account has no room, the frame is dropped, as one ingress drop. No egress account is looked at.
     2. **Egress check.** Each copy is queued if its egress port's account has room, and is otherwise dropped, as one egress drop. A unicast frame is one copy, and a flooded frame has one per other port, in port order.
     3. **Charge.** If at least one copy was queued, the ingress account is charged once for the frame.
 - **Tail drop.** A dropped frame or copy is never queued, displaces nothing and schedules nothing.
+- **The drop state** ([ADR-0014](adr/0014-buffer-cells-and-hysteresis.md)). An account with a resume level `R` (`resume`, `ingress_resume`), in its limit's unit and below the limit:
+    - **enters** the drop state when it refuses a frame for lack of room while it holds more than `R`;
+    - **in the drop state refuses every frame it decides,** whatever its size, even one that fits;
+    - **leaves** it at the release that brings what it holds to `R` or below.
+
+  Without a resume level an account never enters the drop state, which is tail drop. In frames, `R = L − 1` is tail drop too: the account refuses only when full and leaves at the next release.
+- **Episodes.** A drop episode of an account is a maximal run of consecutive refusals among the frames it decides, with no admission between them. With a resume level it is one drop state; under tail drop, one run of refusals.
 - **Release.** When a transmitter takes a copy, the copy leaves its egress account. When it takes the frame's last queued copy, the frame leaves its ingress account, at the same instant.
 - **A flooded frame** counts once on its ingress port while any of its copies is queued, and each copy counts on its own egress port.
 - **Ports between switches.** A frame from another switch is accounted on the inter-switch port it arrived on. The upstream switch released it when it took it onto that link.
@@ -106,9 +113,11 @@ The rules:
 - **Validation.**
     - A limit in bytes is a whole number of bytes, at least 1 522 B (one maximum frame with a tag) and at least the largest frame of the scenario.
     - A limit in frames is a whole number of at least 1.
-    - An account has one unit: bytes or frames.
+    - A limit in cells is a whole number of at least the cells of the largest frame of the scenario, and needs `cell`, a whole number of bytes of at least 1; `cell` without a limit in cells is an error.
+    - An account has one unit: bytes, frames or cells.
+    - A resume level needs its scope's limit, and is a whole number from 0 to less than it.
 
-*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`; bounded queues in `test_buffers.py`: `test_a_frame_is_dropped_exactly_when_it_would_exceed_the_buffer`, `test_the_queue_never_holds_more_than_its_buffer`, `test_queueing_delay_is_bounded_by_the_buffer`, `test_a_buffer_that_is_never_full_changes_nothing`, `test_one_port_is_an_md1k_queue`; ingress accounts and limits in frames in `test_ingress.py`: `test_a_frame_is_dropped_exactly_when_its_ingress_account_is_full`, `test_a_frame_limit_counts_a_small_frame_as_a_large_one`, `test_the_account_is_released_when_the_transmitter_takes_the_frame`, `test_a_flooded_frame_is_held_once_until_its_last_copy_is_taken`, `test_one_ingress_port_is_its_egress_port`, `test_an_ingress_limit_isolates_a_light_source`, `test_a_frame_limit_is_an_mg1k_queue`.*
+*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`; bounded queues in `test_buffers.py`: `test_a_frame_is_dropped_exactly_when_it_would_exceed_the_buffer`, `test_the_queue_never_holds_more_than_its_buffer`, `test_queueing_delay_is_bounded_by_the_buffer`, `test_a_buffer_that_is_never_full_changes_nothing`, `test_one_port_is_an_md1k_queue`; ingress accounts and limits in frames in `test_ingress.py`: `test_a_frame_is_dropped_exactly_when_its_ingress_account_is_full`, `test_a_frame_limit_counts_a_small_frame_as_a_large_one`, `test_the_account_is_released_when_the_transmitter_takes_the_frame`, `test_a_flooded_frame_is_held_once_until_its_last_copy_is_taken`, `test_one_ingress_port_is_its_egress_port`, `test_an_ingress_limit_isolates_a_light_source`, `test_a_frame_limit_is_an_mg1k_queue`; cells and the drop state in `test_hysteresis.py`: `test_a_frame_takes_its_cells_rounded_up`, `test_the_drop_state_follows_its_rules`, `test_an_arrival_at_the_release_that_ends_the_drop_state_is_admitted`, `test_in_frames_a_resume_level_one_below_the_limit_is_tail_drop`, `test_cells_of_the_only_frame_size_are_frames`, `test_a_port_with_hysteresis_is_the_exact_chain`.*
 
 ## 4. Switches
 
@@ -225,6 +234,10 @@ The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost se
 | `drops_total` | the same, so far | frames |
 | `ingress_drops_total` | frames the switch's ingress accounts dropped so far | frames |
 | `egress_drops_total` | frames and copies the switch's egress accounts dropped so far | frames |
+| `ingress_drop_episodes_total` | drop episodes of the switch's ingress accounts so far ([§3](#3-links-and-egress-queues)) | episodes |
+| `egress_drop_episodes_total` | drop episodes of its egress accounts so far | episodes |
+| `ingress_drop_time_total` | time its ingress accounts have spent in the drop state so far, summed over its ports, up to the sample; 0 without resume levels | ms |
+| `egress_drop_time_total` | the same, for its egress accounts | ms |
 | `frames_sent` | frames whose transmission on the end station's link has completed so far | frames |
 | `frames_received` | frames the adapter accepted so far | frames |
 | `modbus_unanswered` | Modbus requests the adapter's polls have sent so far, less the responses it has accepted so far: lost polls plus polls in flight. With `outstanding=1`, requests that timed out plus those outstanding. | polls |
@@ -244,7 +257,9 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
 - **`utilization`:** `wire_bits × 10⁵ / (Σ speed × W)` %, where `speed` is in Mb/s.
 
 **Frame bytes, not wire bytes.** The byte metrics count frames, header to FCS, without the preamble, SFD and gap, as switch and NIC counters do. So a saturated 100 Mb/s link carrying 64 B frames shows 76.2 Mb/s of `throughput` and 100 % `utilization`.
-- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`, `drops`, `drops_total`, `ingress_drops_total`, `egress_drops_total`, `frames_sent`, `frames_received`, `modbus_unanswered`, `modbus_timeouts`, `modbus_skipped`) as they are.
+- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`, `drops`, `drops_total`, `ingress_drops_total`, `egress_drops_total`, `ingress_drop_episodes_total`, `egress_drop_episodes_total`, `frames_sent`, `frames_received`, `modbus_unanswered`, `modbus_timeouts`, `modbus_skipped`) as they are.
+- **Drop time:** `ns / 10⁶` ms, rounded once.
+- **The mean drop run** of a scope is its drops over its episodes, e.g. `ingress_drops_total / ingress_drop_episodes_total`.
 - **Polls with one request in flight.** For an adapter whose polls all have `outstanding=1`, `modbus_unanswered` is `modbus_timeouts` plus its pairs with a request outstanding, and its poll instants so far are its requests sent plus `modbus_skipped`.
 - **Loss of a flow** `a → b`, when `a` sends nothing else: `frames_sent:a − frames_received:b` is the frames dropped plus the frames in flight, which are at most the buffers on the path and a frame per link.
 
@@ -261,6 +276,7 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
     - This holds on an idle port too: its transmitter takes a frame after the events already scheduled for the instant, so it takes the highest-priority frame queued by then.
 - **A poll with one request in flight** at the instant its previous request completes, by a response or a timeout, skips that instant, whichever event comes first. A response arriving at exactly its timeout is late, whichever comes first ([§6](#6-traffic-sources)). Neither rule depends on the order of events.
 - **Admissions to a switch's accounts** at the same instant are decided in the order the switch forwards the frames, each against what the accounts hold at that moment ([§3](#3-links-and-egress-queues)). Copies of a flooded frame are decided in port order. A frame the transmitter has taken no longer counts, in its egress account or, if it was its last copy, in its ingress account.
+- **The drop state** is part of that moment's state: a frame decided before the release that ends a drop state is refused, and one decided after it is admitted if it fits.
 
 **Start-up order** decides the scheduling order of the first events:
 - link transmitters are started first, in link order, a then b direction;
@@ -285,3 +301,4 @@ Every disagreement between this page and the intended model is listed here, with
 | 7 | Queues were unbounded | No frame was ever dropped, so at and above saturation delay grew without limit, where a real switch caps it and drops frames. A testbed measured a capped RTT and 0.09 % loss at ρ = 0.996, where the model predicted a p99 of 79 ms. | resolved in ADR-0011: a switch's `buffer` bounds its egress queues, with tail drop |
 | 8 | Buffers were one egress limit in bytes | A testbed switch dropped the frames of the port that congested it, small ones as often as large ones, and none of another port's frames to the same egress port. One egress limit in bytes cannot do either. | resolved in ADR-0013: ingress accounts per port, and limits in frames |
 | 9 | Only adapters sent flows | A host that is a traffic source and a Modbus server on one port needed two nodes on two links, which puts its responses on their own ingress port. | resolved in ADR-0013: flows between any two end stations |
+| 10 | Limits counted frames, and dropped only what did not fit | The testbed switch holds about 740 small frames, 190 of 512 B and 60 of 1 518 B: 128 B cells. Its losses come in runs of 6.4–6.7 frames, never one, and take small frames with them, which tail drop in cells cannot do. | resolved in ADR-0014: limits in cells, and a resume level |

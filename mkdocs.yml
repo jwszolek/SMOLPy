@@ -56,6 +56,7 @@ nav:
       - ADR-0011 Bounded Switch Buffers: adr/0011-bounded-switch-buffers.md
       - ADR-0012 One Modbus Request in Flight: adr/0012-modbus-one-request-in-flight.md
       - ADR-0013 Ingress Buffer Accounting: adr/0013-ingress-buffer-accounting.md
+      - ADR-0014 Buffer Cells and Hysteresis: adr/0014-buffer-cells-and-hysteresis.md
 
 markdown_extensions:
   - admonition
