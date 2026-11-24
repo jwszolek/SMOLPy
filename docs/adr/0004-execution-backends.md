@@ -118,7 +118,7 @@ smolpy backends                             # list backends and their capabiliti
 |---|---|
 | `adapter`, `mqtt_broker`, `modbus_slave` | Node with Internet stack (IPv4 address from `ip`) |
 | `profinet_device`, `controls` | *Added 2026-11-16:* a node whose device sends and receives PROFINET RT frames on layer 2; see "PROFINET RT on ns-3" below |
-| `switch` (store-and-forward) | ~~Node with a learning bridge over one device per port~~ *As built:* a node with one SMOL Ethernet device per port and SMOL's switch, which learns, floods unknown destinations and drops hairpins. ns-3's `BridgeNetDevice` floods a hairpin instead of dropping it. |
+| `switch` (store-and-forward) | ~~Node with a learning bridge over one device per port~~ *As built:* a node with one SMOL Ethernet device per port and SMOL's switch, which learns, floods unknown destinations and drops hairpins. ns-3's `BridgeNetDevice` floods a hairpin instead of dropping it. *Amended by ADR-0013:* the switch keeps an ingress account per port, which its devices' egress queues release, and its limits are in bytes or frames. |
 | `switch mode=cut-through` | **unsupported** — capability error |
 | `hub` | Shared CSMA channel *(hubs and `collision_rate` were later removed; see [Model Semantics](../model-semantics.md#open-issues), open issue 3)* |
 | `link speed= length=` | *Amended 2026-11-16: SMOL's own full-duplex Ethernet device and channel, not CSMA; see "Link model on ns-3" below.* Device data rate = `speed`; channel delay = `length / 2·10⁸ m/s` (same propagation constant as `core/link.py`). *Since ADR-0010:* inter-frame gap = the time of 20 B at `speed` (preamble, SFD and gap, which CSMA does not model otherwise); CSMA adds the Ethernet header and FCS itself. *In ns-3.49 the gap is not an attribute: `Attach()` sets 12 B, so the generator calls `CsmaNetDevice::SetInterframeGap()` on each device after installing it.* |
@@ -221,7 +221,7 @@ docker run --rm -v "$PWD:/work" -w /work ghcr.io/jwszolek/smolpy:latest-ns3 run 
 ns-3.49's CSMA is a shared bus: the two ends of a link wait for each other, and a busy link backs off. SMOLPy's links are full duplex. With CSMA, ns-3 would differ from the other engines because of the link model, not because of the TCP/IP stack it is there to bring.
 
 - **Decision.** The ns-3 backend uses SMOL's own Ethernet device and channel, from the SMOL C++ module.
-    - The device is full duplex, with one egress queue per port. It is unbounded, or, on a switch with `buffer`, bounded with tail drop (*amended by [ADR-0011](0011-bounded-switch-buffers.md), 2026-11-23*). An idle port takes a queued frame after the events already scheduled for that instant, as the reference engine does; the `smol-ns3` line format is version 2, and version 3 since [ADR-0012](0012-modbus-one-request-in-flight.md).
+    - The device is full duplex, with one egress queue per port. It is unbounded, or, on a switch with `buffer`, bounded with tail drop (*amended by [ADR-0011](0011-bounded-switch-buffers.md), 2026-11-23*). An idle port takes a queued frame after the events already scheduled for that instant, as the reference engine does; the `smol-ns3` line format is version 2, version 3 since [ADR-0012](0012-modbus-one-request-in-flight.md), and version 4 since [ADR-0013](0013-ingress-buffer-accounting.md).
     - A frame is its IP packet plus 18 B, at least 64 B.
     - It occupies the wire for preamble, SFD and frame, and the next frame waits for the 12 B gap (ADR-0010).
     - Times are rounded as in Model Semantics §1.

@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING
 
 import networkx as nx
 
-from smolpy.core.adapter import Adapter
+from smolpy.core.adapter import Adapter, Station
 from smolpy.core.link import Link
 from smolpy.core.node import Node
 from smolpy.core.observation import MetricName, Observation
-from smolpy.ethernet.switch import MacTableMode, Switch, SwitchMode, SwitchQoS
+from smolpy.ethernet.switch import Limit, MacTableMode, Switch, SwitchMode, SwitchQoS
 from smolpy.modbus.slave import ModbusSlave
 from smolpy.mqtt.broker import MQTTBroker
 from smolpy.profinet.device import ProfinetDevice
@@ -148,9 +148,18 @@ class Network:
         mode: SwitchMode = "store-and-forward",
         qos: SwitchQoS = "strict",
         mac_table: MacTableMode = "learning",
-        buffer: int | None = None,
+        buffer: Limit | None = None,
+        ingress_buffer: Limit | None = None,
     ) -> Switch:
-        node = Switch(name, ports=ports, mode=mode, qos=qos, mac_table=mac_table, buffer=buffer)
+        node = Switch(
+            name,
+            ports=ports,
+            mode=mode,
+            qos=qos,
+            mac_table=mac_table,
+            buffer=buffer,
+            ingress_buffer=ingress_buffer,
+        )
         self._register(node)
         return node
 
@@ -250,19 +259,7 @@ class Network:
                     )
                     for pn in node.profinet_specs
                 )
-                traffic.extend(
-                    model.Flow(
-                        node.name,
-                        t.destination.name,
-                        t.rate,
-                        t.size,
-                        t.pattern,
-                        t.delay_ms,
-                        t.batch,
-                        t.priority,
-                    )
-                    for t in node.traffic_specs
-                )
+                traffic.extend(node._flows())
                 traffic.extend(
                     model.Publish(
                         node.name,
@@ -293,6 +290,9 @@ class Network:
                     model.Route(node.name, topic, tuple(a.name for a in subscribers))
                     for topic, subscribers in node._routes.items()
                 )
+                traffic.extend(node._flows())
+            elif isinstance(node, Station):  # a Modbus slave or PROFINET device
+                traffic.extend(node._flows())
 
         return model.Scenario(
             name=self.name,

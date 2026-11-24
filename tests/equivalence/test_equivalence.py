@@ -84,7 +84,7 @@ def test_over_tcp(name: str, backend: str, record_property) -> None:
     scenario = _supported(DETERMINISTIC[name](), backend)
     candidate = harness.run_once(scenario, backend)
     reference = _reference_run(name)
-    lossy = any(getattr(n, "buffer_bytes", None) is not None for n in scenario.nodes)
+    lossy = any(getattr(n, "bounded", False) for n in scenario.nodes)  # any buffer limit
     mismatches = harness.compare_sampling(candidate, reference, lossy)
     assert not mismatches, "\n".join(map(str, mismatches))
     for key, (want, got) in harness.mean_differences(candidate, reference).items():

@@ -172,3 +172,42 @@ def test_closed_loop_run_and_summary(tmp_path) -> None:
     table = closed_loop.summarize_closed_loop(out)
     assert "Timeout: none." in table and "Timeout: 1000 ms." in table
     assert table.count("| simpy |") == 2
+
+
+def test_ingress_scenario_is_the_testbed_with_one_pi() -> None:
+    """T3 (ADR-0013): the Pi is one Modbus slave that also sends the UDP
+    stream; rho = 0.997 is the testbed's 8 100 frames/s, to 0.04 %."""
+    from benchmarks import ingress
+    from smolpy.model import Flow, Poll, SwitchNode
+
+    sc = ingress.scenario(0.997, "ingress", 100)
+    (flow,) = [t for t in sc.traffic if isinstance(t, Flow)]
+    assert flow.source == "pi" and abs(flow.rate - 8_100) < 4
+    polls = {
+        t.slave: (t.rate, t.outstanding, t.timeout_ms) for t in sc.traffic if isinstance(t, Poll)
+    }
+    assert polls == {"pi": (100, 1, 1_000), "waveshare": (50, 1, 1_000)}
+    (sw,) = [n for n in sc.nodes if isinstance(n, SwitchNode)]
+    assert sw.ingress_limit == (60, "frames") and sw.egress_limit is None
+    (sw,) = [n for n in ingress.scenario(0.997, "egress", 100).nodes if isinstance(n, SwitchNode)]
+    assert sw.egress_limit == (91_080, "bytes") and sw.ingress_limit is None
+
+
+def test_ingress_run_and_summary(tmp_path) -> None:
+    from benchmarks import ingress
+
+    out = ingress.run_ingress(
+        [1.02], duration_ms=2_000, engines=["simpy"], out=tmp_path / "t.json", seeds=(1,)
+    )
+    doc = json.loads(out.read_text())
+    assert doc["format"] == "smolpy-ingress" and len(doc["runs"]) == 2
+    by_model = {r["model"]: r["summary"] for r in doc["runs"]}
+    for s in by_model.values():
+        assert s["pi"]["sent"] + s["pi"]["skipped"] == 199  # 10, 20, ... 1 990 ms
+        assert s["waveshare"]["sent"] + s["waveshare"]["skipped"] == 99
+    # with ingress accounts the Waveshare's port never fills
+    assert by_model["ingress"]["waveshare"]["affected"] == 0
+    assert by_model["ingress"]["egress_drops"] == 0 < by_model["ingress"]["ingress_drops"]
+    assert by_model["egress"]["ingress_drops"] == 0 < by_model["egress"]["egress_drops"]
+    table = ingress.summarize_ingress(out)
+    assert table.count("| simpy |") == 2

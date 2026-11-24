@@ -79,9 +79,10 @@ BRIDGES = (SwitchNode,)
 METRIC_TARGETS: dict[str, tuple[type, ...] | None] = {
     "throughput": (AdapterNode,),
     "latency": (AdapterNode,),
-    "bytes_sent": (AdapterNode,),
+    "bytes_sent": ENDPOINTS,  # any end station since ADR-0013
     "bytes_received": (AdapterNode,),
-    "modbus_latency": (AdapterNode,),
+    # Modbus metrics on a master, or on a slave over its polls (ADR-0013)
+    "modbus_latency": (AdapterNode, ModbusSlaveNode),
     "queue_depth": (SwitchNode,),
     "broker_queue": (MqttBrokerNode,),
     "pn_latency": (AdapterNode, ProfinetDeviceNode),
@@ -91,12 +92,26 @@ METRIC_TARGETS: dict[str, tuple[type, ...] | None] = {
     # ADR-0011: loss
     "drops": (SwitchNode,),
     "drops_total": (SwitchNode,),
-    "frames_sent": (AdapterNode,),
+    "frames_sent": ENDPOINTS,
     "frames_received": (AdapterNode,),
-    "modbus_unanswered": (AdapterNode,),
+    "modbus_unanswered": (AdapterNode, ModbusSlaveNode),
     # ADR-0012: one Modbus request in flight
-    "modbus_timeouts": (AdapterNode,),
-    "modbus_skipped": (AdapterNode,),
+    "modbus_timeouts": (AdapterNode, ModbusSlaveNode),
+    "modbus_skipped": (AdapterNode, ModbusSlaveNode),
+    # ADR-0013: drops by account
+    "ingress_drops_total": (SwitchNode,),
+    "egress_drops_total": (SwitchNode,),
+}
+
+# Metrics that a station other than an adapter carries only since ADR-0013,
+# by the capability feature an engine needs for them there.
+STATION_METRIC_FEATURES = {
+    "frames_sent": "station_flows",
+    "bytes_sent": "station_flows",
+    "modbus_latency": "slave_metrics",
+    "modbus_unanswered": "slave_metrics",
+    "modbus_timeouts": "slave_metrics",
+    "modbus_skipped": "slave_metrics",
 }
 
 SWITCH_MODES = ("store-and-forward", "cut-through")
@@ -187,15 +202,30 @@ def check_node(node: NodeSpec) -> None:
         _one_of(node, "mode", node.mode, SWITCH_MODES)
         _one_of(node, "qos", node.qos, SWITCH_QOS)
         _one_of(node, "mac_table", node.mac_table, MAC_TABLES)
-        b = node.buffer_bytes
-        if b is not None and (not _integer(b) or b < MAX_STANDARD_FRAME_BYTES):
-            raise _fail(
-                node,
-                f"buffer must be a whole number of bytes, at least one maximum frame"
-                f" ({MAX_STANDARD_FRAME_BYTES} B), got {b!r}",
-            )
+        for label, in_bytes, in_frames in (
+            ("buffer", node.buffer_bytes, node.buffer_frames),
+            ("ingress_buffer", node.ingress_buffer_bytes, node.ingress_buffer_frames),
+        ):
+            _check_limit(node, label, in_bytes, in_frames)
     if isinstance(node, ModbusSlaveNode):
         _in_range(node, "unit_id", node.unit_id, 0, 255)
+
+
+def _check_limit(node: SwitchNode, label: str, in_bytes: object, in_frames: object) -> None:
+    """A switch's limit of one account: bytes or frames, not both (ADR-0011,
+    ADR-0013)."""
+    if in_bytes is not None and in_frames is not None:
+        raise _fail(node, f"{label} is given both in bytes and in frames; give one of them")
+    if in_bytes is not None and (not _integer(in_bytes) or in_bytes < MAX_STANDARD_FRAME_BYTES):  # type: ignore[operator]
+        raise _fail(
+            node,
+            f"{label} must be a whole number of bytes, at least one maximum frame"
+            f" ({MAX_STANDARD_FRAME_BYTES} B), got {in_bytes!r}",
+        )
+    if in_frames is not None and (not _integer(in_frames) or in_frames < 1):  # type: ignore[operator]
+        raise _fail(
+            node, f"{label} in frames must be a whole number of at least 1, got {in_frames!r}"
+        )
 
 
 def check_link(link: Link) -> None:
@@ -391,10 +421,15 @@ def validate(scenario: Scenario) -> None:
 
     largest = max((_largest_frame(t) for t in scenario.traffic), default=0)
     for i, node in enumerate(scenario.nodes):
-        if isinstance(node, SwitchNode) and node.buffer_bytes is not None:
-            if node.buffer_bytes < largest:
+        if not isinstance(node, SwitchNode):
+            continue
+        for label, in_bytes in (
+            ("buffer", node.buffer_bytes),
+            ("ingress_buffer", node.ingress_buffer_bytes),
+        ):
+            if in_bytes is not None and in_bytes < largest:
                 raise ScenarioError(
-                    f"{describe(node)}: buffer {node.buffer_bytes} B is smaller than the"
+                    f"{describe(node)}: {label} {in_bytes} B is smaller than the"
                     f" largest frame of the scenario, {largest} B, which it would always drop",
                     ("nodes", i),
                 )
@@ -416,8 +451,8 @@ def validate(scenario: Scenario) -> None:
 
 def _ends(t: TrafficSpec) -> list[tuple[str, tuple[type, ...]]]:
     """The nodes a traffic statement involves, each with its allowed types."""
-    if isinstance(t, Flow):
-        return [(t.source, (AdapterNode,)), (t.destination, (AdapterNode,))]
+    if isinstance(t, Flow):  # between any two end stations (ADR-0013)
+        return [(t.source, ENDPOINTS), (t.destination, ENDPOINTS)]
     if isinstance(t, Publish):
         return [(t.source, (AdapterNode,)), (t.broker, (MqttBrokerNode,))]
     if isinstance(t, Route):
@@ -434,7 +469,11 @@ def _lookup(
     if node is None:
         raise _fail(element, f"reference to undeclared node {name!r}")
     if kinds is not None and not isinstance(node, kinds):
-        expected = " or ".join(KIND_NAMES[k.kind] for k in kinds)  # type: ignore[attr-defined]
+        expected = (
+            "an end station"
+            if kinds == ENDPOINTS
+            else " or ".join(KIND_NAMES[k.kind] for k in kinds)  # type: ignore[attr-defined]
+        )
         raise _fail(element, f"{name!r} is {_a(KIND_NAMES[node.kind])}, expected {expected}")
     return node
 
@@ -486,6 +525,7 @@ class _Components:
 __all__ = [
     "KIND_NAMES",
     "METRIC_TARGETS",
+    "STATION_METRIC_FEATURES",
     "ScenarioError",
     "check_link",
     "check_node",

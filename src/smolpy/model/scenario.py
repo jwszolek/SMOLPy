@@ -28,8 +28,16 @@ VERSION = 2  # 2: Ethernet frames on the wire (ADR-0010)
 
 # Optional fields that are left out of the JSON while they hold their default,
 # so that documents not using them read as before, in older readers too
-# (ADR-0011: switch buffers; ADR-0012: one Modbus request in flight).
-_OMITTED_WHEN_UNSET = {"buffer_bytes", "outstanding", "timeout_ms"}
+# (ADR-0011: switch buffers; ADR-0012: one Modbus request in flight;
+# ADR-0013: ingress accounts and limits in frames).
+_OMITTED_WHEN_UNSET = {
+    "buffer_bytes",
+    "buffer_frames",
+    "ingress_buffer_bytes",
+    "ingress_buffer_frames",
+    "outstanding",
+    "timeout_ms",
+}
 
 SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
@@ -55,9 +63,12 @@ class AdapterNode:
 class SwitchNode:
     """Layer-2 switch: per-port egress queues and a MAC table.
 
-    *buffer_bytes* bounds each egress queue: the frame bytes waiting on a
-    port, the frame in transmission not counted. A frame that would exceed it
-    is dropped (ADR-0011). ``None`` is unbounded."""
+    Each port can have an egress account, of the frames queued on it
+    (ADR-0011), and an ingress account, of the frames that entered on it and
+    are still queued on any port (ADR-0013); the frame in transmission is in
+    neither. A limit bounds an account in bytes or in frames, at most one per
+    account; ``None`` everywhere is unbounded. A frame that does not fit is
+    dropped."""
 
     kind: ClassVar[str] = "switch"
     name: str
@@ -66,6 +77,33 @@ class SwitchNode:
     qos: SwitchQoS = "strict"
     mac_table: MacTableMode = "learning"
     buffer_bytes: int | None = None
+    buffer_frames: int | None = None
+    ingress_buffer_bytes: int | None = None
+    ingress_buffer_frames: int | None = None
+
+    @property
+    def bounded(self) -> bool:
+        """Whether any account of the switch has a limit."""
+        return self.egress_limit is not None or self.ingress_limit is not None
+
+    @property
+    def egress_limit(self) -> tuple[int, Literal["bytes", "frames"]] | None:
+        return _limit(self.buffer_bytes, self.buffer_frames)
+
+    @property
+    def ingress_limit(self) -> tuple[int, Literal["bytes", "frames"]] | None:
+        return _limit(self.ingress_buffer_bytes, self.ingress_buffer_frames)
+
+
+def _limit(
+    in_bytes: int | None, in_frames: int | None
+) -> tuple[int, Literal["bytes", "frames"]] | None:
+    """A limit and its unit; validation allows at most one of the two."""
+    if in_bytes is not None:
+        return in_bytes, "bytes"
+    if in_frames is not None:
+        return in_frames, "frames"
+    return None
 
 
 @dataclass(frozen=True)
@@ -115,7 +153,8 @@ class Link:
 
 @dataclass(frozen=True)
 class Flow:
-    """Raw Ethernet frames from *source* to *destination* (``Adapter.sends``).
+    """Raw Ethernet frames from *source* to *destination*, any two end
+    stations (``sends``, ADR-0013).
 
     *rate* is the long-run average in frames/s, *size* bytes or ``"imix"``;
     *batch* is set only for ``pattern="batch"``.

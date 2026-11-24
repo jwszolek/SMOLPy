@@ -242,18 +242,19 @@ class _Admissions:
         self.ports: list[engine._LinkChannel] = []  # the port of each record
         original = engine._LinkChannel.enqueue
 
-        def enqueue(ch: engine._LinkChannel, frame: engine._Frame) -> None:
-            if ch.buffer_bytes is None:
+        def enqueue(ch: engine._LinkChannel, frame: engine._Frame) -> bool:
+            if ch.egress is None:
                 return original(ch, frame)
-            queued = ch.queue.queued_bytes  # type: ignore[attr-defined]
+            queued = ch.egress.held
             # the count is the frame bytes of the frames in the store
             assert queued == sum(item.item.size_bytes for item in ch.queue.items)
             before = ch.frames_dropped
-            original(ch, frame)
-            self.records.append(
-                (queued, frame.size_bytes, ch.buffer_bytes, frame, ch.frames_dropped > before)
-            )
+            queued_it = original(ch, frame)
+            dropped = ch.frames_dropped > before
+            assert queued_it is not dropped
+            self.records.append((queued, frame.size_bytes, ch.egress.limit, frame, dropped))
             self.ports.append(ch)
+            return queued_it
 
         monkeypatch.setattr(engine._LinkChannel, "enqueue", enqueue)
 
@@ -300,7 +301,8 @@ def test_a_frame_is_dropped_exactly_when_it_would_exceed_the_buffer(monkeypatch)
         for (*_, f, d), ch in zip(seen.records, seen.ports, strict=True)
         if f.dst_mac == "02:00:0a:00:00:02"
         and ch.prop_delay_ns == 25
-        and ch.buffer_bytes == 6 * SIZE
+        and ch.egress is not None
+        and ch.egress.limit == 6 * SIZE
     ]
     assert any(to_c) and not all(to_c)
 

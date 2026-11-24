@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from smolpy import Network
+from smolpy import Frames, Network
 from smolpy.model import Scenario
 
 
@@ -392,6 +392,106 @@ def poll_tie() -> Scenario:
     return net.to_scenario(duration=2)
 
 
+def ingress_drops() -> Scenario:
+    """Ingress accounts and limits in frames (ADR-0013): a switch whose
+    ingress ports hold 3 frames each and whose egress ports hold 5 frames;
+    two constant sources whose frames reach the full port at the same
+    instants; frames flooded to a station behind a second switch, at a full
+    ingress account; and an edge switch with an ingress limit in bytes next
+    to an egress limit in frames, where a local camera overloads the PROFINET
+    device's port."""
+    net = Network("ingress-drops")
+    core = net.switch("core", ports=5, ingress_buffer=Frames(3), buffer=Frames(5))
+    edge = net.switch("edge", ports=4, qos="fifo", ingress_buffer=3 * 1_000, buffer=Frames(4))
+    left = net.adapter("left", ip="10.0.0.1")
+    right = net.adapter("right", ip="10.0.0.2")
+    srv = net.adapter("srv", ip="10.0.0.3")
+    plc = net.adapter("plc", ip="10.0.0.4")
+    io = net.profinet_device("io", ip="10.0.0.5")
+    quiet = net.adapter("quiet", ip="10.0.0.6")
+    cam = net.adapter("cam", ip="10.0.0.7")
+    net.link(left, core, speed=1_000, length=5)
+    net.link(right, core, speed=1_000, length=5)
+    net.link(srv, core, speed=100, length=10)
+    net.link(plc, core, speed=100, length=10)
+    net.link(core, edge, speed=100, length=50)
+    net.link(io, edge, speed=100, length=10)
+    net.link(quiet, edge, speed=100, length=10)
+    net.link(cam, edge, speed=1_000, length=10)
+    plc.controls(io, cycle=1, inputs=64, outputs=64, hold=2)
+    # the same rate and start: their frames reach core's port to srv together
+    left.sends(srv, rate=5_000, size=1_500)
+    right.sends(srv, rate=5_000, size=1_500)
+    right.sends(srv, rate=3_000, size=64, priority=5, delay_ms=0.05)
+    # to quiet, which never sends: core floods these to every other port
+    left.sends(quiet, rate=4_000, size=1_200, delay_ms=0.3)
+    right.sends(io, rate=6_000, size=1_000, delay_ms=0.1)
+    cam.sends(io, rate=7_000, size=1_000, delay_ms=0.02)  # with right's: 104 % of io's port
+    net.observe("drops", on=core, every=2)
+    net.observe("ingress_drops_total", on=core, every=2)
+    net.observe("egress_drops_total", on=core, every=2)
+    net.observe("ingress_drops_total", on=edge, every=2)
+    net.observe("egress_drops_total", on=edge, every=2)
+    net.observe("queue_depth", on=core, every=1)
+    net.observe("frames_received", on=srv, every=2)
+    net.observe("frames_received", on=quiet, every=2)
+    net.observe("latency", on=srv, every=2)
+    net.observe("pn_watchdog_expiries", on=plc, every=2)
+    return net.to_scenario(duration=40)
+
+
+def ingress_tie() -> Scenario:
+    """Frames of 1242 B every 100 us into one frame of ingress: each takes
+    960 ns of gap more than its interval, so arrivals fall on the instants
+    the transmitter takes a frame, where they fit only because that frame
+    has left the account (ADR-0013)."""
+    net = Network("ingress-tie")
+    sw = net.switch("sw", ports=3, ingress_buffer=Frames(1))
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    c = net.adapter("c", ip="10.0.0.3")
+    net.link(a, sw, speed=1_000, length=5)
+    net.link(b, sw, speed=100, length=5)
+    net.link(c, sw, speed=100, length=5)
+    a.sends(b, rate=10_000, size=1_242)
+    c.sends(b, rate=500, size=300)
+    net.observe("ingress_drops_total", on=sw, every=1)
+    net.observe("frames_received", on=b, every=1)
+    net.observe("latency", on=b, every=1)
+    return net.to_scenario(duration=200)
+
+
+def station_flows() -> Scenario:
+    """Flows from and to stations other than adapters (ADR-0013): a Modbus
+    slave that also sends UDP on its one port, through an ingress limit in
+    frames, a second slave beside it, and the Modbus metrics of each."""
+    net = Network("station-flows")
+    sw = net.switch("sw", ports=5, ingress_buffer=Frames(6))
+    pi = net.modbus_slave("pi", ip="10.0.0.1", unit_id=1)
+    relay = net.modbus_slave("relay", ip="10.0.0.3", unit_id=2)
+    laptop = net.adapter("laptop", ip="10.0.0.2")
+    broker = net.mqtt_broker("broker", ip="10.0.0.4")
+    device = net.profinet_device("device", ip="10.0.0.5")
+    net.link(pi, sw, speed=1_000, length=2)
+    net.link(relay, sw, speed=1_000, length=2)
+    net.link(laptop, sw, speed=100, length=2)
+    net.link(broker, sw, speed=100, length=2)
+    net.link(device, sw, speed=100, length=2)
+    pi.sends(laptop, rate=9_500, size=1_500)  # 116 % of the laptop's port
+    broker.sends(device, rate=1_000, size=200)
+    device.sends(relay, rate=500, size=100)
+    laptop.polls(pi, register=0, count=10, rate=1_000, outstanding=1, timeout_ms=2)
+    laptop.polls(relay, register=0, count=10, rate=500, outstanding=1, timeout_ms=2)
+    for slave in (pi, relay):
+        for metric in ("modbus_latency", "modbus_unanswered", "modbus_timeouts", "modbus_skipped"):
+            net.observe(metric, on=slave, every=2)
+    net.observe("frames_sent", on=pi, every=2)
+    net.observe("bytes_sent", on=device, every=2)
+    net.observe("modbus_latency", on=laptop, every=2)
+    net.observe("ingress_drops_total", on=sw, every=2)
+    return net.to_scenario(duration=40)
+
+
 def random_drops() -> Scenario:
     """Poisson traffic into a bounded port at 150 % of its link: the buffer
     is nearly always full, so delay is capped and its mean is precise."""
@@ -481,6 +581,9 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "lossy-protocols": lossy_protocols,
     "poll-timeouts": poll_timeouts,
     "poll-tie": poll_tie,
+    "ingress-drops": ingress_drops,
+    "ingress-tie": ingress_tie,
+    "station-flows": station_flows,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
     "random-load": random_load,

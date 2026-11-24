@@ -1,0 +1,3337 @@
+{
+ "format": "smolpy-ingress",
+ "version": 1,
+ "label": "ingress-buffers",
+ "created": "2026-11-24T08:36:12",
+ "environment": {
+  "host": "jaws-zbook",
+  "os": "Linux-7.0.0-44-generic-x86_64-with-glibc2.43",
+  "cpu": "Intel(R) Core(TM) Ultra 7 255H",
+  "cpu_count": 16,
+  "memory": "31745632 kB",
+  "python": "3.14.4",
+  "simpy": "4.1.2",
+  "smolpy": "1.11.1.dev5",
+  "git_commit": "00bedb7",
+  "git_dirty": true
+ },
+ "scenario": "T3",
+ "models": {
+  "ingress": "60frames",
+  "egress": "91080 B"
+ },
+ "duration_ms": 30000,
+ "seeds": [
+  1,
+  2,
+  3,
+  4,
+  5
+ ],
+ "measured": {
+  "pi": "133 of 30 000 polls retransmitted (0.44 %)",
+  "waveshare": "0 of 15 000 polls",
+  "udp_loss": "0.66 %"
+ },
+ "runs": [
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 1,
+   "backend": "simpy",
+   "events": 3231101,
+   "wall_s": 6.766564256002312,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.210499,
+     "rtt_p99_ms": 6.216572
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.176974,
+     "rtt_p99_ms": 6.208091999999999
+    },
+    "dropped": 0.00026893920293143733,
+    "ingress_drops": 64.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 1,
+   "backend": "rust",
+   "events": 3200233,
+   "wall_s": 0.231371823,
+   "summary": {
+    "pi": {
+     "sent": 2599.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.0015390534821085034,
+     "rtt_median_ms": 1.02194,
+     "rtt_p99_ms": 6.405196639999999
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.989928,
+     "rtt_p99_ms": 6.416016
+    },
+    "dropped": 0.00042377011318899725,
+    "ingress_drops": 100.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 1,
+   "backend": "ns3",
+   "events": 1561770,
+   "wall_s": 0.8982836869981838,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.210499,
+     "rtt_p99_ms": 6.216572
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.176974,
+     "rtt_p99_ms": 6.208091999999999
+    },
+    "dropped": 0.0002689369426912184,
+    "ingress_drops": 64.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 2,
+   "backend": "simpy",
+   "events": 3218800,
+   "wall_s": 7.060472716999357,
+   "summary": {
+    "pi": {
+     "sent": 2899.0,
+     "skipped": 100.0,
+     "long_rtts_ms": [],
+     "timeouts": 1.0,
+     "unanswered": 1.0,
+     "affected": 0.00034494653328734045,
+     "rtt_median_ms": 1.039059,
+     "rtt_p99_ms": 5.795406640000001
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.0596400000000001,
+     "rtt_p99_ms": 6.142816
+    },
+    "dropped": 0.0003120769564905681,
+    "ingress_drops": 74.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 2,
+   "backend": "rust",
+   "events": 3220924,
+   "wall_s": 0.227916052,
+   "summary": {
+    "pi": {
+     "sent": 2899.0,
+     "skipped": 100.0,
+     "long_rtts_ms": [],
+     "timeouts": 1.0,
+     "unanswered": 1.0,
+     "affected": 0.00034494653328734045,
+     "rtt_median_ms": 1.0814405,
+     "rtt_p99_ms": 5.6248274600000014
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.056529,
+     "rtt_p99_ms": 5.590762999999999
+    },
+    "dropped": 0.00020651143188283637,
+    "ingress_drops": 49.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 2,
+   "backend": "ns3",
+   "events": 1557665,
+   "wall_s": 0.8873362190061016,
+   "summary": {
+    "pi": {
+     "sent": 2978.0,
+     "skipped": 21.0,
+     "long_rtts_ms": [
+      211.661696
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.000335795836131632,
+     "rtt_median_ms": 1.0474285,
+     "rtt_p99_ms": 5.81733427
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.0596400000000001,
+     "rtt_p99_ms": 6.142816
+    },
+    "dropped": 0.00031196775771066257,
+    "ingress_drops": 74.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 3,
+   "backend": "simpy",
+   "events": 3211348,
+   "wall_s": 7.005521311002667,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.0094450000000001,
+     "rtt_p99_ms": 5.9752350000000005
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.972653,
+     "rtt_p99_ms": 5.907778
+    },
+    "dropped": 0.00021992801586865222,
+    "ingress_drops": 52.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 3,
+   "backend": "rust",
+   "events": 3212740,
+   "wall_s": 0.227893321,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.972097,
+     "rtt_p99_ms": 5.868054
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.957288,
+     "rtt_p99_ms": 5.8502
+    },
+    "dropped": 0.00027053646535653747,
+    "ingress_drops": 64.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 3,
+   "backend": "ns3",
+   "events": 1554464,
+   "wall_s": 0.8961406229936983,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.0094450000000001,
+     "rtt_p99_ms": 5.9752350000000005
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.972653,
+     "rtt_p99_ms": 5.907778
+    },
+    "dropped": 0.00021992615556392026,
+    "ingress_drops": 52.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 4,
+   "backend": "simpy",
+   "events": 3216692,
+   "wall_s": 7.137616918989806,
+   "summary": {
+    "pi": {
+     "sent": 2799.0,
+     "skipped": 200.0,
+     "long_rtts_ms": [],
+     "timeouts": 2.0,
+     "unanswered": 2.0,
+     "affected": 0.0007145409074669524,
+     "rtt_median_ms": 1.054948,
+     "rtt_p99_ms": 6.18634276
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.020628,
+     "rtt_p99_ms": 6.504811
+    },
+    "dropped": 0.0005272548581262628,
+    "ingress_drops": 125.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 4,
+   "backend": "rust",
+   "events": 3219519,
+   "wall_s": 0.227325948,
+   "summary": {
+    "pi": {
+     "sent": 2899.0,
+     "skipped": 100.0,
+     "long_rtts_ms": [],
+     "timeouts": 1.0,
+     "unanswered": 1.0,
+     "affected": 0.00034494653328734045,
+     "rtt_median_ms": 1.0696539999999999,
+     "rtt_p99_ms": 6.02276716
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.088991,
+     "rtt_p99_ms": 6.303115
+    },
+    "dropped": 0.0003035733108464214,
+    "ingress_drops": 72.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 4,
+   "backend": "ns3",
+   "events": 1557191,
+   "wall_s": 0.8943442350137047,
+   "summary": {
+    "pi": {
+     "sent": 2957.0,
+     "skipped": 42.0,
+     "long_rtts_ms": [
+      210.05837100000002,
+      210.531591
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0006763611768684477,
+     "rtt_median_ms": 1.060108,
+     "rtt_p99_ms": 6.30753424
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.020628,
+     "rtt_p99_ms": 6.504811
+    },
+    "dropped": 0.0005353206233323919,
+    "ingress_drops": 127.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 5,
+   "backend": "simpy",
+   "events": 3221602,
+   "wall_s": 7.089592978998553,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.073456,
+     "rtt_p99_ms": 5.552956
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.036994,
+     "rtt_p99_ms": 5.504911
+    },
+    "dropped": 3.794090493273921e-05,
+    "ingress_drops": 9.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 5,
+   "backend": "rust",
+   "events": 3213245,
+   "wall_s": 0.229055519,
+   "summary": {
+    "pi": {
+     "sent": 2899.0,
+     "skipped": 100.0,
+     "long_rtts_ms": [],
+     "timeouts": 1.0,
+     "unanswered": 1.0,
+     "affected": 0.00034494653328734045,
+     "rtt_median_ms": 1.000914,
+     "rtt_p99_ms": 6.41866542
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.9631830000000001,
+     "rtt_p99_ms": 6.4026369999999995
+    },
+    "dropped": 0.0005365056164111576,
+    "ingress_drops": 127.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.96,
+   "seed": 5,
+   "backend": "ns3",
+   "events": 1558288,
+   "wall_s": 0.8880595920054475,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.073456,
+     "rtt_p99_ms": 5.552956
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.036994,
+     "rtt_p99_ms": 5.504911
+    },
+    "dropped": 3.794058504382138e-05,
+    "ingress_drops": 9.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 1,
+   "backend": "simpy",
+   "events": 3279267,
+   "wall_s": 6.790038108010776,
+   "summary": {
+    "pi": {
+     "sent": 2099.0,
+     "skipped": 900.0,
+     "long_rtts_ms": [],
+     "timeouts": 9.0,
+     "unanswered": 9.0,
+     "affected": 0.004287756074321105,
+     "rtt_median_ms": 2.3115965,
+     "rtt_p99_ms": 7.242904579999999
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.560991,
+     "rtt_p99_ms": 7.249569
+    },
+    "dropped": 0.003647696722425101,
+    "ingress_drops": 886.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 1,
+   "backend": "rust",
+   "events": 3272009,
+   "wall_s": 0.22417898,
+   "summary": {
+    "pi": {
+     "sent": 2599.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.0015390534821085034,
+     "rtt_median_ms": 1.9354090000000002,
+     "rtt_p99_ms": 7.14313024
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.872437,
+     "rtt_p99_ms": 7.164678
+    },
+    "dropped": 0.0027341051699819245,
+    "ingress_drops": 661.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 1,
+   "backend": "ns3",
+   "events": 1584114,
+   "wall_s": 0.9245679739979096,
+   "summary": {
+    "pi": {
+     "sent": 2768.0,
+     "skipped": 231.0,
+     "long_rtts_ms": [
+      210.719266,
+      211.123334,
+      211.367628,
+      211.78062400000002,
+      212.108272,
+      213.656894,
+      214.321528,
+      214.46653,
+      215.21589,
+      215.490451,
+      215.814905
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.003973988439306358,
+     "rtt_median_ms": 2.411577,
+     "rtt_p99_ms": 7.27863756
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.584873,
+     "rtt_p99_ms": 7.249569
+    },
+    "dropped": 0.003698898951499676,
+    "ingress_drops": 901.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 2,
+   "backend": "simpy",
+   "events": 3281044,
+   "wall_s": 7.304367917997297,
+   "summary": {
+    "pi": {
+     "sent": 2499.0,
+     "skipped": 500.0,
+     "long_rtts_ms": [],
+     "timeouts": 5.0,
+     "unanswered": 5.0,
+     "affected": 0.0020008003201280513,
+     "rtt_median_ms": 2.0891245,
+     "rtt_p99_ms": 7.184889399999999
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.283809,
+     "rtt_p99_ms": 7.269948
+    },
+    "dropped": 0.0024740431638063977,
+    "ingress_drops": 600.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 2,
+   "backend": "rust",
+   "events": 3278894,
+   "wall_s": 0.229881877,
+   "summary": {
+    "pi": {
+     "sent": 2399.0,
+     "skipped": 600.0,
+     "long_rtts_ms": [],
+     "timeouts": 6.0,
+     "unanswered": 6.0,
+     "affected": 0.0025010421008753647,
+     "rtt_median_ms": 2.220041,
+     "rtt_p99_ms": 7.180613419999999
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.3446979999999997,
+     "rtt_p99_ms": 7.176088
+    },
+    "dropped": 0.002540614779284091,
+    "ingress_drops": 616.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 2,
+   "backend": "ns3",
+   "events": 1582884,
+   "wall_s": 0.8995494620030513,
+   "summary": {
+    "pi": {
+     "sent": 2873.0,
+     "skipped": 126.0,
+     "long_rtts_ms": [
+      211.041057,
+      211.24403700000002,
+      213.191169,
+      213.356761,
+      213.623657,
+      217.032342
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.002088409328228333,
+     "rtt_median_ms": 2.175261,
+     "rtt_p99_ms": 7.245124360000001
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.283769,
+     "rtt_p99_ms": 7.269948
+    },
+    "dropped": 0.002515376318411237,
+    "ingress_drops": 611.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 3,
+   "backend": "simpy",
+   "events": 3272829,
+   "wall_s": 7.1990757640014635,
+   "summary": {
+    "pi": {
+     "sent": 2499.0,
+     "skipped": 500.0,
+     "long_rtts_ms": [],
+     "timeouts": 5.0,
+     "unanswered": 5.0,
+     "affected": 0.0020008003201280513,
+     "rtt_median_ms": 2.0596535,
+     "rtt_p99_ms": 6.9780842
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.099433,
+     "rtt_p99_ms": 7.216899999999999
+    },
+    "dropped": 0.0022986985066728405,
+    "ingress_drops": 556.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 3,
+   "backend": "rust",
+   "events": 3276718,
+   "wall_s": 0.23005073,
+   "summary": {
+    "pi": {
+     "sent": 2599.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.0015390534821085034,
+     "rtt_median_ms": 1.976807,
+     "rtt_p99_ms": 7.08109628
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.9576069999999999,
+     "rtt_p99_ms": 7.172346999999999
+    },
+    "dropped": 0.0019501150650520374,
+    "ingress_drops": 472.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 3,
+   "backend": "ns3",
+   "events": 1579012,
+   "wall_s": 0.9226981579995481,
+   "summary": {
+    "pi": {
+     "sent": 2831.0,
+     "skipped": 168.0,
+     "long_rtts_ms": [
+      210.519058,
+      211.48336799999998,
+      212.55231,
+      212.803842,
+      213.242475,
+      213.95998699999998,
+      214.71371100000002,
+      214.94188200000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.00282585658777817,
+     "rtt_median_ms": 2.058464,
+     "rtt_p99_ms": 7.14553264
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.1128679999999997,
+     "rtt_p99_ms": 7.215707999999999
+    },
+    "dropped": 0.002340789180352233,
+    "ingress_drops": 567.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 4,
+   "backend": "simpy",
+   "events": 3284566,
+   "wall_s": 7.217441082000732,
+   "summary": {
+    "pi": {
+     "sent": 2599.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.0015390534821085034,
+     "rtt_median_ms": 2.194636,
+     "rtt_p99_ms": 7.15936172
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.273661,
+     "rtt_p99_ms": 7.298562999999999
+    },
+    "dropped": 0.0031180621058658287,
+    "ingress_drops": 757.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 4,
+   "backend": "rust",
+   "events": 3281564,
+   "wall_s": 0.230136101,
+   "summary": {
+    "pi": {
+     "sent": 2499.0,
+     "skipped": 500.0,
+     "long_rtts_ms": [],
+     "timeouts": 5.0,
+     "unanswered": 5.0,
+     "affected": 0.0020008003201280513,
+     "rtt_median_ms": 2.2338890000000005,
+     "rtt_p99_ms": 7.2078484
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.278346,
+     "rtt_p99_ms": 7.199717
+    },
+    "dropped": 0.0030294287362954415,
+    "ingress_drops": 735.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 4,
+   "backend": "ns3",
+   "events": 1583807,
+   "wall_s": 0.9146340090082958,
+   "summary": {
+    "pi": {
+     "sent": 2894.0,
+     "skipped": 105.0,
+     "long_rtts_ms": [
+      211.397073,
+      213.907875,
+      214.823363,
+      215.756492,
+      217.28688699999998
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0017277125086385626,
+     "rtt_median_ms": 2.2100829999999996,
+     "rtt_p99_ms": 7.2306029999999994
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.27785,
+     "rtt_p99_ms": 7.303367000000001
+    },
+    "dropped": 0.003138806842022988,
+    "ingress_drops": 763.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 5,
+   "backend": "simpy",
+   "events": 3276246,
+   "wall_s": 7.166090943996096,
+   "summary": {
+    "pi": {
+     "sent": 2299.0,
+     "skipped": 700.0,
+     "long_rtts_ms": [],
+     "timeouts": 7.0,
+     "unanswered": 7.0,
+     "affected": 0.003044802087864289,
+     "rtt_median_ms": 2.188381,
+     "rtt_p99_ms": 7.18282191
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.306269,
+     "rtt_p99_ms": 7.210912
+    },
+    "dropped": 0.002525356727269726,
+    "ingress_drops": 612.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 5,
+   "backend": "rust",
+   "events": 3278424,
+   "wall_s": 0.231384303,
+   "summary": {
+    "pi": {
+     "sent": 2599.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.0015390534821085034,
+     "rtt_median_ms": 1.9494320000000003,
+     "rtt_p99_ms": 7.0622649200000005
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.029627,
+     "rtt_p99_ms": 7.18829
+    },
+    "dropped": 0.002736796915634004,
+    "ingress_drops": 663.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.984,
+   "seed": 5,
+   "backend": "ns3",
+   "events": 1581293,
+   "wall_s": 0.9119088470033603,
+   "summary": {
+    "pi": {
+     "sent": 2789.0,
+     "skipped": 210.0,
+     "long_rtts_ms": [
+      210.84738399999998,
+      210.873861,
+      211.13084400000002,
+      212.59474400000002,
+      213.007259,
+      214.880795,
+      215.027176,
+      215.06464300000002,
+      215.576015,
+      216.217984
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0035855145213338113,
+     "rtt_median_ms": 2.2415279999999997,
+     "rtt_p99_ms": 7.231497300000001
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 2.312752,
+     "rtt_p99_ms": 7.174912000000001
+    },
+    "dropped": 0.002573562716693981,
+    "ingress_drops": 625.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 1,
+   "backend": "simpy",
+   "events": 3315072,
+   "wall_s": 7.25781453998934,
+   "summary": {
+    "pi": {
+     "sent": 2199.0,
+     "skipped": 800.0,
+     "long_rtts_ms": [],
+     "timeouts": 8.0,
+     "unanswered": 8.0,
+     "affected": 0.0036380172805820826,
+     "rtt_median_ms": 3.699148,
+     "rtt_p99_ms": 7.316842319999999
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.9266680000000003,
+     "rtt_p99_ms": 7.354946
+    },
+    "dropped": 0.008524816643302655,
+    "ingress_drops": 2098.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 1,
+   "backend": "rust",
+   "events": 3290977,
+   "wall_s": 0.225259012,
+   "summary": {
+    "pi": {
+     "sent": 1916.0,
+     "skipped": 1083.0,
+     "long_rtts_ms": [],
+     "timeouts": 10.0,
+     "unanswered": 11.0,
+     "affected": 0.005741127348643006,
+     "rtt_median_ms": 2.785788,
+     "rtt_p99_ms": 7.271927840000001
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.020916,
+     "rtt_p99_ms": 7.375890000000001
+    },
+    "dropped": 0.006206882433621978,
+    "ingress_drops": 1516.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 1,
+   "backend": "ns3",
+   "events": 1596490,
+   "wall_s": 0.923231773005682,
+   "summary": {
+    "pi": {
+     "sent": 2705.0,
+     "skipped": 294.0,
+     "long_rtts_ms": [
+      210.213982,
+      210.38634299999998,
+      213.09068100000002,
+      213.387671,
+      213.97695199999998,
+      215.129177,
+      215.402938,
+      215.662371,
+      215.91075899999998,
+      216.931971,
+      217.203312,
+      635.846597
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0044362292051756,
+     "rtt_median_ms": 3.6935890000000002,
+     "rtt_p99_ms": 7.3509189600000004
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.9254109999999995,
+     "rtt_p99_ms": 7.325337000000001
+    },
+    "dropped": 0.00863613879450855,
+    "ingress_drops": 2130.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 2,
+   "backend": "simpy",
+   "events": 3297012,
+   "wall_s": 7.187850082991645,
+   "summary": {
+    "pi": {
+     "sent": 1736.0,
+     "skipped": 1263.0,
+     "long_rtts_ms": [],
+     "timeouts": 12.0,
+     "unanswered": 13.0,
+     "affected": 0.007488479262672811,
+     "rtt_median_ms": 3.556757,
+     "rtt_p99_ms": 7.30963936
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.576667,
+     "rtt_p99_ms": 7.376441
+    },
+    "dropped": 0.0068541243131587755,
+    "ingress_drops": 1679.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 2,
+   "backend": "rust",
+   "events": 3296500,
+   "wall_s": 0.222818005,
+   "summary": {
+    "pi": {
+     "sent": 1694.0,
+     "skipped": 1305.0,
+     "long_rtts_ms": [],
+     "timeouts": 13.0,
+     "unanswered": 14.0,
+     "affected": 0.008264462809917356,
+     "rtt_median_ms": 3.8232749999999998,
+     "rtt_p99_ms": 7.33025389
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.642324,
+     "rtt_p99_ms": 7.3818090000000005
+    },
+    "dropped": 0.007220526049404888,
+    "ingress_drops": 1769.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 2,
+   "backend": "ns3",
+   "events": 1593181,
+   "wall_s": 0.9147404889954487,
+   "summary": {
+    "pi": {
+     "sent": 2684.0,
+     "skipped": 315.0,
+     "long_rtts_ms": [
+      210.273139,
+      210.627801,
+      210.739585,
+      211.883886,
+      211.89359299999998,
+      212.286934,
+      212.89346700000002,
+      213.470171,
+      214.067374,
+      214.33364600000002,
+      214.728921,
+      215.741627,
+      215.854171,
+      216.767903,
+      216.78907199999998
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.005588673621460507,
+     "rtt_median_ms": 3.4530200000000004,
+     "rtt_p99_ms": 7.380449649999999
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.603439,
+     "rtt_p99_ms": 7.369738
+    },
+    "dropped": 0.006952858804108285,
+    "ingress_drops": 1710.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 3,
+   "backend": "simpy",
+   "events": 3295306,
+   "wall_s": 7.1766575159999775,
+   "summary": {
+    "pi": {
+     "sent": 1999.0,
+     "skipped": 1000.0,
+     "long_rtts_ms": [],
+     "timeouts": 10.0,
+     "unanswered": 10.0,
+     "affected": 0.0050025012506253125,
+     "rtt_median_ms": 3.2011239999999996,
+     "rtt_p99_ms": 7.255806199999999
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.35892,
+     "rtt_p99_ms": 7.355845999999999
+    },
+    "dropped": 0.006033040611566259,
+    "ingress_drops": 1475.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 3,
+   "backend": "rust",
+   "events": 3298856,
+   "wall_s": 0.226874699,
+   "summary": {
+    "pi": {
+     "sent": 2045.0,
+     "skipped": 954.0,
+     "long_rtts_ms": [],
+     "timeouts": 9.0,
+     "unanswered": 10.0,
+     "affected": 0.004889975550122249,
+     "rtt_median_ms": 2.724744,
+     "rtt_p99_ms": 7.2545002
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.100689,
+     "rtt_p99_ms": 7.347981
+    },
+    "dropped": 0.005334586927196174,
+    "ingress_drops": 1305.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 3,
+   "backend": "ns3",
+   "events": 1588542,
+   "wall_s": 0.9072174860048108,
+   "summary": {
+    "pi": {
+     "sent": 2621.0,
+     "skipped": 378.0,
+     "long_rtts_ms": [
+      210.085591,
+      210.226217,
+      210.48001399999998,
+      210.928492,
+      211.236865,
+      211.41070000000002,
+      211.754726,
+      212.621385,
+      212.765952,
+      212.840826,
+      213.229596,
+      214.166655,
+      214.58818100000002,
+      215.208717,
+      215.3794,
+      215.67117800000003,
+      216.54971700000002,
+      216.74617600000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.006867607783288821,
+     "rtt_median_ms": 3.1713310000000003,
+     "rtt_p99_ms": 7.36711826
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.379066,
+     "rtt_p99_ms": 7.3611390000000005
+    },
+    "dropped": 0.006122856898106034,
+    "ingress_drops": 1501.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 4,
+   "backend": "simpy",
+   "events": 3300210,
+   "wall_s": 7.233426325998153,
+   "summary": {
+    "pi": {
+     "sent": 1816.0,
+     "skipped": 1183.0,
+     "long_rtts_ms": [],
+     "timeouts": 11.0,
+     "unanswered": 12.0,
+     "affected": 0.006607929515418502,
+     "rtt_median_ms": 2.9812879999999997,
+     "rtt_p99_ms": 7.2385351
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.489045,
+     "rtt_p99_ms": 7.3774809999999995
+    },
+    "dropped": 0.008137804505147284,
+    "ingress_drops": 1996.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 4,
+   "backend": "rust",
+   "events": 3296627,
+   "wall_s": 0.222754024,
+   "summary": {
+    "pi": {
+     "sent": 1699.0,
+     "skipped": 1300.0,
+     "long_rtts_ms": [],
+     "timeouts": 13.0,
+     "unanswered": 13.0,
+     "affected": 0.007651559741024131,
+     "rtt_median_ms": 3.1239875,
+     "rtt_p99_ms": 7.32082319
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.754412,
+     "rtt_p99_ms": 7.367635
+    },
+    "dropped": 0.007150991220443998,
+    "ingress_drops": 1752.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 4,
+   "backend": "ns3",
+   "events": 1593448,
+   "wall_s": 0.9100201039982494,
+   "summary": {
+    "pi": {
+     "sent": 2663.0,
+     "skipped": 336.0,
+     "long_rtts_ms": [
+      210.022679,
+      211.180524,
+      211.766416,
+      212.870511,
+      212.937025,
+      212.97578700000003,
+      213.645378,
+      213.67339,
+      214.34840599999998,
+      214.35690599999998,
+      214.447125,
+      214.605757,
+      216.16360500000002,
+      216.956629,
+      216.99718299999998,
+      217.049866
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0060082613593691325,
+     "rtt_median_ms": 3.2961039999999997,
+     "rtt_p99_ms": 7.33754488
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.497951,
+     "rtt_p99_ms": 7.375583000000001
+    },
+    "dropped": 0.008275240091649198,
+    "ingress_drops": 2037.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 5,
+   "backend": "simpy",
+   "events": 3295064,
+   "wall_s": 7.192978121005581,
+   "summary": {
+    "pi": {
+     "sent": 1699.0,
+     "skipped": 1300.0,
+     "long_rtts_ms": [],
+     "timeouts": 13.0,
+     "unanswered": 13.0,
+     "affected": 0.007651559741024131,
+     "rtt_median_ms": 3.3673675000000003,
+     "rtt_p99_ms": 7.337628709999999
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.548011,
+     "rtt_p99_ms": 7.370235
+    },
+    "dropped": 0.007044755638867448,
+    "ingress_drops": 1725.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 5,
+   "backend": "rust",
+   "events": 3289847,
+   "wall_s": 0.220548505,
+   "summary": {
+    "pi": {
+     "sent": 1614.0,
+     "skipped": 1385.0,
+     "long_rtts_ms": [],
+     "timeouts": 13.0,
+     "unanswered": 14.0,
+     "affected": 0.008674101610904586,
+     "rtt_median_ms": 2.6850125000000005,
+     "rtt_p99_ms": 7.231057570000001
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.2067979999999996,
+     "rtt_p99_ms": 7.419516
+    },
+    "dropped": 0.006385685591913374,
+    "ingress_drops": 1561.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "ingress",
+   "rho": 0.997,
+   "seed": 5,
+   "backend": "ns3",
+   "events": 1590079,
+   "wall_s": 0.9156551289925119,
+   "summary": {
+    "pi": {
+     "sent": 2558.0,
+     "skipped": 441.0,
+     "long_rtts_ms": [
+      210.160267,
+      211.512631,
+      211.56554699999998,
+      211.64993299999998,
+      212.237145,
+      212.503832,
+      212.617417,
+      212.833905,
+      213.224238,
+      213.242775,
+      213.69023499999997,
+      214.245631,
+      215.337754,
+      215.450521,
+      215.701752,
+      215.92709599999998,
+      215.982935,
+      216.098823,
+      216.185915,
+      216.55428899999998,
+      216.705308
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.008209538702111024,
+     "rtt_median_ms": 3.2622505,
+     "rtt_p99_ms": 7.38335366
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 3.561157,
+     "rtt_p99_ms": 7.357531
+    },
+    "dropped": 0.00716128349731045,
+    "ingress_drops": 1760.0,
+    "egress_drops": 0.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 1,
+   "backend": "simpy",
+   "events": 3231101,
+   "wall_s": 7.066479093991802,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.210499,
+     "rtt_p99_ms": 6.216572
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.176974,
+     "rtt_p99_ms": 6.208091999999999
+    },
+    "dropped": 0.00026893920293143733,
+    "ingress_drops": 0.0,
+    "egress_drops": 64.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 1,
+   "backend": "rust",
+   "events": 3201465,
+   "wall_s": 0.223119376,
+   "summary": {
+    "pi": {
+     "sent": 2799.0,
+     "skipped": 200.0,
+     "long_rtts_ms": [],
+     "timeouts": 2.0,
+     "unanswered": 2.0,
+     "affected": 0.0007145409074669524,
+     "rtt_median_ms": 1.027715,
+     "rtt_p99_ms": 6.407669439999999
+    },
+    "waveshare": {
+     "sent": 1349.0,
+     "skipped": 150.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.002223869532987398,
+     "rtt_median_ms": 1.005711,
+     "rtt_p99_ms": 6.2706114
+    },
+    "dropped": 0.0004361135927715231,
+    "ingress_drops": 0.0,
+    "egress_drops": 103.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 1,
+   "backend": "ns3",
+   "events": 1561770,
+   "wall_s": 0.8895978490036214,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.210499,
+     "rtt_p99_ms": 6.216572
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.176974,
+     "rtt_p99_ms": 6.208091999999999
+    },
+    "dropped": 0.0002689369426912184,
+    "ingress_drops": 0.0,
+    "egress_drops": 64.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 2,
+   "backend": "simpy",
+   "events": 3217544,
+   "wall_s": 6.897264312006882,
+   "summary": {
+    "pi": {
+     "sent": 2899.0,
+     "skipped": 100.0,
+     "long_rtts_ms": [],
+     "timeouts": 1.0,
+     "unanswered": 1.0,
+     "affected": 0.00034494653328734045,
+     "rtt_median_ms": 1.039059,
+     "rtt_p99_ms": 5.795406640000001
+    },
+    "waveshare": {
+     "sent": 1449.0,
+     "skipped": 50.0,
+     "long_rtts_ms": [],
+     "timeouts": 1.0,
+     "unanswered": 1.0,
+     "affected": 0.0006901311249137336,
+     "rtt_median_ms": 1.034792,
+     "rtt_p99_ms": 5.85792545
+    },
+    "dropped": 0.0003162942126593596,
+    "ingress_drops": 0.0,
+    "egress_drops": 75.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 2,
+   "backend": "rust",
+   "events": 3223411,
+   "wall_s": 0.228540258,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.082763,
+     "rtt_p99_ms": 5.650085000000001
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.056529,
+     "rtt_p99_ms": 5.590762999999999
+    },
+    "dropped": 0.00020642443391258558,
+    "ingress_drops": 0.0,
+    "egress_drops": 49.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 2,
+   "backend": "ns3",
+   "events": 1557430,
+   "wall_s": 0.8800836699956562,
+   "summary": {
+    "pi": {
+     "sent": 2978.0,
+     "skipped": 21.0,
+     "long_rtts_ms": [
+      211.59097599999998
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.000335795836131632,
+     "rtt_median_ms": 1.0474285,
+     "rtt_p99_ms": 5.81733427
+    },
+    "waveshare": {
+     "sent": 1488.0,
+     "skipped": 11.0,
+     "long_rtts_ms": [
+      222.17945600000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0006720430107526882,
+     "rtt_median_ms": 1.046616,
+     "rtt_p99_ms": 5.9695133899999995
+    },
+    "dropped": 0.0003161835382202661,
+    "ingress_drops": 0.0,
+    "egress_drops": 75.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 3,
+   "backend": "simpy",
+   "events": 3211348,
+   "wall_s": 6.915652329000295,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.0094450000000001,
+     "rtt_p99_ms": 5.9752350000000005
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.972653,
+     "rtt_p99_ms": 5.907778
+    },
+    "dropped": 0.00021992801586865222,
+    "ingress_drops": 0.0,
+    "egress_drops": 52.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 3,
+   "backend": "rust",
+   "events": 3212740,
+   "wall_s": 0.227949614,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.972097,
+     "rtt_p99_ms": 5.868054
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.957288,
+     "rtt_p99_ms": 5.8502
+    },
+    "dropped": 0.00027053646535653747,
+    "ingress_drops": 0.0,
+    "egress_drops": 64.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 3,
+   "backend": "ns3",
+   "events": 1554464,
+   "wall_s": 0.8769451800035313,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.0094450000000001,
+     "rtt_p99_ms": 5.9752350000000005
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.972653,
+     "rtt_p99_ms": 5.907778
+    },
+    "dropped": 0.00021992615556392026,
+    "ingress_drops": 0.0,
+    "egress_drops": 52.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 4,
+   "backend": "simpy",
+   "events": 3216680,
+   "wall_s": 6.922385568002937,
+   "summary": {
+    "pi": {
+     "sent": 2799.0,
+     "skipped": 200.0,
+     "long_rtts_ms": [],
+     "timeouts": 2.0,
+     "unanswered": 2.0,
+     "affected": 0.0007145409074669524,
+     "rtt_median_ms": 1.054948,
+     "rtt_p99_ms": 6.18634276
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.020628,
+     "rtt_p99_ms": 6.385943
+    },
+    "dropped": 0.000535690935856283,
+    "ingress_drops": 0.0,
+    "egress_drops": 127.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 4,
+   "backend": "rust",
+   "events": 3219519,
+   "wall_s": 0.228075138,
+   "summary": {
+    "pi": {
+     "sent": 2899.0,
+     "skipped": 100.0,
+     "long_rtts_ms": [],
+     "timeouts": 1.0,
+     "unanswered": 1.0,
+     "affected": 0.00034494653328734045,
+     "rtt_median_ms": 1.0696539999999999,
+     "rtt_p99_ms": 6.02276716
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.088991,
+     "rtt_p99_ms": 6.303115
+    },
+    "dropped": 0.0003035733108464214,
+    "ingress_drops": 0.0,
+    "egress_drops": 72.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 4,
+   "backend": "ns3",
+   "events": 1557190,
+   "wall_s": 0.890709359999164,
+   "summary": {
+    "pi": {
+     "sent": 2957.0,
+     "skipped": 42.0,
+     "long_rtts_ms": [
+      210.05837100000002,
+      210.531591
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0006763611768684477,
+     "rtt_median_ms": 1.060108,
+     "rtt_p99_ms": 6.30753424
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.020628,
+     "rtt_p99_ms": 6.385943
+    },
+    "dropped": 0.0005395357463507573,
+    "ingress_drops": 0.0,
+    "egress_drops": 128.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 5,
+   "backend": "simpy",
+   "events": 3221602,
+   "wall_s": 7.069344784002169,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.073456,
+     "rtt_p99_ms": 5.552956
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.036994,
+     "rtt_p99_ms": 5.504911
+    },
+    "dropped": 3.794090493273921e-05,
+    "ingress_drops": 0.0,
+    "egress_drops": 9.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 5,
+   "backend": "rust",
+   "events": 3215745,
+   "wall_s": 0.228914128,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.997196,
+     "rtt_p99_ms": 6.418637
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 0.9631830000000001,
+     "rtt_p99_ms": 6.4026369999999995
+    },
+    "dropped": 0.0005362790678034093,
+    "ingress_drops": 0.0,
+    "egress_drops": 127.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.96,
+   "seed": 5,
+   "backend": "ns3",
+   "events": 1558288,
+   "wall_s": 0.8788631219940726,
+   "summary": {
+    "pi": {
+     "sent": 2999.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.073456,
+     "rtt_p99_ms": 5.552956
+    },
+    "waveshare": {
+     "sent": 1499.0,
+     "skipped": 0.0,
+     "long_rtts_ms": [],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0,
+     "rtt_median_ms": 1.036994,
+     "rtt_p99_ms": 5.504911
+    },
+    "dropped": 3.794058504382138e-05,
+    "ingress_drops": 0.0,
+    "egress_drops": 9.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 1,
+   "backend": "simpy",
+   "events": 3280422,
+   "wall_s": 6.997704961991985,
+   "summary": {
+    "pi": {
+     "sent": 2299.0,
+     "skipped": 700.0,
+     "long_rtts_ms": [],
+     "timeouts": 7.0,
+     "unanswered": 7.0,
+     "affected": 0.003044802087864289,
+     "rtt_median_ms": 2.4498055,
+     "rtt_p99_ms": 7.254309490000001
+    },
+    "waveshare": {
+     "sent": 1349.0,
+     "skipped": 150.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.002223869532987398,
+     "rtt_median_ms": 2.5842085,
+     "rtt_p99_ms": 7.23453986
+    },
+    "dropped": 0.003677604867273019,
+    "ingress_drops": 0.0,
+    "egress_drops": 894.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 1,
+   "backend": "rust",
+   "events": 3266991,
+   "wall_s": 0.226483423,
+   "summary": {
+    "pi": {
+     "sent": 2599.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.0015390534821085034,
+     "rtt_median_ms": 1.901368,
+     "rtt_p99_ms": 7.137492840000001
+    },
+    "waveshare": {
+     "sent": 1299.0,
+     "skipped": 200.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.003079291762894534,
+     "rtt_median_ms": 1.8386479999999998,
+     "rtt_p99_ms": 7.084263679999999
+    },
+    "dropped": 0.0027465141193161843,
+    "ingress_drops": 0.0,
+    "egress_drops": 664.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 1,
+   "backend": "ns3",
+   "events": 1584529,
+   "wall_s": 0.902713292001863,
+   "summary": {
+    "pi": {
+     "sent": 2831.0,
+     "skipped": 168.0,
+     "long_rtts_ms": [
+      210.718946,
+      211.130054,
+      211.367628,
+      212.108272,
+      214.34349,
+      214.373848,
+      215.490451,
+      215.86722500000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.00282585658777817,
+     "rtt_median_ms": 2.4609430000000003,
+     "rtt_p99_ms": 7.27125852
+    },
+    "waveshare": {
+     "sent": 1455.0,
+     "skipped": 44.0,
+     "long_rtts_ms": [
+      220.323106,
+      220.734214,
+      223.485848,
+      225.10226500000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0027491408934707906,
+     "rtt_median_ms": 2.504047,
+     "rtt_p99_ms": 7.248832600000001
+    },
+    "dropped": 0.003718555427408134,
+    "ingress_drops": 0.0,
+    "egress_drops": 906.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 2,
+   "backend": "simpy",
+   "events": 3276026,
+   "wall_s": 7.040018161991611,
+   "summary": {
+    "pi": {
+     "sent": 2499.0,
+     "skipped": 500.0,
+     "long_rtts_ms": [],
+     "timeouts": 5.0,
+     "unanswered": 5.0,
+     "affected": 0.0020008003201280513,
+     "rtt_median_ms": 2.161481,
+     "rtt_p99_ms": 7.193675000000001
+    },
+    "waveshare": {
+     "sent": 1299.0,
+     "skipped": 200.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.003079291762894534,
+     "rtt_median_ms": 2.180056,
+     "rtt_p99_ms": 7.2230247599999995
+    },
+    "dropped": 0.00248641337962543,
+    "ingress_drops": 0.0,
+    "egress_drops": 603.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 2,
+   "backend": "rust",
+   "events": 3280114,
+   "wall_s": 0.230734336,
+   "summary": {
+    "pi": {
+     "sent": 2499.0,
+     "skipped": 500.0,
+     "long_rtts_ms": [],
+     "timeouts": 5.0,
+     "unanswered": 5.0,
+     "affected": 0.0020008003201280513,
+     "rtt_median_ms": 2.275867,
+     "rtt_p99_ms": 7.1886608
+    },
+    "waveshare": {
+     "sent": 1449.0,
+     "skipped": 50.0,
+     "long_rtts_ms": [],
+     "timeouts": 1.0,
+     "unanswered": 1.0,
+     "affected": 0.0006901311249137336,
+     "rtt_median_ms": 2.3318654999999997,
+     "rtt_p99_ms": 7.1753481
+    },
+    "dropped": 0.0025601807380411525,
+    "ingress_drops": 0.0,
+    "egress_drops": 621.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 2,
+   "backend": "ns3",
+   "events": 1581948,
+   "wall_s": 0.8917545880103717,
+   "summary": {
+    "pi": {
+     "sent": 2873.0,
+     "skipped": 126.0,
+     "long_rtts_ms": [
+      211.197728,
+      211.243717,
+      211.531254,
+      213.286041,
+      213.623657,
+      217.084662
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.002088409328228333,
+     "rtt_median_ms": 2.1789110000000003,
+     "rtt_p99_ms": 7.2428301600000005
+    },
+    "waveshare": {
+     "sent": 1455.0,
+     "skipped": 44.0,
+     "long_rtts_ms": [
+      221.34003700000002,
+      222.767161,
+      226.196662,
+      226.365221
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0027491408934707906,
+     "rtt_median_ms": 2.200623,
+     "rtt_p99_ms": 7.264444880000001
+    },
+    "dropped": 0.002523609956114711,
+    "ingress_drops": 0.0,
+    "egress_drops": 613.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 3,
+   "backend": "simpy",
+   "events": 3269079,
+   "wall_s": 7.0220907340117265,
+   "summary": {
+    "pi": {
+     "sent": 2499.0,
+     "skipped": 500.0,
+     "long_rtts_ms": [],
+     "timeouts": 5.0,
+     "unanswered": 5.0,
+     "affected": 0.0020008003201280513,
+     "rtt_median_ms": 2.0596535,
+     "rtt_p99_ms": 6.9780842
+    },
+    "waveshare": {
+     "sent": 1349.0,
+     "skipped": 150.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.002223869532987398,
+     "rtt_median_ms": 2.052912,
+     "rtt_p99_ms": 7.0332753100000005
+    },
+    "dropped": 0.0022986985066728405,
+    "ingress_drops": 0.0,
+    "egress_drops": 556.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 3,
+   "backend": "rust",
+   "events": 3272962,
+   "wall_s": 0.235946164,
+   "summary": {
+    "pi": {
+     "sent": 2599.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.0015390534821085034,
+     "rtt_median_ms": 1.976807,
+     "rtt_p99_ms": 7.08109628
+    },
+    "waveshare": {
+     "sent": 1349.0,
+     "skipped": 150.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.002223869532987398,
+     "rtt_median_ms": 2.0000015,
+     "rtt_p99_ms": 7.141483920000001
+    },
+    "dropped": 0.001954246664766131,
+    "ingress_drops": 0.0,
+    "egress_drops": 473.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 3,
+   "backend": "ns3",
+   "events": 1578522,
+   "wall_s": 0.8855617020017235,
+   "summary": {
+    "pi": {
+     "sent": 2852.0,
+     "skipped": 147.0,
+     "long_rtts_ms": [
+      210.519058,
+      211.48336799999998,
+      212.733122,
+      213.17175500000002,
+      213.95998699999998,
+      214.766031,
+      214.94188200000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0024544179523141654,
+     "rtt_median_ms": 2.0590314999999997,
+     "rtt_p99_ms": 7.14321256
+    },
+    "waveshare": {
+     "sent": 1455.0,
+     "skipped": 44.0,
+     "long_rtts_ms": [
+      221.57682699999998,
+      223.425282,
+      223.514155,
+      224.862351
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0027491408934707906,
+     "rtt_median_ms": 2.05334,
+     "rtt_p99_ms": 7.138590799999999
+    },
+    "dropped": 0.0023529897417903364,
+    "ingress_drops": 0.0,
+    "egress_drops": 570.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 4,
+   "backend": "simpy",
+   "events": 3283265,
+   "wall_s": 7.011258861006354,
+   "summary": {
+    "pi": {
+     "sent": 2699.0,
+     "skipped": 300.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.0011115227862171174,
+     "rtt_median_ms": 2.200444,
+     "rtt_p99_ms": 7.18536016
+    },
+    "waveshare": {
+     "sent": 1349.0,
+     "skipped": 150.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.002223869532987398,
+     "rtt_median_ms": 2.2261425,
+     "rtt_p99_ms": 7.1645632599999995
+    },
+    "dropped": 0.003125012866489075,
+    "ingress_drops": 0.0,
+    "egress_drops": 759.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 4,
+   "backend": "rust",
+   "events": 3279046,
+   "wall_s": 0.228337765,
+   "summary": {
+    "pi": {
+     "sent": 2499.0,
+     "skipped": 500.0,
+     "long_rtts_ms": [],
+     "timeouts": 5.0,
+     "unanswered": 5.0,
+     "affected": 0.0020008003201280513,
+     "rtt_median_ms": 2.231134,
+     "rtt_p99_ms": 7.2078484
+    },
+    "waveshare": {
+     "sent": 1399.0,
+     "skipped": 100.0,
+     "long_rtts_ms": [],
+     "timeouts": 2.0,
+     "unanswered": 2.0,
+     "affected": 0.0014295925661186562,
+     "rtt_median_ms": 2.2987800000000003,
+     "rtt_p99_ms": 7.199141740000001
+    },
+    "dropped": 0.003041793751545627,
+    "ingress_drops": 0.0,
+    "egress_drops": 738.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 4,
+   "backend": "ns3",
+   "events": 1583557,
+   "wall_s": 0.902805398000055,
+   "summary": {
+    "pi": {
+     "sent": 2915.0,
+     "skipped": 84.0,
+     "long_rtts_ms": [
+      211.40411300000002,
+      214.752643,
+      215.80881200000002,
+      217.339207
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0013722126929674098,
+     "rtt_median_ms": 2.227955,
+     "rtt_p99_ms": 7.27935348
+    },
+    "waveshare": {
+     "sent": 1466.0,
+     "skipped": 33.0,
+     "long_rtts_ms": [
+      223.37248300000002,
+      225.659052,
+      226.45120699999998
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0020463847203274215,
+     "rtt_median_ms": 2.2325160000000004,
+     "rtt_p99_ms": 7.29793048
+    },
+    "dropped": 0.0031509018736759838,
+    "ingress_drops": 0.0,
+    "egress_drops": 766.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 5,
+   "backend": "simpy",
+   "events": 3272490,
+   "wall_s": 6.986754646990448,
+   "summary": {
+    "pi": {
+     "sent": 2299.0,
+     "skipped": 700.0,
+     "long_rtts_ms": [],
+     "timeouts": 7.0,
+     "unanswered": 7.0,
+     "affected": 0.003044802087864289,
+     "rtt_median_ms": 2.188381,
+     "rtt_p99_ms": 7.18282191
+    },
+    "waveshare": {
+     "sent": 1349.0,
+     "skipped": 150.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.002223869532987398,
+     "rtt_median_ms": 2.2371565,
+     "rtt_p99_ms": 7.15968243
+    },
+    "dropped": 0.002529483127150886,
+    "ingress_drops": 0.0,
+    "egress_drops": 613.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 5,
+   "backend": "rust",
+   "events": 3274674,
+   "wall_s": 0.231067098,
+   "summary": {
+    "pi": {
+     "sent": 2599.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 4.0,
+     "unanswered": 4.0,
+     "affected": 0.0015390534821085034,
+     "rtt_median_ms": 1.9494320000000003,
+     "rtt_p99_ms": 7.034719279999999
+    },
+    "waveshare": {
+     "sent": 1349.0,
+     "skipped": 150.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.002223869532987398,
+     "rtt_median_ms": 2.01692,
+     "rtt_p99_ms": 7.08242846
+    },
+    "dropped": 0.002736796915634004,
+    "ingress_drops": 0.0,
+    "egress_drops": 663.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.984,
+   "seed": 5,
+   "backend": "ns3",
+   "events": 1580350,
+   "wall_s": 0.48134627599210944,
+   "summary": {
+    "pi": {
+     "sent": 2789.0,
+     "skipped": 210.0,
+     "long_rtts_ms": [
+      210.84738399999998,
+      210.873861,
+      211.13084400000002,
+      212.59474400000002,
+      213.007259,
+      214.880795,
+      214.956456,
+      214.99392300000002,
+      215.576015,
+      216.094944
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0035855145213338113,
+     "rtt_median_ms": 2.229997,
+     "rtt_p99_ms": 7.231497300000001
+    },
+    "waveshare": {
+     "sent": 1455.0,
+     "skipped": 44.0,
+     "long_rtts_ms": [
+      220.013498,
+      220.06427499999998,
+      223.613763,
+      223.69933600000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0027491408934707906,
+     "rtt_median_ms": 2.269459,
+     "rtt_p99_ms": 7.190752
+    },
+    "dropped": 0.0025941512184275324,
+    "ingress_drops": 0.0,
+    "egress_drops": 630.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 1,
+   "backend": "simpy",
+   "events": 3315030,
+   "wall_s": 6.944003237993456,
+   "summary": {
+    "pi": {
+     "sent": 2299.0,
+     "skipped": 700.0,
+     "long_rtts_ms": [],
+     "timeouts": 7.0,
+     "unanswered": 7.0,
+     "affected": 0.003044802087864289,
+     "rtt_median_ms": 3.7829010000000007,
+     "rtt_p99_ms": 7.31870301
+    },
+    "waveshare": {
+     "sent": 1399.0,
+     "skipped": 100.0,
+     "long_rtts_ms": [],
+     "timeouts": 2.0,
+     "unanswered": 2.0,
+     "affected": 0.0014295925661186562,
+     "rtt_median_ms": 3.8036280000000007,
+     "rtt_p99_ms": 7.31020586
+    },
+    "dropped": 0.008549785747649316,
+    "ingress_drops": 0.0,
+    "egress_drops": 2105.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 1,
+   "backend": "rust",
+   "events": 3285451,
+   "wall_s": 0.22278265,
+   "summary": {
+    "pi": {
+     "sent": 1999.0,
+     "skipped": 1000.0,
+     "long_rtts_ms": [],
+     "timeouts": 10.0,
+     "unanswered": 10.0,
+     "affected": 0.0050025012506253125,
+     "rtt_median_ms": 2.770751,
+     "rtt_p99_ms": 7.280783200000001
+    },
+    "waveshare": {
+     "sent": 1199.0,
+     "skipped": 300.0,
+     "long_rtts_ms": [],
+     "timeouts": 6.0,
+     "unanswered": 6.0,
+     "affected": 0.0050041701417848205,
+     "rtt_median_ms": 2.8960939999999997,
+     "rtt_p99_ms": 7.3286125
+    },
+    "dropped": 0.006217052486820995,
+    "ingress_drops": 0.0,
+    "egress_drops": 1519.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 1,
+   "backend": "ns3",
+   "events": 1595816,
+   "wall_s": 0.9024482169916155,
+   "summary": {
+    "pi": {
+     "sent": 2726.0,
+     "skipped": 273.0,
+     "long_rtts_ms": [
+      210.213982,
+      210.38634299999998,
+      213.143001,
+      213.387671,
+      213.906552,
+      214.879491,
+      215.129177,
+      215.398277,
+      215.402938,
+      215.662371,
+      215.787719,
+      217.25563200000002,
+      217.302902
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.004768892149669846,
+     "rtt_median_ms": 3.698072,
+     "rtt_p99_ms": 7.3556289800000005
+    },
+    "waveshare": {
+     "sent": 1445.0,
+     "skipped": 54.0,
+     "long_rtts_ms": [
+      216.47212100000002,
+      220.357337,
+      223.56463200000002,
+      225.248517,
+      225.875472
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0034602076124567475,
+     "rtt_median_ms": 3.82741,
+     "rtt_p99_ms": 7.31038422
+    },
+    "dropped": 0.008651585177977783,
+    "ingress_drops": 0.0,
+    "egress_drops": 2134.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 2,
+   "backend": "simpy",
+   "events": 3292506,
+   "wall_s": 6.923701877007261,
+   "summary": {
+    "pi": {
+     "sent": 1936.0,
+     "skipped": 1063.0,
+     "long_rtts_ms": [],
+     "timeouts": 10.0,
+     "unanswered": 11.0,
+     "affected": 0.005681818181818182,
+     "rtt_median_ms": 3.475753,
+     "rtt_p99_ms": 7.31905994
+    },
+    "waveshare": {
+     "sent": 1118.0,
+     "skipped": 381.0,
+     "long_rtts_ms": [],
+     "timeouts": 7.0,
+     "unanswered": 8.0,
+     "affected": 0.007155635062611807,
+     "rtt_median_ms": 3.4033875,
+     "rtt_p99_ms": 7.288000869999999
+    },
+    "dropped": 0.006856690678000669,
+    "ingress_drops": 0.0,
+    "egress_drops": 1681.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 2,
+   "backend": "rust",
+   "events": 3287681,
+   "wall_s": 0.230501034,
+   "summary": {
+    "pi": {
+     "sent": 1694.0,
+     "skipped": 1305.0,
+     "long_rtts_ms": [],
+     "timeouts": 13.0,
+     "unanswered": 14.0,
+     "affected": 0.008264462809917356,
+     "rtt_median_ms": 4.050351,
+     "rtt_p99_ms": 7.354555899999999
+    },
+    "waveshare": {
+     "sent": 1147.0,
+     "skipped": 352.0,
+     "long_rtts_ms": [],
+     "timeouts": 7.0,
+     "unanswered": 8.0,
+     "affected": 0.006974716652136007,
+     "rtt_median_ms": 3.8353839999999995,
+     "rtt_p99_ms": 7.315789
+    },
+    "dropped": 0.007253179643749286,
+    "ingress_drops": 0.0,
+    "egress_drops": 1777.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 2,
+   "backend": "ns3",
+   "events": 1591999,
+   "wall_s": 0.8930456319940276,
+   "summary": {
+    "pi": {
+     "sent": 2726.0,
+     "skipped": 273.0,
+     "long_rtts_ms": [
+      210.273139,
+      210.627801,
+      211.89359299999998,
+      212.293654,
+      212.875387,
+      213.522491,
+      214.067374,
+      214.262926,
+      214.658201,
+      215.670907,
+      215.783451,
+      216.739792,
+      216.767903
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.004768892149669846,
+     "rtt_median_ms": 3.441593,
+     "rtt_p99_ms": 7.36924379
+    },
+    "waveshare": {
+     "sent": 1400.0,
+     "skipped": 99.0,
+     "long_rtts_ms": [
+      220.91349400000001,
+      221.324488,
+      221.760435,
+      223.03708300000002,
+      223.32226699999998,
+      223.864891,
+      223.867086,
+      224.139321,
+      226.997627
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0064285714285714285,
+     "rtt_median_ms": 3.4401189999999997,
+     "rtt_p99_ms": 7.35809929
+    },
+    "dropped": 0.006976176924953248,
+    "ingress_drops": 0.0,
+    "egress_drops": 1716.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 3,
+   "backend": "simpy",
+   "events": 3286562,
+   "wall_s": 4.4724355100042885,
+   "summary": {
+    "pi": {
+     "sent": 1999.0,
+     "skipped": 1000.0,
+     "long_rtts_ms": [],
+     "timeouts": 10.0,
+     "unanswered": 10.0,
+     "affected": 0.0050025012506253125,
+     "rtt_median_ms": 3.0661199999999997,
+     "rtt_p99_ms": 7.260095100000001
+    },
+    "waveshare": {
+     "sent": 1149.0,
+     "skipped": 350.0,
+     "long_rtts_ms": [],
+     "timeouts": 7.0,
+     "unanswered": 7.0,
+     "affected": 0.006092254134029591,
+     "rtt_median_ms": 3.1586914999999998,
+     "rtt_p99_ms": 7.2936631499999995
+    },
+    "dropped": 0.006028950414541469,
+    "ingress_drops": 0.0,
+    "egress_drops": 1474.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 3,
+   "backend": "rust",
+   "events": 3297606,
+   "wall_s": 0.107778817,
+   "summary": {
+    "pi": {
+     "sent": 2145.0,
+     "skipped": 854.0,
+     "long_rtts_ms": [],
+     "timeouts": 8.0,
+     "unanswered": 9.0,
+     "affected": 0.004195804195804196,
+     "rtt_median_ms": 2.7333365000000005,
+     "rtt_p99_ms": 7.275602760000001
+    },
+    "waveshare": {
+     "sent": 1349.0,
+     "skipped": 150.0,
+     "long_rtts_ms": [],
+     "timeouts": 3.0,
+     "unanswered": 3.0,
+     "affected": 0.002223869532987398,
+     "rtt_median_ms": 2.8204809999999996,
+     "rtt_p99_ms": 7.2975888
+    },
+    "dropped": 0.005332407142565276,
+    "ingress_drops": 0.0,
+    "egress_drops": 1305.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 3,
+   "backend": "ns3",
+   "events": 1587793,
+   "wall_s": 0.6860083470091922,
+   "summary": {
+    "pi": {
+     "sent": 2684.0,
+     "skipped": 315.0,
+     "long_rtts_ms": [
+      210.085591,
+      210.232937,
+      210.857772,
+      211.166145,
+      211.407113,
+      212.621385,
+      212.64291200000002,
+      212.840826,
+      213.158876,
+      214.640501,
+      215.26103700000002,
+      215.37236,
+      215.941286,
+      216.42667699999998,
+      216.74617600000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.005588673621460507,
+     "rtt_median_ms": 3.152894,
+     "rtt_p99_ms": 7.3473788
+    },
+    "waveshare": {
+     "sent": 1400.0,
+     "skipped": 99.0,
+     "long_rtts_ms": [
+      220.072315,
+      221.343777,
+      221.626473,
+      221.877665,
+      223.784012,
+      224.116476,
+      224.367701,
+      224.49607699999999,
+      226.71764000000002
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0064285714285714285,
+     "rtt_median_ms": 3.2708545000000004,
+     "rtt_p99_ms": 7.353786159999999
+    },
+    "dropped": 0.0061540594770069,
+    "ingress_drops": 0.0,
+    "egress_drops": 1509.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 4,
+   "backend": "simpy",
+   "events": 3298472,
+   "wall_s": 4.5356903380015865,
+   "summary": {
+    "pi": {
+     "sent": 2066.0,
+     "skipped": 933.0,
+     "long_rtts_ms": [],
+     "timeouts": 9.0,
+     "unanswered": 10.0,
+     "affected": 0.00484027105517909,
+     "rtt_median_ms": 3.3245099999999996,
+     "rtt_p99_ms": 7.288183320000001
+    },
+    "waveshare": {
+     "sent": 1183.0,
+     "skipped": 316.0,
+     "long_rtts_ms": [],
+     "timeouts": 6.0,
+     "unanswered": 7.0,
+     "affected": 0.005917159763313609,
+     "rtt_median_ms": 3.159777,
+     "rtt_p99_ms": 7.273112639999999
+    },
+    "dropped": 0.008166174523979228,
+    "ingress_drops": 0.0,
+    "egress_drops": 2005.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 4,
+   "backend": "rust",
+   "events": 3290383,
+   "wall_s": 0.111395,
+   "summary": {
+    "pi": {
+     "sent": 1699.0,
+     "skipped": 1300.0,
+     "long_rtts_ms": [],
+     "timeouts": 13.0,
+     "unanswered": 13.0,
+     "affected": 0.007651559741024131,
+     "rtt_median_ms": 3.1888965000000002,
+     "rtt_p99_ms": 7.312648380000001
+    },
+    "waveshare": {
+     "sent": 1249.0,
+     "skipped": 250.0,
+     "long_rtts_ms": [],
+     "timeouts": 5.0,
+     "unanswered": 5.0,
+     "affected": 0.0040032025620496394,
+     "rtt_median_ms": 3.5896455000000005,
+     "rtt_p99_ms": 7.3250972999999995
+    },
+    "dropped": 0.0071469096044505945,
+    "ingress_drops": 0.0,
+    "egress_drops": 1751.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 4,
+   "backend": "ns3",
+   "events": 1592985,
+   "wall_s": 0.45513305699569173,
+   "summary": {
+    "pi": {
+     "sent": 2726.0,
+     "skipped": 273.0,
+     "long_rtts_ms": [
+      210.02279099999998,
+      210.11992800000002,
+      211.766416,
+      212.814191,
+      212.937025,
+      212.97578700000003,
+      214.225366,
+      214.321706,
+      214.324085,
+      216.16360500000002,
+      216.87918900000003,
+      217.049503,
+      217.075005
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.004768892149669846,
+     "rtt_median_ms": 3.339399,
+     "rtt_p99_ms": 7.338620840000001
+    },
+    "waveshare": {
+     "sent": 1411.0,
+     "skipped": 88.0,
+     "long_rtts_ms": [
+      220.140653,
+      221.055071,
+      223.652111,
+      223.895419,
+      224.146666,
+      225.54630300000002,
+      226.11354999999998,
+      226.975509
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.005669737774627924,
+     "rtt_median_ms": 3.347022,
+     "rtt_p99_ms": 7.376913279999999
+    },
+    "dropped": 0.008301754984505286,
+    "ingress_drops": 0.0,
+    "egress_drops": 2044.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 5,
+   "backend": "simpy",
+   "events": 3285046,
+   "wall_s": 3.9651274610077962,
+   "summary": {
+    "pi": {
+     "sent": 1699.0,
+     "skipped": 1300.0,
+     "long_rtts_ms": [],
+     "timeouts": 13.0,
+     "unanswered": 13.0,
+     "affected": 0.007651559741024131,
+     "rtt_median_ms": 3.5591649999999997,
+     "rtt_p99_ms": 7.336834799999999
+    },
+    "waveshare": {
+     "sent": 1099.0,
+     "skipped": 400.0,
+     "long_rtts_ms": [],
+     "timeouts": 8.0,
+     "unanswered": 8.0,
+     "affected": 0.007279344858962694,
+     "rtt_median_ms": 3.302681,
+     "rtt_p99_ms": 7.30969608
+    },
+    "dropped": 0.007057007387804609,
+    "ingress_drops": 0.0,
+    "egress_drops": 1728.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 5,
+   "backend": "rust",
+   "events": 3280053,
+   "wall_s": 0.218178828,
+   "summary": {
+    "pi": {
+     "sent": 1714.0,
+     "skipped": 1285.0,
+     "long_rtts_ms": [],
+     "timeouts": 12.0,
+     "unanswered": 13.0,
+     "affected": 0.007584597432905484,
+     "rtt_median_ms": 2.7869029999999997,
+     "rtt_p99_ms": 7.258680419999999
+    },
+    "waveshare": {
+     "sent": 1007.0,
+     "skipped": 492.0,
+     "long_rtts_ms": [],
+     "timeouts": 9.0,
+     "unanswered": 10.0,
+     "affected": 0.009930486593843098,
+     "rtt_median_ms": 2.791508,
+     "rtt_p99_ms": 7.236540580000001
+    },
+    "dropped": 0.006407608984555495,
+    "ingress_drops": 0.0,
+    "egress_drops": 1567.0
+   }
+  },
+  {
+   "model": "egress",
+   "rho": 0.997,
+   "seed": 5,
+   "backend": "ns3",
+   "events": 1589993,
+   "wall_s": 0.901175716004218,
+   "summary": {
+    "pi": {
+     "sent": 2663.0,
+     "skipped": 336.0,
+     "long_rtts_ms": [
+      210.160267,
+      211.196533,
+      211.519671,
+      211.64993299999998,
+      212.16642499999998,
+      212.481432,
+      212.546697,
+      213.223918,
+      214.297951,
+      215.404474,
+      215.450521,
+      215.92709599999998,
+      215.938705,
+      216.08474299999997,
+      216.115195,
+      216.606609
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.0060082613593691325,
+     "rtt_median_ms": 3.368413,
+     "rtt_p99_ms": 7.36620684
+    },
+    "waveshare": {
+     "sent": 1389.0,
+     "skipped": 110.0,
+     "long_rtts_ms": [
+      221.77058499999998,
+      222.085592,
+      222.581998,
+      223.015413,
+      224.242537,
+      224.88643100000002,
+      225.226449,
+      225.258074,
+      226.496263,
+      227.318875
+     ],
+     "timeouts": 0.0,
+     "unanswered": 0.0,
+     "affected": 0.007199424046076314,
+     "rtt_median_ms": 3.3835450000000002,
+     "rtt_p99_ms": 7.358431999999999
+    },
+    "dropped": 0.007195122447236447,
+    "ingress_drops": 0.0,
+    "egress_drops": 1769.0
+   }
+  }
+ ]
+}

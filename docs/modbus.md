@@ -43,7 +43,9 @@ What a lost request or response does depends on the backend:
 | `modbus_timeouts` | polls | requests that timed out so far, with `outstanding=1` |
 | `modbus_skipped` | polls | poll instants skipped so far, with `outstanding=1` |
 
-All four are observed on the master. Their exact definitions are in [Model Semantics](model-semantics.md#8-metrics).
+All four are observed on the master, over its polls, or on a slave, over the polls of that slave from every master ([ADR-0013](adr/0013-ingress-buffer-accounting.md)). So one master that polls two servers can tell their losses apart. Their exact definitions are in [Model Semantics](model-semantics.md#8-metrics).
+
+**A slave can also be a traffic source.** Every end station can send flows ([ADR-0013](adr/0013-ingress-buffer-accounting.md)), so a host that serves Modbus and streams data on one port is one `modbus_slave` with a `flow`. Its responses then share its port, and its ingress account at the switch, with its stream: [`example_ingress_buffer.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_ingress_buffer.smol).
 
 ## Frame size formula
 

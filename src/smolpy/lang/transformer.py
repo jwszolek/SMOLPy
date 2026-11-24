@@ -6,6 +6,7 @@ from typing import Any
 from lark import Lark, Token, Transformer, UnexpectedInput, v_args
 from lark.exceptions import VisitError
 
+from smolpy.ethernet.switch import Frames
 from smolpy.lang.ast import (
     AdapterDecl,
     ControlDecl,
@@ -60,6 +61,25 @@ def _bytes(raw: Any) -> Any:
     if isinstance(raw, float) and raw == int(raw):
         return int(raw)
     return raw
+
+
+_FRAME_SUFFIXES = ("frames", "frame")
+
+
+def _limit(raw: Any) -> Any:
+    """A switch buffer limit (ADR-0011, ADR-0013): ``<n>frames`` is a limit
+    in frames, a :class:`Frames`; anything else is bytes, as for
+    :func:`_bytes`. A value that is neither is left for validation."""
+    if isinstance(raw, str):
+        for suffix in _FRAME_SUFFIXES:
+            if raw.endswith(suffix):
+                number = _coerce(raw[: -len(suffix)])
+                if isinstance(number, float) and number == int(number):
+                    number = int(number)
+                if isinstance(number, (int, float)) and not isinstance(number, bool):
+                    return Frames(number)  # type: ignore[arg-type]
+                return raw
+    return _bytes(raw)
 
 
 def _outstanding(raw: Any) -> Any:
@@ -128,7 +148,8 @@ class _SmolTransformer(Transformer):
             line=meta.line,
             qos=str(kw.get("qos", "strict")),
             mac_table=str(kw.get("mac_table", "learning")),
-            buffer=_bytes(kw["buffer"]) if "buffer" in kw else None,
+            buffer=_limit(kw["buffer"]) if "buffer" in kw else None,
+            ingress_buffer=_limit(kw["ingress_buffer"]) if "ingress_buffer" in kw else None,
         )
 
     def mqtt_broker_decl(self, meta: Any, children: list) -> MqttBrokerDecl:

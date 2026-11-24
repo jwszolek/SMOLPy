@@ -38,6 +38,20 @@ sw = net.switch("sw", ports=8, buffer=115_000)    # bytes per port
 - **Effect.** The queueing delay of a port is capped at about `buffer / speed`, and frames are lost instead. `drops` and `drops_total` count them, and `frames_sent` and `frames_received` give a flow's loss.
 - **Where.** The limit is per egress port, on switches only: end stations never drop a frame.
 - **Validation.** `buffer` must be a whole number of bytes, at least 1522 and at least the largest frame of the scenario.
+
+**Ingress limits and limits in frames** ([ADR-0013](adr/0013-ingress-buffer-accounting.md)). Many unmanaged switches bound what each ingress port may hold, and count frames rather than bytes. `ingress_buffer` bounds the frames that entered on each port and are still queued on any port, and `Frames(n)` gives a limit in frames, for either limit:
+
+```python
+from smolpy import Frames
+
+sw = net.switch("sw", ports=8, ingress_buffer=Frames(60))
+sw = net.switch("sw", ports=8, buffer=115_000, ingress_buffer=Frames(60))
+```
+
+- **Admission.** A frame whose ingress port's account is full is dropped, before any egress port is looked at (`ingress_drops_total`). Otherwise each copy is admitted by its egress port (`egress_drops_total`). `drops` and `drops_total` count both.
+- **Release.** A frame leaves its ingress account when the transmitter takes its last queued copy. A flooded frame counts once.
+- **The port that congests the switch loses its frames,** and another port's frames to the same egress port do not. With a limit in frames, a 64 B frame is dropped as often as a 1518 B one.
+- **One unit per limit.** An `int` is bytes and `Frames(n)` is frames. `n` is a whole number of at least 1.
 - **On loss there is no retransmission** on SimPy and Rust. A poll whose request or response is lost stays unanswered (`modbus_unanswered`), or times out with `outstanding=1` and a timeout (below). On ns-3, Modbus and MQTT run over TCP, which retransmits ([Execution backends](backends.md#bounded-switch-buffers)).
 
 ## Traffic
@@ -45,6 +59,9 @@ sw = net.switch("sw", ports=8, buffer=115_000)    # bytes per port
 ```python
 # Basic Ethernet send
 src.sends(to=dst, rate=8_000, size=1_518, pattern="constant")
+
+# Any end station sends flows: a Modbus server that also streams data (ADR-0013)
+pi.sends(to=laptop, rate=8_100, size=1_518, pattern="poisson")
 
 # Delayed start (useful for staggered scenarios)
 src.sends(to=dst, rate=8_000, size=1_518, pattern="constant", delay_ms=5_000)
@@ -68,9 +85,11 @@ plc.controls(device, cycle=4, inputs=32, outputs=16, hold=3)
 
 ### `sends()` parameters
 
+`sends()` is a method of every end station: `Adapter`, `ModbusSlave`, `MQTTBroker` and `ProfinetDevice` ([ADR-0013](adr/0013-ingress-buffer-accounting.md)).
+
 | Parameter | Type | Description |
 |---|---|---|
-| `to` | Adapter | Destination adapter |
+| `to` | end station | Destination: an adapter, Modbus slave, MQTT broker or PROFINET device |
 | `rate` | float | Frames per second |
 | `size` | int \| `"imix"` | Ethernet frame size in bytes, FCS included, at least 64; or Internet Mix distribution |
 | `pattern` | str | `"constant"`, `"poisson"`, `"bursty"`, or `"batch"` |
@@ -150,22 +169,24 @@ net.observe(metric, on=node, every=interval_ms)
 |---|---|---|
 | `throughput` | Mb/s | Adapter |
 | `latency` | µs | Adapter |
-| `bytes_sent` | MB | Adapter (sender) |
+| `bytes_sent` | MB | any end station (sender) |
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
 | `utilization` | % | Any node |
 | `broker_queue` | msgs | MQTTBroker |
-| `modbus_latency` | µs | Adapter (master) |
+| `modbus_latency` | µs | Adapter (master), ModbusSlave (its polls) |
 | `pn_latency` | µs | Adapter (controller), ProfinetDevice |
 | `pn_jitter` | µs | Adapter (controller), ProfinetDevice |
 | `pn_watchdog_expiries` | count | Adapter (controller), ProfinetDevice |
-| `drops` | frames | Switch: dropped by its buffers in the window |
+| `drops` | frames | Switch: dropped by its buffers in the window, ingress and egress |
 | `drops_total` | frames | Switch: dropped by its buffers so far |
-| `frames_sent` | frames | Adapter (sender) |
+| `frames_sent` | frames | any end station (sender) |
 | `frames_received` | frames | Adapter (receiver) |
-| `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
-| `modbus_timeouts` | polls | Adapter (master): requests that timed out so far, with `outstanding=1` |
-| `modbus_skipped` | polls | Adapter (master): poll instants skipped so far, because a request was outstanding |
+| `modbus_unanswered` | polls | Adapter (master), ModbusSlave (its polls): polls without a response so far, lost or in flight |
+| `modbus_timeouts` | polls | Adapter (master), ModbusSlave (its polls): requests that timed out so far, with `outstanding=1` |
+| `modbus_skipped` | polls | Adapter (master), ModbusSlave (its polls): poll instants skipped so far, because a request was outstanding |
+| `ingress_drops_total` | frames | Switch: dropped by its ingress accounts so far |
+| `egress_drops_total` | frames | Switch: dropped by its egress accounts so far |
 
 ## Simulation
 
@@ -202,7 +223,7 @@ result.export("out.csv", format="csv")   # explicit format override
 - **`smolpy.backends.installed()`** lists the backends that can run here.
 
 **The Rust backend** runs the whole model:
-- adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables), links and flows with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
+- adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables, egress and ingress limits in bytes or frames), links and flows between any end stations with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
 - Modbus TCP: slaves, `polls()`, open loop or with one request in flight, and `modbus_latency`;
 - MQTT: brokers, `publishes()` with QoS 0 and 1, `routes()` and `broker_queue`;
 - PROFINET RT: devices, `controls()` and its watchdog, `pn_latency`, `pn_jitter` and `pn_watchdog_expiries`;

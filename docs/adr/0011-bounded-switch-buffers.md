@@ -3,6 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-11-23  
 **Amends:** ADR-0007 (a new optional field of the IR, which stays version 2), ADR-0004 (the `smol-ns3` line format becomes version 2), [Model Semantics](../model-semantics.md) §3, §5, §8 and §9  
+**Amended by:** [ADR-0013](0013-ingress-buffer-accounting.md) (ingress accounts and limits in frames)  
 **Roadmap:** the candidate "Bounded switch buffers with frame loss"
 
 ---
@@ -51,6 +52,7 @@ sw = net.switch("sw", ports=8, buffer=115_000)
 ```
 
 - **Unit: bytes.** Real switches allocate buffer memory by size, not by frame count. A limit in frames would let 64 B and 1 518 B frames take the same space.
+    - *Revised by [ADR-0013](0013-ingress-buffer-accounting.md), 2026-11-24:* the testbed switch, measured more widely, drops 75 B responses almost as often as 1 518 B frames, so it counts frames. A limit can now be in bytes or in frames.
 - **Suffixes** in `.smol`: `kB` (10³), `MB` (10⁶), `KiB` (2¹⁰), `MiB` (2²⁰). The value must come out as a whole number of bytes. The Python API takes an `int`.
 - **Default: unbounded,** as now. A scenario without `buffer` means exactly what it meant before: same results, same event counts, same benchmark hashes (B1–B4) and the same equivalence suite.
 - **Validation.** `buffer` must be a positive integer, not a bool. It must be at least one maximum frame: 1 522 B, the largest standard frame with an 802.1Q tag, and at least the largest frame that any traffic statement of the scenario sends. A jumbo flow would otherwise be dropped in full at every bounded switch it crosses.
@@ -81,7 +83,7 @@ Further rules:
 
 ### Scope
 
-- **Per egress port of a switch.** Ingress buffering is not modelled. A switch forwards in zero time (§4).
+- **Per egress port of a switch.** Ingress buffering is not modelled. A switch forwards in zero time (§4). *Amended by [ADR-0013](0013-ingress-buffer-accounting.md):* a switch can also bound what each ingress port holds.
 - **End stations stay unbounded.** The egress queues of adapters, MQTT brokers, Modbus slaves and PROFINET devices have no limit. A station never drops a frame it generates, as a host's socket buffer and qdisc would push back on the application instead. The scenario offers its traffic, and only the network loses it.
 - **Possible later extensions, not part of this decision:**
     - a buffer pool shared by the ports of a switch, with per-port thresholds;

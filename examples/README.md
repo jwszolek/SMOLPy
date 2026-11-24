@@ -1,6 +1,6 @@
 # SMOLPy Examples
 
-Twelve ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, a switch with a bounded buffer, and a Modbus master that waits for each response.  Every example opens a live desktop dashboard as the simulation runs.
+Thirteen ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, a switch with a bounded buffer, a Modbus master that waits for each response, and a switch that bounds each ingress port.  Every example opens a live desktop dashboard as the simulation runs.
 
 ## Prerequisites
 
@@ -397,6 +397,20 @@ The bottleneck of example 11 at 99 % load, with `buffer=91080`, so that a full q
 - **On ns-3** the poll runs over TCP with Linux's minimum RTO of 200 ms. A lost response is retransmitted and arrives about 210 ms after its request: `modbus_latency` peaks at about 216 ms, the poll skips 210 instants in all, and no timeout fires.
 - **Without `outstanding` and `timeout`** the poll is open loop: a lost poll stays unanswered (`modbus_unanswered`), and the next ones go out on schedule.
 
+### 13. `example_ingress_buffer.smol` — A switch that bounds each ingress port
+
+```bash
+uv run smolpy run examples/example_ingress_buffer.smol
+uv run smolpy run examples/example_ingress_buffer.smol --backend ns3
+```
+
+The testbed as measured for [ADR-0013](https://jwszolek.github.io/SMOLPy/adr/0013-ingress-buffer-accounting/): the Raspberry Pi is one `modbus_slave` that also sends Poisson UDP to the laptop at 99.7 % of its 100 Mb/s port, and a Waveshare relay module on another port is polled every 20 ms. The switch holds `ingress_buffer=60frames`: 60 frames per ingress port, whatever their size.
+
+- **The Pi's port fills.** Its UDP frames and its Modbus responses are dropped alike: 11 polls of the Pi time out on SimPy in 30 s (`modbus_timeouts` on `pi`), and `ingress_drops_total` counts 1 490 frames.
+- **The Waveshare's port never does.** None of its polls times out, although its responses queue on the same full port to the laptop.
+- **With `buffer=91080` instead,** one egress buffer of 60 full frames, the Waveshare loses responses too: 4 on SimPy.
+- **On ns-3** TCP retransmits each lost response after about 210 ms, so no poll times out.
+
 ---
 
 ### Multi-switch topology
@@ -414,19 +428,21 @@ net.link(edge_sw, core_sw, speed=1_000, length=5)   # inter-switch uplink
 |---|---|---|
 | `throughput` | Mb/s | Adapter |
 | `latency` | µs | Adapter |
-| `bytes_sent` | MB | Adapter (sender) |
+| `bytes_sent` | MB | any end station (sender) |
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
 | `utilization` | % | Any node |
 | `broker_queue` | msgs | MQTTBroker |
-| `modbus_latency` | µs | Adapter (master) |
-| `drops` | frames | Switch: dropped by its buffers in the window |
+| `modbus_latency` | µs | Adapter (master), ModbusSlave (its polls) |
+| `drops` | frames | Switch: dropped by its buffers in the window, ingress and egress |
 | `drops_total` | frames | Switch: dropped by its buffers so far |
-| `frames_sent` | frames | Adapter (sender) |
+| `frames_sent` | frames | any end station (sender) |
 | `frames_received` | frames | Adapter (receiver) |
-| `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
-| `modbus_timeouts` | polls | Adapter (master): requests that timed out so far, with `outstanding=1` |
-| `modbus_skipped` | polls | Adapter (master): poll instants skipped so far, because a request was outstanding |
+| `modbus_unanswered` | polls | Adapter (master), ModbusSlave (its polls): polls without a response so far, lost or in flight |
+| `modbus_timeouts` | polls | Adapter (master), ModbusSlave (its polls): requests that timed out so far, with `outstanding=1` |
+| `modbus_skipped` | polls | Adapter (master), ModbusSlave (its polls): poll instants skipped so far, because a request was outstanding |
+| `ingress_drops_total` | frames | Switch: dropped by its ingress accounts so far |
+| `egress_drops_total` | frames | Switch: dropped by its egress accounts so far |
 
 ### Traffic patterns
 

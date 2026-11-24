@@ -4,11 +4,11 @@
 // scenario that smolpy.ns3 has lowered to plain lines of integers, with every
 // time already in integer nanoseconds (Model Semantics §1):
 //
-//     smol-ns3 3
+//     smol-ns3 4
 //     duration <ns>
 //     tcp <min RTO ns> <clock granularity ns> <delayed ACK ns> <SYN RTO ns>
 //     adapter <mac> <ipv4>                   nodes, numbered from 0 in order
-//     switch <buffer B>                     0: unbounded egress queues
+//     switch <egress limit> <unit> <ingress limit> <unit>   b: bytes, f: frames; 0: none
 //     link <a> <b> <speed num> <speed den> <propagation ns> <gap ns> <strict a> <strict b>
 //     static <switch> <mac> <port>          a switch's MAC table at the start
 //     flow <src> <dst ipv4> <udp payload> <priority> <delay ns> <period num> <period den>
@@ -27,7 +27,9 @@
 // messages are sized in bytes of TCP payload, and topics are numbered. A
 // poll's outstanding is 0 for unlimited or 1 (ADR-0012), and its timeout 0
 // for none. The tcp line sets ns-3's TCP to Linux's where that shapes
-// recovery (ADR-0012), before any socket exists.
+// recovery (ADR-0012), before any socket exists. Every end station is an
+// "adapter" line, an IPv4 host, so a flow may start at any of them
+// (ADR-0013); the Modbus metrics of a slave are its "polled_" kinds.
 // PROFINET RT frames are layer 2 and sized as whole frames, 802.1Q tag and
 // padding included.
 //
@@ -47,15 +49,19 @@
 //   an 802.1Q tag (4 B) with a priority above 0; it occupies the wire for
 //   preamble, SFD and frame, and the next frame waits for the 12 B gap
 //   (ADR-0010). The egress queue serves priorities strictly, FIFO within
-//   one, or is plain FIFO on a switch with qos=fifo. On a switch with a
-//   buffer it holds at most that many frame bytes, the frame in
-//   transmission not counted, and drops a frame that does not fit (tail
-//   drop, ADR-0011). An idle port takes a queued frame after the events
-//   already scheduled for that instant, as the reference engine does, so
-//   frames queued at one instant compete by priority and are admitted
-//   against the same buffer.
+//   one, or is plain FIFO on a switch with qos=fifo. On a switch with an
+//   egress limit it holds at most that many frame bytes or frames, the
+//   frame in transmission not counted, and drops a frame that does not fit
+//   (tail drop, ADR-0011, ADR-0013). An idle port takes a queued frame after
+//   the events already scheduled for that instant, as the reference engine
+//   does, so frames queued at one instant compete by priority and are
+//   admitted against the same buffer.
 // - SmolSwitch: store-and-forward, learning, flooding unknown destinations to
-//   every port but the one a frame came in on, dropping hairpins.
+//   every port but the one a frame came in on, dropping hairpins. With an
+//   ingress limit, each port's account holds the frames that came in on it
+//   and are still queued on any port, a flooded frame once (ADR-0013): a
+//   frame that does not fit is dropped before any egress port is looked at,
+//   and the account is released when the transmitter takes the last copy.
 // - Neighbour caches start full: SMOL models no ARP.
 
 #include "ns3/core-module.h"
@@ -272,6 +278,43 @@ class PriorityTag : public Tag
 constexpr uint16_t PN_ETHERTYPE = 0x8892;
 constexpr uint8_t PN_RT_PRIORITY = 6;
 
+// A switch buffer account, as smolpy.sim.engine._Account: what it holds of
+// the frames queued, in frame bytes or in frames, against its limit.
+struct Account
+{
+    uint64_t limit = 0; // 0: none
+    bool frames = false;
+    uint64_t held = 0;
+
+    uint64_t Unit(uint64_t bytes) const
+    {
+        return frames ? 1 : bytes;
+    }
+
+    bool Fits(uint64_t bytes) const
+    {
+        return held + Unit(bytes) <= limit;
+    }
+
+    void Charge(uint64_t bytes)
+    {
+        held += Unit(bytes);
+    }
+
+    void Release(uint64_t bytes)
+    {
+        held -= Unit(bytes);
+    }
+};
+
+// A frame admitted to an ingress account (ADR-0013): it leaves the account
+// when the last of its queued copies is taken.
+struct Stored
+{
+    Account* account;
+    uint32_t copies = 0;
+};
+
 struct Frame
 {
     Ptr<Packet> packet;
@@ -281,6 +324,8 @@ struct Frame
     uint64_t bytes = 0;
     uint8_t priority = 0;
     int32_t ar = -1; // a PROFINET RT frame's AR
+    // while it is queued on a switch with ingress accounts, shared by copies
+    std::shared_ptr<Stored> stored;
 };
 
 struct Window
@@ -379,14 +424,14 @@ class SmolDevice : public NetDevice
                    u128 speedDen,
                    uint64_t gapNs,
                    bool strict,
-                   uint64_t buffer,
+                   Account egress,
                    Ptr<SmolChannel> channel)
     {
         m_speedNum = speedNum;
         m_speedDen = speedDen;
         m_gapNs = gapNs;
         m_strict = strict;
-        m_buffer = buffer;
+        m_egress = egress;
         m_channel = channel;
     }
 
@@ -399,17 +444,20 @@ class SmolDevice : public NetDevice
     // A frame at the end of its propagation (SmolChannel).
     void Receive(Frame frame);
 
-    // A frame for the egress queue. A bounded queue drops it if its bytes
-    // would exceed the buffer. An idle port takes it at this instant, after
-    // the events already scheduled for it (Model Semantics §3, §9).
-    void Enqueue(Frame frame)
+    // A frame for the egress queue; false if the egress account drops it.
+    // An idle port takes it at this instant, after the events already
+    // scheduled for it (Model Semantics §3, §9).
+    bool Enqueue(Frame frame)
     {
-        if (m_buffer > 0 && m_queuedBytes + frame.bytes > m_buffer)
+        if (m_egress.limit > 0)
         {
-            ++dropped; // tail drop: nothing is queued or scheduled
-            return;
+            if (!m_egress.Fits(frame.bytes))
+            {
+                ++dropped; // tail drop: nothing is queued or scheduled
+                return false;
+            }
+            m_egress.Charge(frame.bytes);
         }
-        m_queuedBytes += frame.bytes;
         m_queue[m_strict ? frame.priority : 0].push_back(std::move(frame));
         ++m_queued;
         if (!m_busy && !m_starting)
@@ -417,6 +465,7 @@ class SmolDevice : public NetDevice
             m_starting = true;
             Simulator::ScheduleNow(&SmolDevice::Start, this);
         }
+        return true;
     }
 
     uint64_t QueueLength() const
@@ -428,7 +477,7 @@ class SmolDevice : public NetDevice
     uint64_t framesSent = 0;     // those frames
     uint64_t bytesReceived = 0;  // frames addressed to this port
     uint64_t framesReceived = 0; // those frames
-    uint64_t dropped = 0;        // frames a bounded queue dropped
+    uint64_t dropped = 0;        // frames the egress account dropped
     std::vector<Window*> latencyWindows;
     PnConsumer* pn = nullptr; // the node's PROFINET consumer
 
@@ -613,7 +662,20 @@ class SmolDevice : public NetDevice
         m_sending = std::move(q->front());
         q->pop_front();
         --m_queued;
-        m_queuedBytes -= m_sending.bytes; // in transmission: out of the buffer
+        // in transmission: out of the buffer, and its last copy out of the
+        // ingress account
+        if (m_egress.limit > 0)
+        {
+            m_egress.Release(m_sending.bytes);
+        }
+        if (m_sending.stored)
+        {
+            if (--m_sending.stored->copies == 0)
+            {
+                m_sending.stored->account->Release(m_sending.bytes);
+            }
+            m_sending.stored.reset();
+        }
         uint64_t now = Simulator::Now().GetNanoSeconds();
         uint64_t gap = m_freeAt > now ? m_freeAt - now : 0; // the gap after the last frame
         Simulator::Schedule(NanoSeconds(gap + TransmissionNs(m_sending.bytes)),
@@ -635,10 +697,9 @@ class SmolDevice : public NetDevice
     u128 m_speedDen = 1;
     uint64_t m_gapNs = 0;
     bool m_strict = true;
-    uint64_t m_buffer = 0; // bytes; 0: unbounded
+    Account m_egress; // a limit of 0: unbounded
     std::array<std::deque<Frame>, 8> m_queue; // by priority; all in 0 if not strict
     uint64_t m_queued = 0;
-    uint64_t m_queuedBytes = 0;
     Frame m_sending;
     bool m_busy = false;
     bool m_starting = false; // a Start is scheduled for this instant
@@ -728,10 +789,30 @@ class SmolSwitch
     std::vector<Ptr<SmolDevice>> ports; // in the order of the switch's links
     std::unordered_map<uint64_t, uint32_t> table;
 
+    // With ingress accounts, a frame is dropped if its ingress port's account
+    // has no room; otherwise each copy is admitted by its egress port, and
+    // the frame is charged once if a copy was queued (ADR-0013).
     void Receive(uint32_t in, Frame frame)
     {
         table[MacKey(frame.src)] = in;
         auto it = table.find(MacKey(frame.dst));
+        if (it != table.end() && it->second == in)
+        {
+            return; // the port it came in on: a hairpin, dropped
+        }
+        std::shared_ptr<Stored> stored;
+        if (!ingress.empty())
+        {
+            if (!ingress[in].Fits(frame.bytes))
+            {
+                ++ingressDropped; // tail drop: no egress port is looked at
+                return;
+            }
+            stored = std::make_shared<Stored>(Stored{&ingress[in]});
+            frame.stored = stored;
+        }
+        uint64_t bytes = frame.bytes;
+        uint32_t copies = 0;
         if (it == table.end())
         {
             // unknown destination: a copy to every port but the one it came in on
@@ -741,15 +822,21 @@ class SmolSwitch
                 {
                     Frame copy = frame;
                     copy.packet = frame.packet->Copy();
-                    ports[p]->Enqueue(std::move(copy));
+                    copies += ports[p]->Enqueue(std::move(copy));
                 }
             }
         }
-        else if (it->second != in)
+        else
         {
-            ports[it->second]->Enqueue(std::move(frame));
+            copies += ports[it->second]->Enqueue(std::move(frame));
         }
-        // the port it came in on: a hairpin, dropped
+        // a port takes a frame only after the events of this instant, so the
+        // account is charged before any copy can be taken
+        if (stored && copies > 0)
+        {
+            stored->copies = copies;
+            stored->account->Charge(bytes);
+        }
     }
 
     uint64_t QueueDepth() const
@@ -762,7 +849,7 @@ class SmolSwitch
         return depth;
     }
 
-    uint64_t Dropped() const
+    uint64_t EgressDropped() const
     {
         uint64_t n = 0;
         for (const auto& port : ports)
@@ -772,7 +859,10 @@ class SmolSwitch
         return n;
     }
 
-    uint64_t buffer = 0; // bytes per port; 0: unbounded
+    Account egress;               // each port's egress limit; 0: unbounded
+    Account ingressLimit;         // each port's ingress limit; 0: unbounded
+    std::vector<Account> ingress; // by port, with an ingress limit
+    uint64_t ingressDropped = 0;
 };
 
 void
@@ -979,6 +1069,12 @@ struct Host
     uint64_t modbusResponses = 0; // accepted
     uint64_t modbusTimeouts = 0;  // requests timed out (ADR-0012)
     uint64_t modbusSkipped = 0;   // poll instants skipped (ADR-0012)
+    // a slave: the same, over its polls from every master (ADR-0013)
+    std::vector<Window*> polledRttWindows;
+    uint64_t polledRequests = 0;
+    uint64_t polledResponses = 0;
+    uint64_t polledTimeouts = 0;
+    uint64_t polledSkipped = 0;
 };
 
 // The transaction slot of a poll with one request in flight (ADR-0012), as
@@ -988,6 +1084,7 @@ struct Host
 struct Transaction
 {
     Host* master;
+    Host* slave;
     uint64_t timeoutNs; // 0: none
     uint64_t sent = 0;  // requests sent: the last one's id is sent - 1
     uint64_t sentAt = 0;
@@ -1030,6 +1127,7 @@ struct Transaction
             outstanding = false;
             completedAt = Simulator::Now().GetNanoSeconds();
             ++master->modbusTimeouts;
+            ++slave->polledTimeouts;
         }
     }
 };
@@ -1064,6 +1162,11 @@ class Connection
     Host* ClientHost() const
     {
         return m_hosts[Client];
+    }
+
+    Host* ServerHost() const
+    {
+        return m_hosts[Server];
     }
 
     // The server's end, accepted.
@@ -1166,6 +1269,12 @@ class Connection
             }
             ++host->modbusResponses;
             for (Window* w : host->rttWindows)
+            {
+                w->sum += now - message.origin;
+                ++w->count;
+            }
+            ++m_hosts[Server]->polledResponses;
+            for (Window* w : m_hosts[Server]->polledRttWindows)
             {
                 w->sum += now - message.origin;
                 ++w->count;
@@ -1298,6 +1407,7 @@ struct Periodic
             if (!transaction->Free(now))
             {
                 ++connection->ClientHost()->modbusSkipped;
+                ++connection->ServerHost()->polledSkipped;
                 Next();
                 return;
             }
@@ -1307,6 +1417,7 @@ struct Periodic
         if (m.kind == Message::ModbusRequest)
         {
             ++connection->ClientHost()->modbusRequests;
+            ++connection->ServerHost()->polledRequests;
         }
         connection->Send(Connection::Client, m);
         if (transaction && transaction->timeoutNs > 0 && transaction->timeoutNs < stopNs - now)
@@ -1334,11 +1445,16 @@ enum class Kind
     PnJitter,
     PnWatchdogExpiries,
     Drops, // drops and drops_total: the total so far
+    IngressDrops,
+    EgressDrops,
     FramesSent,
     FramesReceived,
     ModbusUnanswered,
     ModbusTimeouts,
     ModbusSkipped,
+    PolledUnanswered, // the Modbus counts of a slave (ADR-0013)
+    PolledTimeouts,
+    PolledSkipped,
 };
 
 struct Observation
@@ -1398,7 +1514,13 @@ Sample(Observation* o)
         a = o->host->pn.expiries;
         break;
     case Kind::Drops:
-        a = o->sw->Dropped();
+        a = o->sw->EgressDropped() + o->sw->ingressDropped;
+        break;
+    case Kind::IngressDrops:
+        a = o->sw->ingressDropped;
+        break;
+    case Kind::EgressDrops:
+        a = o->sw->EgressDropped();
         break;
     case Kind::FramesSent:
         a = o->device->framesSent;
@@ -1415,6 +1537,16 @@ Sample(Observation* o)
         break;
     case Kind::ModbusSkipped:
         a = o->host->modbusSkipped;
+        break;
+    case Kind::PolledUnanswered:
+        a = o->host->polledRequests;
+        b = o->host->polledResponses;
+        break;
+    case Kind::PolledTimeouts:
+        a = o->host->polledTimeouts;
+        break;
+    case Kind::PolledSkipped:
+        a = o->host->polledSkipped;
         break;
     }
     *o->out << o->index << ' ' << now << ' ' << a << ' ' << b << '\n';
@@ -1438,9 +1570,9 @@ Run(std::istream& in, std::ostream& out)
 
     std::string word;
     uint32_t version = 0;
-    if (!(in >> word >> version) || word != "smol-ns3" || version != 3)
+    if (!(in >> word >> version) || word != "smol-ns3" || version != 4)
     {
-        Fail("not a smol-ns3 version 3 scenario");
+        Fail("not a smol-ns3 version 4 scenario");
     }
 
     uint64_t durationNs = 0;
@@ -1503,10 +1635,23 @@ Run(std::istream& in, std::ostream& out)
             if (sw)
             {
                 switches.emplace_back();
-                if (!(s >> switches.back().buffer))
+                SmolSwitch& sw = switches.back();
+                std::string egressUnit;
+                std::string ingressUnit;
+                s >> sw.egress.limit >> egressUnit >> sw.ingressLimit.limit >> ingressUnit;
+                auto unit = [&](const std::string& u) {
+                    if (u != "b" && u != "f")
+                    {
+                        Fail("bad switch: " + line);
+                    }
+                    return u == "f";
+                };
+                if (!s)
                 {
                     Fail("bad switch: " + line);
                 }
+                sw.egress.frames = unit(egressUnit);
+                sw.ingressLimit.frames = unit(ingressUnit);
                 macs.emplace_back();
                 ips.emplace_back();
             }
@@ -1540,8 +1685,8 @@ Run(std::istream& in, std::ostream& out)
             {
                 Ptr<SmolDevice> d = CreateObject<SmolDevice>();
                 // only a switch bounds its egress queues: end stations never drop
-                uint64_t buffer = isSwitch[at[e]] ? switches[switchOf[at[e]]].buffer : 0;
-                d->Configure(speedNum, speedDen, gapNs, strict[e] != 0, buffer, channel);
+                Account egress = isSwitch[at[e]] ? switches[switchOf[at[e]]].egress : Account();
+                d->Configure(speedNum, speedDen, gapNs, strict[e] != 0, egress, channel);
                 Ptr<Node> node = nodes.Get(at[e]);
                 if (isSwitch[at[e]])
                 {
@@ -1558,6 +1703,10 @@ Run(std::istream& in, std::ostream& out)
                     SmolSwitch& sw = switches[switchOf[at[e]]];
                     d->SetSwitch(&sw, sw.ports.size());
                     sw.ports.push_back(d);
+                    if (sw.ingressLimit.limit > 0)
+                    {
+                        sw.ingress.push_back(sw.ingressLimit);
+                    }
                 }
                 else
                 {
@@ -1721,8 +1870,8 @@ Run(std::istream& in, std::ostream& out)
             Transaction* transaction = nullptr;
             if (outstanding == 1)
             {
-                transactions.push_back(
-                    std::make_unique<Transaction>(Transaction{connection(c)->ClientHost(), timeoutNs}));
+                transactions.push_back(std::make_unique<Transaction>(
+                    Transaction{connection(c)->ClientHost(), connection(c)->ServerHost(), timeoutNs}));
                 transaction = transactions.back().get();
             }
             periodics.push_back(std::make_unique<Periodic>(Periodic{connection(c),
@@ -1903,9 +2052,11 @@ Run(std::istream& in, std::ostream& out)
                 o->kind = Kind::PnWatchdogExpiries;
                 o->host = &hosts.at(target);
             }
-            else if (kind == "drops")
+            else if (kind == "drops" || kind == "ingress_drops" || kind == "egress_drops")
             {
-                o->kind = Kind::Drops;
+                o->kind = kind == "drops"           ? Kind::Drops
+                          : kind == "ingress_drops" ? Kind::IngressDrops
+                                                    : Kind::EgressDrops;
                 o->sw = &switches[switchOf[target]];
             }
             else if (kind == "frames_sent")
@@ -1929,6 +2080,19 @@ Run(std::istream& in, std::ostream& out)
             else if (kind == "modbus_skipped")
             {
                 o->kind = Kind::ModbusSkipped;
+                o->host = &hosts.at(target);
+            }
+            else if (kind == "polled_latency")
+            {
+                o->kind = Kind::ModbusLatency;
+                hosts.at(target).polledRttWindows.push_back(&o->window);
+            }
+            else if (kind == "polled_unanswered" || kind == "polled_timeouts" ||
+                     kind == "polled_skipped")
+            {
+                o->kind = kind == "polled_unanswered" ? Kind::PolledUnanswered
+                          : kind == "polled_timeouts" ? Kind::PolledTimeouts
+                                                      : Kind::PolledSkipped;
                 o->host = &hosts.at(target);
             }
             else

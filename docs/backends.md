@@ -29,6 +29,7 @@ All three run the whole model: every node and traffic kind, every traffic patter
 | Modbus TCP and MQTT | sized as TCP, without TCP's behaviour | bit-exact | over ns-3's TCP |
 | Bounded switch buffers ([ADR-0011](adr/0011-bounded-switch-buffers.md)) | reference: a lost message is lost | bit-exact | Ethernet and PROFINET bit-exact; TCP retransmits a lost segment |
 | Polls with one request in flight ([ADR-0012](adr/0012-modbus-one-request-in-flight.md)) | reference: a lost poll times out | bit-exact | over TCP, with Linux's RTO: a lost poll is answered late |
+| Ingress limits, limits in frames, flows from any station ([ADR-0013](adr/0013-ingress-buffer-accounting.md)) | reference | bit-exact | Ethernet and PROFINET bit-exact; TCP retransmits a lost segment |
 
 A scenario outside a backend's capabilities is rejected before it runs, with the reason.
 
@@ -181,3 +182,39 @@ A poll with `outstanding=1` waits for each response before it sends the next req
 - **More polls are affected than on the testbed,** which measured 0.18 % (3 of 1 680). The share follows the frames dropped, and the model drops 3 to 8 times more than the testbed's 0.09 % (ADR-0011). That gap is left open.
 
 The results are in `benchmarks/results/*-one-request-in-flight.json`. `python -m benchmarks closed-loop-summary <file>` prints their tables, without a timeout too.
+
+### Ingress buffers
+
+A switch can also bound what each of its ingress ports holds, and count its limits in frames rather than bytes ([ADR-0013](adr/0013-ingress-buffer-accounting.md)). The engines apply the same admission and release rules:
+- **Rust** gives SimPy's results bit for bit, drops and event counts included.
+- **ns-3** does too for Ethernet over UDP and PROFINET RT, random traffic included with the same seed.
+- **Modbus and MQTT** differ by TCP, as with egress limits: ns-3 retransmits what SimPy and Rust lose.
+
+`python -m benchmarks ingress` runs scenario T3, the testbed as it was measured more widely:
+- **The Pi** is one `modbus_slave` on a 1 Gb/s port. It sends Poisson UDP of 1 518 B frames to the laptop, at load ρ of the laptop's 100 Mb/s port, and serves the laptop's polls every 10 ms.
+- **A Waveshare relay module** is a second `modbus_slave` on another 1 Gb/s port, polled every 20 ms. Its responses, like the Pi's, are under 100 B.
+- **Both polls** have one request in flight and a timeout of 1 s.
+- **The switch** holds `ingress_buffer=60frames`. Beside it, the model of ADR-0011 and ADR-0012 holds `buffer=91080`: one egress buffer of 60 full frames.
+
+Each load runs 30 simulated seconds with 5 seeds. The table gives sums over the seeds:
+- **Polls affected:** retransmitted on ns-3 (a round trip above 100 ms), timed out on SimPy and Rust, or unanswered at the end, as a share of the polls sent.
+- **Pi's frames dropped:** `drops_total` / `frames_sent:pi`. Its responses are 1.2 % of its frames, so this is its UDP loss, to within about 1 % of its value.
+
+| Switch | ρ | Engine | Pi: polls affected | Waveshare: polls affected | Pi's frames dropped |
+|---|---|---|---|---|---|
+| `ingress_buffer=60frames` | 0.96 | SimPy / Rust / ns-3 | 0.02 / 0.05 / 0.02 % | 0 / 0 / 0 | 0.027 / 0.035 / 0.027 % |
+| | 0.984 | SimPy / Rust / ns-3 | 0.25 / 0.18 / 0.28 % | 0 / 0 / 0 | 0.28 / 0.26 / 0.29 % |
+| | 0.997 | SimPy / Rust / ns-3 | 0.59 / 0.69 / 0.62 % | 0 / 0 / 0 | 0.73 / 0.65 / 0.74 % |
+| `buffer=91080` | 0.96 | SimPy / Rust / ns-3 | 0.02 / 0.02 / 0.02 % | 0.01 / 0.04 / 0.01 % | 0.028 / 0.035 / 0.028 % |
+| | 0.984 | SimPy / Rust / ns-3 | 0.22 / 0.17 / 0.25 % | 0.24 / 0.19 / 0.26 % | 0.28 / 0.26 / 0.29 % |
+| | 0.997 | SimPy / Rust / ns-3 | 0.51 / 0.64 / 0.52 % | 0.54 / 0.54 / 0.58 % | 0.73 / 0.65 / 0.75 % |
+| **the testbed** | 0.997 | | **0.44 %** (133 of 30 000) | **0** (of 15 000) | **0.66 %** (UDP) |
+
+- **The Waveshare is isolated only with ingress accounts.** Its port never fills, so none of its polls is lost, on every engine at every load, as on the hardware. With one egress buffer it loses about as many polls as the Pi, 0.54 to 0.58 % at ρ = 0.997, where the hardware lost none.
+- **The Pi's responses are lost as its UDP frames are,** because a limit in frames drops a small frame as readily as a large one. A limit in bytes would almost always keep room for them.
+- **On ns-3 every lost response comes back after the RTO,** 210 to 217 ms after its request. One response was lost twice and came back after 636 ms: the RTO doubles on each retransmission. No poll times out.
+- **Against the hardware at ρ = 0.997:** ns-3 drops 0.74 % of the Pi's frames, against 0.66 % of its UDP frames on the testbed, and affects 0.62 % of its polls, against 0.44 %. The model loses the Pi's responses at 84 % of the rate of its frames, and the testbed at 67 % of its UDP rate. That gap is left open.
+- **The delay is still capped at about 7.4 ms:** 60 full frames ahead of a response, as with the egress buffer. With one source, the Pi's ingress account holds what the laptop's egress queue would.
+
+The results are in `benchmarks/results/*-ingress-buffers.json`. `python -m benchmarks ingress-summary <file>` prints their table, with the round trip's median and p99 and the spread of the long round trips.
+
