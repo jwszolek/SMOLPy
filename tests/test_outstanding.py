@@ -409,8 +409,8 @@ def _lossy(timeout_ms: float | None, every: float = 1.0) -> Network:
 class _Recorded(engine._AdapterCounters):
     made: list[engine._AdapterCounters] = []
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args)  # type: ignore[arg-type]
         self.made.append(self)
 
 

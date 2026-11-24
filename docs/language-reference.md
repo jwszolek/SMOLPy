@@ -39,15 +39,25 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<bytes>]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>]
 ```
 
 `mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
 
-`buffer` bounds each egress queue of the switch, in frame bytes ([ADR-0011](adr/0011-bounded-switch-buffers.md)). A frame that would take the bytes waiting on its port beyond `buffer` is dropped, whatever its priority; the frame being transmitted does not count. Without `buffer` the queues are unbounded and nothing is dropped. The value takes the suffixes `kB` (10³), `MB` (10⁶), `KiB` (2¹⁰) and `MiB` (2²⁰), and must come out as a whole number of bytes, at least 1522 and at least the largest frame of the scenario:
+`buffer` and `ingress_buffer` bound the switch's buffer, per port ([ADR-0011](adr/0011-bounded-switch-buffers.md), [ADR-0013](adr/0013-ingress-buffer-accounting.md)):
+- **`buffer`** bounds the frames queued on each egress port.
+- **`ingress_buffer`** bounds the frames that entered on each port and are still queued on any port. A flooded frame counts once.
+
+A frame that does not fit is dropped, whatever its priority, and the frame being transmitted does not count. The ingress limit is checked first, then each copy's egress limit. Without either, the queues are unbounded and nothing is dropped.
+
+A `<limit>` is in bytes or in frames:
+- **Bytes:** a number, with the optional suffixes `kB` (10³), `MB` (10⁶), `KiB` (2¹⁰) and `MiB` (2²⁰). It must come out as a whole number of bytes, at least 1522 and at least the largest frame of the scenario.
+- **Frames:** `<n>frames`, for switches that count descriptors, whatever the frame size. `<n>` is a whole number of at least 1.
 
 ```
 switch sw ports=8 buffer=115kB
+switch sw ports=8 ingress_buffer=60frames
+switch sw ports=8 buffer=115kB ingress_buffer=60frames
 ```
 
 ### `mqtt_broker` — MQTT message broker
@@ -74,11 +84,13 @@ profinet_device <name> ip=<ip>
 link <a> -- <b> speed=<mbps> length=<metres>
 ```
 
-### `flow` — Ethernet traffic (Adapter → Adapter)
+### `flow` — Ethernet traffic (end station → end station)
 
 ```
 flow <src> -> <dst> rate=<fps> [size=<bytes>|imix] [pattern=constant|poisson|bursty|batch] [batch=<k>|geom:<mean>|pareto:<shape>] [delay=<ms>] [priority=<0-7>]
 ```
+
+`<src>` and `<dst>` are any two end stations: adapters, Modbus slaves, MQTT brokers or PROFINET devices ([ADR-0013](adr/0013-ingress-buffer-accounting.md)). So a host that serves Modbus and streams data is one `modbus_slave` with a `flow`. A station other than an adapter ignores the frames it receives.
 
 `size` is the Ethernet frame in bytes, FCS included, at least `64` ([Model Semantics §2](model-semantics.md#2-frames)). It defaults to `512`, `pattern` to `constant`, `delay` to `0`, `priority` (802.1Q PCP) to `0`. `batch` (default `1`) sets the group size of the `batch` pattern, in which groups of frames arrive together at Poisson instants while `rate` stays the average frames/s.
 
@@ -136,22 +148,24 @@ observe <metric> on <node> every=<ms>
 |---|---|---|
 | `throughput` | Mb/s | Adapter |
 | `latency` | µs | Adapter |
-| `bytes_sent` | MB | Adapter |
+| `bytes_sent` | MB | any end station |
 | `bytes_received` | MB | Adapter |
-| `modbus_latency` | µs | Adapter (Modbus master) |
+| `modbus_latency` | µs | Adapter (Modbus master), ModbusSlave (its polls) |
 | `pn_latency` | µs | Adapter (PROFINET controller), ProfinetDevice |
 | `pn_jitter` | µs | Adapter (PROFINET controller), ProfinetDevice |
 | `pn_watchdog_expiries` | count | Adapter (PROFINET controller), ProfinetDevice |
 | `queue_depth` | frames | Switch |
 | `broker_queue` | msgs | MQTTBroker |
 | `utilization` | % | any node |
-| `drops` | frames | Switch: dropped by its buffers in the window |
+| `drops` | frames | Switch: dropped by its buffers in the window, ingress and egress |
 | `drops_total` | frames | Switch: dropped by its buffers so far |
-| `frames_sent` | frames | Adapter |
+| `frames_sent` | frames | any end station |
 | `frames_received` | frames | Adapter |
-| `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
-| `modbus_timeouts` | polls | Adapter (master): requests that timed out so far, with `outstanding=1` |
-| `modbus_skipped` | polls | Adapter (master): poll instants skipped so far, because a request was outstanding |
+| `modbus_unanswered` | polls | Adapter (master), ModbusSlave (its polls): polls without a response so far, lost or in flight |
+| `modbus_timeouts` | polls | Adapter (master), ModbusSlave (its polls): requests that timed out so far, with `outstanding=1` |
+| `modbus_skipped` | polls | Adapter (master), ModbusSlave (its polls): poll instants skipped so far, because a request was outstanding |
+| `ingress_drops_total` | frames | Switch: dropped by its ingress accounts so far |
+| `egress_drops_total` | frames | Switch: dropped by its egress accounts so far |
 
 Observing a metric on the wrong node type (or a metric that doesn't exist) is a semantic error, caught before the simulation runs.
 

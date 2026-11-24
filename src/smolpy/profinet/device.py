@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from smolpy.core.adapter import _derive_mac
-from smolpy.core.node import Node
+from smolpy.core.adapter import Station, _derive_mac
 from smolpy.model import ProfinetDeviceNode
 from smolpy.model.validate import check_node
 
 
-class ProfinetDevice(Node):
+class ProfinetDevice(Station):
     """PROFINET IO Device — exchanges cyclic RT I/O data with an IO Controller.
 
     Provides input data and consumes output data every update time once a

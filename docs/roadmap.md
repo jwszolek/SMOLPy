@@ -232,6 +232,25 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
 - **The slave's processing time** (`response_delay`), the natural next step: a slave now answers at once, where a real one takes time to read its registers. With one request in flight, that time adds to every round trip and bounds the poll rate.
 - A master that defers a poll instead of skipping it, reconnecting after a timeout, and windows of more than one request on a connection.
 
+## Ingress buffer accounting ([ADR-0013](adr/0013-ingress-buffer-accounting.md))
+
+**Status: done.** A switch can bound what each ingress port holds, as well as each egress port, and either limit can be in bytes or in frames. Every end station can send flows. On all three backends.
+
+1. **The scenario: done.** `ingress_buffer`, and `Frames(n)` / `<n>frames`, validated. Optional IR fields, so the IR stays version 2.
+2. **Flows between any end stations: done.** With `frames_sent` and `bytes_sent` on every station, and the Modbus metrics on a slave.
+3. **SimPy: done.** Ingress accounts, the admission and release rules, and `ingress_drops_total` and `egress_drops_total`. One port with a frame limit matches M/G/1/K.
+4. **Rust: done.** Bit for bit with SimPy.
+5. **ns-3: done.** Ethernet and PROFINET bit for bit with SimPy, drops included. `smol-ns3` format 4.
+6. **Documentation, the testbed and an example: done.** [`example_ingress_buffer.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_ingress_buffer.smol).
+
+**Why.** The testbed switch lost the responses of the server on the congesting port almost as often as its UDP frames, and none of another server's responses to the same port. One egress buffer in bytes can do neither. With 60 frames per ingress port, the model gives both on every engine.
+
+**Possible extensions:**
+- **A shared buffer pool with dynamic thresholds,** the next one, once a run with two sources measures how the switch shares its memory.
+- **Per-port metrics:** the occupancy and drops of one port, which need a port address in `observe`.
+- **Limits in cells,** and both units for one account.
+- **Limits per priority class.**
+
 ## Candidates (not yet scheduled)
 
 - PROFINET IRT / TSN scheduling.

@@ -36,7 +36,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 | **Modbus TCP** | TCP/IP | Request / response polling (Read Holding Registers, FC 03) | `ModbusSlave`, `Adapter.polls()` | `modbus_slave`, `poll` | `modbus_latency`, `modbus_unanswered`, `modbus_timeouts`, `modbus_skipped` |
 | **PROFINET RT** | Layer 2 (EtherType 0x8892), 802.1Q priority 6 | Cyclic producer / consumer exchange with watchdog | `ProfinetDevice`, `Adapter.controls()` | `profinet_device`, `control` | `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` |
 
-Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation), unbounded or bounded with tail drop (`buffer=` in bytes). One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
+Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation), unbounded or bounded with tail drop per egress or ingress port (`buffer=`, `ingress_buffer=`, in bytes or `Frames(n)`). Every end station can send flows, so a Modbus server can also stream data on its one port. One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
 
 **Not supported (yet):** PROFINET IRT, PROFIBUS, EtherNet/IP, EtherCAT, OPC UA, Modbus RTU (serial), and Modbus write function codes. See the [Architecture Decision Records](https://jwszolek.github.io/SMOLPy/adr/0001-protocol-package-structure/) for what is planned.
 
@@ -205,6 +205,9 @@ sensor.publishes(to=broker, topic="plant/temp", rate=1.0, payload=20, qos=0, del
 # Broker topic routing — must be called before simulate()
 broker.routes("plant/temp", to=[server])
 
+# Any end station sends flows: a Modbus server that also streams data
+pi.sends(to=laptop, rate=8_100, size=1_518, pattern="poisson")
+
 # Modbus TCP poll (master → slave, Read Holding Registers)
 plc.polls(slave, register=40001, count=10, rate=1.0)
 plc.polls(slave, register=30001, count=5, rate=2.0, delay_ms=500)
@@ -285,22 +288,24 @@ net.observe(metric, on=node, every=interval_ms)
 |---|---|---|
 | `throughput` | Mb/s | Adapter |
 | `latency` | µs | Adapter |
-| `bytes_sent` | MB | Adapter (sender) |
+| `bytes_sent` | MB | any end station (sender) |
 | `bytes_received` | MB | Adapter (receiver) |
 | `queue_depth` | frames | Switch |
 | `utilization` | % | Any node |
 | `broker_queue` | msgs | MQTTBroker |
-| `modbus_latency` | µs | Adapter (master) |
+| `modbus_latency` | µs | Adapter (master), ModbusSlave (its polls) |
 | `pn_latency` | µs | Adapter (controller), ProfinetDevice |
 | `pn_jitter` | µs | Adapter (controller), ProfinetDevice |
 | `pn_watchdog_expiries` | count | Adapter (controller), ProfinetDevice |
-| `drops` | frames | Switch: dropped by its buffers in the window |
+| `drops` | frames | Switch: dropped by its buffers in the window, ingress and egress |
 | `drops_total` | frames | Switch: dropped by its buffers so far |
-| `frames_sent` | frames | Adapter (sender) |
+| `frames_sent` | frames | any end station (sender) |
 | `frames_received` | frames | Adapter (receiver) |
-| `modbus_unanswered` | polls | Adapter (master): polls without a response so far, lost or in flight |
-| `modbus_timeouts` | polls | Adapter (master): requests that timed out so far, with `outstanding=1` |
-| `modbus_skipped` | polls | Adapter (master): poll instants skipped so far, because a request was outstanding |
+| `modbus_unanswered` | polls | Adapter (master), ModbusSlave (its polls): polls without a response so far, lost or in flight |
+| `modbus_timeouts` | polls | Adapter (master), ModbusSlave (its polls): requests that timed out so far, with `outstanding=1` |
+| `modbus_skipped` | polls | Adapter (master), ModbusSlave (its polls): poll instants skipped so far, because a request was outstanding |
+| `ingress_drops_total` | frames | Switch: dropped by its ingress accounts so far |
+| `egress_drops_total` | frames | Switch: dropped by its egress accounts so far |
 
 ### Simulation
 
@@ -495,7 +500,7 @@ The model every engine implements:
 - **MAC-learning switch** — each switch pre-seeds its forwarding table from the topology wiring, eliminating spurious flooding toward silent endpoints (e.g. a server that only receives).  Dynamic learning still operates for traffic through intermediate switches.
 - **Store-and-forward model** — transmission delay + propagation delay per hop.
 - **Queuing** — each link direction has its own egress queue with 8 strict 802.1Q priority classes (FIFO within a class, non-preemptive); `qos="fifo"` on a switch ignores priorities. `queue_depth` reports buffered frames at the switch's outbound ports.
-- **Bounded buffers** — a switch with `buffer` (bytes per port) drops a frame that does not fit, with tail drop: delay is capped and loss appears, as on real switches near saturation ([ADR-0011](https://jwszolek.github.io/SMOLPy/adr/0011-bounded-switch-buffers/)). Without it queues are unbounded.
+- **Bounded buffers** — a switch with `buffer` (per egress port) or `ingress_buffer` (per ingress port), in bytes or in frames, drops a frame that does not fit, with tail drop: delay is capped and loss appears, as on real switches near saturation ([ADR-0011](https://jwszolek.github.io/SMOLPy/adr/0011-bounded-switch-buffers/), [ADR-0013](https://jwszolek.github.io/SMOLPy/adr/0013-ingress-buffer-accounting/)). Without them queues are unbounded.
 - **Traffic shaping** — constant, Poisson, Pareto-burst and batch patterns; IMIX frame-size distribution.
 - **Live mode** (SimPy only) — simulation runs in 200 chunks (~8 s total wall time); the dashboard reads shared metric arrays between chunks via Python's GIL.
 
@@ -532,7 +537,7 @@ Below saturation the engines agree. At saturation, TCP's own acknowledgements ti
 
 ## Examples
 
-See [`examples/README.md`](examples/README.md) for twelve ready-to-run scenarios covering single-switch saturation, oversubscription, two-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, a bounded switch buffer, and a Modbus master that waits for each response.
+See [`examples/README.md`](examples/README.md) for thirteen ready-to-run scenarios covering single-switch saturation, oversubscription, two-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, a bounded switch buffer, a Modbus master that waits for each response, and ingress buffer accounting.
 
 ```bash
 uv run smolpy run examples/example.py

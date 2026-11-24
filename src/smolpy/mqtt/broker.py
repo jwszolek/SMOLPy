@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from smolpy.core.adapter import _derive_mac
-from smolpy.core.node import Node
+from smolpy.core.adapter import Station, _derive_mac
 from smolpy.model import MqttBrokerNode
 from smolpy.model.validate import check_node
 
 
-class MQTTBroker(Node):
+class MQTTBroker(Station):
     """Application-layer MQTT message broker.
 
     Receives PUBLISH frames from client adapters and forwards copies

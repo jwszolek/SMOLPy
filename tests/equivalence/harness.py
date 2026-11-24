@@ -95,7 +95,7 @@ def compare_sampling(
     For a backend whose protocol stack is meant to differ from the reference's
     (ns-3's TCP), whose differences are reported, not asserted (ADR-0009).
 
-    With *lossy*, a scenario where frames are dropped (ADR-0011): TCP
+    With *lossy*, a scenario where frames are dropped (ADR-0011, ADR-0013): TCP
     retransmits what the reference loses, so a window metric can have
     messages, and a sample, in other windows than on the reference. Its
     instants must then only be sampling instants of its observation."""

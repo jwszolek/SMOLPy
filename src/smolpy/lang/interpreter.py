@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from smolpy.core.adapter import Adapter
+from smolpy.core.adapter import Adapter, Station
 from smolpy.core.network import Network
 from smolpy.core.node import Node
 from smolpy.lang import ast as smol_ast
@@ -85,8 +85,9 @@ class _Interpreter:
         if expect is not None and not isinstance(node, expect):
             kind = type(node).__name__
             article = "an" if kind[0] in "AEIOU" else "a"
+            wanted = "an end station" if expect is Station else expect.__name__
             raise SMOLSemanticError(
-                self.file, line, f"'{name}' is {article} {kind}, expected {expect.__name__}"
+                self.file, line, f"'{name}' is {article} {kind}, expected {wanted}"
             )
         return node
 
@@ -120,7 +121,8 @@ class _Interpreter:
                         mode=d.mode,  # type: ignore[arg-type]
                         qos=d.qos,  # type: ignore[arg-type]
                         mac_table=d.mac_table,  # type: ignore[arg-type]
-                        buffer=d.buffer,  # type: ignore[arg-type]
+                        buffer=d.buffer,
+                        ingress_buffer=d.ingress_buffer,
                     )
                 elif isinstance(d, smol_ast.MqttBrokerDecl):
                     net.mqtt_broker(d.name, ip=d.ip)
@@ -134,9 +136,9 @@ class _Interpreter:
                     net.link(a, b, speed=d.speed, length=d.length)
                     lines.links.append(d.line)
                 elif isinstance(d, smol_ast.FlowDecl):
-                    src = self._resolve(net, d.src, d.line, expect=Adapter)
+                    src = self._resolve(net, d.src, d.line, expect=Station)
                     dst = self._resolve(net, d.dst, d.line)
-                    assert isinstance(src, Adapter)
+                    assert isinstance(src, Station)
                     src.sends(
                         to=dst,  # type: ignore[arg-type]
                         rate=d.rate,

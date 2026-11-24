@@ -52,7 +52,9 @@ from smolpy.model.streams import source_ids, stream_seed
 if TYPE_CHECKING:
     from smolpy.core.network import SimulationResult
 
-FORMAT_VERSION = 3  # 2: switch buffers (ADR-0011); 3: one request in flight, TCP (ADR-0012)
+# 2: switch buffers (ADR-0011); 3: one request in flight, TCP (ADR-0012);
+# 4: ingress accounts, limits in frames, the Modbus counts of a slave (ADR-0013)
+FORMAT_VERSION = 4
 UDP_IP_BYTES = 8 + 20
 ETHERNET_BYTES = 14 + 4  # header and FCS
 PROGRAM = "smol-ns3"
@@ -259,6 +261,13 @@ def _sends(
             now += tb.draw_ns(mean_ns * burst_len * rng.uniform(0.3, 1.2))
 
 
+def _limit(limit: tuple[int, str] | None) -> str:
+    """A switch limit of the format: its value and unit, b or f; 0 for none."""
+    if limit is None:
+        return "0 b"
+    return f"{limit[0]} {'f' if limit[1] == 'frames' else 'b'}"
+
+
 def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str, list[_Sampler]]:
     """The input of ``smol-ns3``, and the samplers its output feeds."""
     from smolpy.sim.engine import _topology_mac_table
@@ -273,7 +282,7 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
     ]
     for n in scenario.nodes:
         if isinstance(n, model.SwitchNode):
-            lines.append(f"switch {n.buffer_bytes or 0}")  # 0: unbounded
+            lines.append(f"switch {_limit(n.egress_limit)} {_limit(n.ingress_limit)}")
         else:
             lines.append(f"adapter {n.mac} {n.ip}")  # a station, with IPv4
 
@@ -371,7 +380,7 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
         if t.source not in has_link:
             continue
         dst = nodes[t.destination]
-        assert isinstance(dst, model.AdapterNode)
+        assert not isinstance(dst, model.SwitchNode)  # any end station (ADR-0013)
         delay_ns = tb.ms_to_ns(t.delay_ms)
         ends = f"{index[t.source]} {dst.ip}"
         if t.pattern == "constant" and isinstance(t.size, int):
@@ -395,15 +404,24 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
         devices = ""
         speed = Fraction(0)
         metric = obs.metric
-        if metric in ("throughput", "latency", "bytes_received", "modbus_latency"):
+        slave = isinstance(target, model.ModbusSlaveNode)
+        if metric in ("throughput", "latency", "bytes_received"):
+            ok = adapter and target.name in has_link
+        elif metric in ("bytes_sent", "frames_sent"):  # any end station (ADR-0013)
+            ok = not isinstance(target, model.SwitchNode) and target.name in has_link
+        elif (
+            metric in ("modbus_latency", "modbus_unanswered", "modbus_timeouts", "modbus_skipped")
+            and slave
+        ):
+            ok = True  # the polls of a slave, counted at their masters (ADR-0013)
+            metric = "polled_" + metric.removeprefix("modbus_")
+        elif metric == "modbus_latency":
             ok = adapter and target.name in has_link
         elif metric == "broker_queue":
             ok = isinstance(target, model.MqttBrokerNode)
         elif metric in ("pn_latency", "pn_jitter", "pn_watchdog_expiries"):
             ok = isinstance(target, model.AdapterNode | model.ProfinetDeviceNode)
         elif metric in (
-            "bytes_sent",
-            "frames_sent",
             "frames_received",
             "modbus_unanswered",
             "modbus_timeouts",
@@ -415,6 +433,9 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
         elif metric in ("drops", "drops_total"):
             ok = isinstance(target, model.SwitchNode)
             metric = "drops"  # smol-ns3 reports the total; drops is its difference
+        elif metric in ("ingress_drops_total", "egress_drops_total"):
+            ok = isinstance(target, model.SwitchNode)
+            metric = metric.removesuffix("_total")
         elif metric == "utilization":
             ok = bool(into.get(target.name))
             devices = " ".join(str(d) for d, _ in into.get(target.name, []))
@@ -469,6 +490,8 @@ def _metrics(
                 "broker_queue",
                 "pn_watchdog_expiries",
                 "drops_total",
+                "ingress_drops_total",
+                "egress_drops_total",
                 "frames_sent",
                 "frames_received",
                 "modbus_timeouts",

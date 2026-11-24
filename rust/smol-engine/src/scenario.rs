@@ -1,6 +1,7 @@
 //! Reads Scenario IR JSON, format "smol-ir" version 2 (ADR-0007, ADR-0010),
-//! with the optional switch buffers of ADR-0011 and the optional
-//! `outstanding` and `timeout_ms` of polls (ADR-0012).
+//! with the optional switch buffers of ADR-0011, the optional `outstanding`
+//! and `timeout_ms` of polls (ADR-0012), and the ingress accounts and limits
+//! in frames of ADR-0013.
 //!
 //! The scenario has already been validated by `smolpy.model.validate`; this
 //! reader is strict about structure (unknown fields, kinds and versions are
@@ -29,12 +30,21 @@ pub enum NodeKind {
     ProfinetDevice {
         mac: String,
     },
-    /// `buffer`: the egress buffer of each port in bytes, unbounded if None
+    /// `buffer`: the egress limit of each port, `ingress` its ingress limit
+    /// (ADR-0011, ADR-0013); None is unbounded
     Switch {
         fifo: bool,
         topology: bool,
-        buffer: Option<u64>,
+        buffer: Option<Limit>,
+        ingress: Option<Limit>,
     },
+}
+
+/// A switch buffer limit, in frame bytes or in frames (ADR-0013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Limit {
+    Bytes(u64),
+    Frames(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -145,10 +155,12 @@ pub enum Metric {
     ModbusUnanswered,
     ModbusTimeouts,
     ModbusSkipped,
+    IngressDropsTotal,
+    EgressDropsTotal,
 }
 
 impl Metric {
-    pub const ALL: [(&'static str, Metric); 18] = [
+    pub const ALL: [(&'static str, Metric); 20] = [
         ("throughput", Metric::Throughput),
         ("latency", Metric::Latency),
         ("bytes_sent", Metric::BytesSent),
@@ -167,6 +179,8 @@ impl Metric {
         ("modbus_unanswered", Metric::ModbusUnanswered),
         ("modbus_timeouts", Metric::ModbusTimeouts),
         ("modbus_skipped", Metric::ModbusSkipped),
+        ("ingress_drops_total", Metric::IngressDropsTotal),
+        ("egress_drops_total", Metric::EgressDropsTotal),
     ];
 
     pub fn name(self) -> &'static str {
@@ -235,8 +249,19 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "modbus_unanswered",
         "modbus_timeouts",
         "modbus_skipped",
+        "ingress_drops_total",
+        "egress_drops_total",
     ],
-    features: &["imix", "bounded_buffer", "modbus_outstanding"],
+    features: &[
+        "imix",
+        "bounded_buffer",
+        "modbus_outstanding",
+        // ADR-0013
+        "ingress_buffer",
+        "buffer_frames",
+        "station_flows",
+        "slave_metrics",
+    ],
     notes: &[],
 };
 
@@ -472,18 +497,31 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 Some("topology") => true,
                 Some(other) => return Err(format!("switch {name}: unknown mac_table {other:?}")),
             };
-            let buffer = match f.take_or("buffer_bytes") {
-                None | Some(Value::Null) => None,
-                Some(v) => Some(
-                    v.as_u64()
-                        .filter(|b| *b > 0)
-                        .ok_or_else(|| format!("switch {name}: buffer_bytes {v}"))?,
-                ),
+            let mut limit = |bytes: &str, frames: &str| -> Res<Option<Limit>> {
+                let mut take = |field: &str| -> Res<Option<u64>> {
+                    match f.take_or(field) {
+                        None | Some(Value::Null) => Ok(None),
+                        Some(v) => v
+                            .as_u64()
+                            .filter(|b| *b > 0)
+                            .map(Some)
+                            .ok_or_else(|| format!("switch {name}: {field} {v}")),
+                    }
+                };
+                match (take(bytes)?, take(frames)?) {
+                    (Some(_), Some(_)) => Err(format!("switch {name}: {bytes} and {frames}")),
+                    (Some(b), None) => Ok(Some(Limit::Bytes(b))),
+                    (None, Some(n)) => Ok(Some(Limit::Frames(n))),
+                    (None, None) => Ok(None),
+                }
             };
+            let buffer = limit("buffer_bytes", "buffer_frames")?;
+            let ingress = limit("ingress_buffer_bytes", "ingress_buffer_frames")?;
             NodeKind::Switch {
                 fifo,
                 topology,
                 buffer,
+                ingress,
             }
         }
         "modbus_slave" => {
@@ -724,10 +762,30 @@ mod tests {
         assert!(matches!(
             bounded.nodes[0].kind,
             NodeKind::Switch {
-                buffer: Some(4000),
+                buffer: Some(Limit::Bytes(4000)),
+                ingress: None,
                 ..
             }
         ));
+        let ingress = parse(&B1.replace(
+            "\"learning\"",
+            "\"learning\", \"buffer_frames\": 3, \"ingress_buffer_frames\": 60",
+        ))
+        .unwrap();
+        assert!(matches!(
+            ingress.nodes[0].kind,
+            NodeKind::Switch {
+                buffer: Some(Limit::Frames(3)),
+                ingress: Some(Limit::Frames(60)),
+                ..
+            }
+        ));
+        assert!(parse(&B1.replace(
+            "\"learning\"",
+            "\"learning\", \"ingress_buffer_bytes\": 4000, \"ingress_buffer_frames\": 6",
+        ))
+        .unwrap_err()
+        .contains("ingress_buffer_bytes and ingress_buffer_frames"));
         assert!(
             parse(&B1.replace("\"learning\"", "\"learning\", \"buffer_bytes\": -1"))
                 .unwrap_err()

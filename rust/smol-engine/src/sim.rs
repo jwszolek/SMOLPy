@@ -12,8 +12,9 @@
 //!   triggered only when that event is processed, and resumes its process
 //!   when the Get event is processed; a `get` on a non-empty store is
 //!   scheduled at once;
-//! - a bounded egress queue (ADR-0011) counts the bytes in its store: a
-//!   frame leaves it when the store pops it, as SimPy's `_do_get` does, and
+//! - a switch's buffer accounts (ADR-0011, ADR-0013) count what its egress
+//!   queues hold: a frame leaves its egress account, and its last copy its
+//!   ingress account, when the store pops it, as SimPy's `_do_get` does, and
 //!   a frame that does not fit is dropped before anything is scheduled;
 //! - processes are created in SimPy's order: link transmitters, then node
 //!   processes in node order, then metric samplers in observation order;
@@ -31,7 +32,7 @@ use crate::frames::{
 };
 use crate::frames::{pn_frame_size, PN_RT_PRIORITY};
 use crate::rng::{stream_seed, Rng};
-use crate::scenario::{Metric, NodeKind, Pattern, Scenario, Size};
+use crate::scenario::{Limit, Metric, NodeKind, Pattern, Scenario, Size};
 use crate::timebase::{self as tb, Instants, Q};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, VecDeque};
@@ -70,6 +71,9 @@ struct Frame {
     mqtt: Mqtt,
     /// the consumer-side PROFINET AR state this cyclic frame feeds; -1 if none
     pn_ar: i32,
+    /// the ingress account entry that holds it while it is queued on a
+    /// switch (ADR-0013), shared by a flooded frame's copies; -1 if none
+    stored: i32,
 }
 
 /// The Modbus TCP fields of a frame; `unit < 0` on any other frame.
@@ -112,8 +116,63 @@ impl Frame {
             modbus: NOT_MODBUS,
             mqtt: NOT_MQTT,
             pn_ar: -1,
+            stored: -1,
         }
     }
+}
+
+/// A switch buffer account (`_Account`): what it holds of the frames queued,
+/// in frame bytes or in frames, against its limit.
+#[derive(Clone, Copy)]
+struct Account {
+    limit: u64,
+    frames: bool,
+    held: u64,
+}
+
+impl Account {
+    fn new(limit: Option<Limit>) -> Option<Account> {
+        limit.map(|l| match l {
+            Limit::Bytes(b) => Account {
+                limit: b,
+                frames: false,
+                held: 0,
+            },
+            Limit::Frames(n) => Account {
+                limit: n,
+                frames: true,
+                held: 0,
+            },
+        })
+    }
+
+    fn unit(&self, size: u64) -> u64 {
+        if self.frames {
+            1
+        } else {
+            size
+        }
+    }
+
+    fn fits(&self, size: u64) -> bool {
+        self.held + self.unit(size) <= self.limit
+    }
+
+    fn charge(&mut self, size: u64) {
+        self.held += self.unit(size);
+    }
+
+    fn release(&mut self, size: u64) {
+        self.held -= self.unit(size);
+    }
+}
+
+/// A frame admitted to an ingress account (`_Stored`): it leaves the
+/// account when the last of its queued copies is taken.
+struct Stored {
+    switch: u32,
+    port: u32,
+    copies: u32,
 }
 
 enum Items {
@@ -125,8 +184,9 @@ enum Items {
 struct Store {
     items: Items,
     waiting: Option<u32>,
-    /// frame bytes in the store, for a bounded egress queue only
-    bytes: Option<u64>,
+    /// the channel of an egress queue of a switch with buffer accounts:
+    /// popping a frame releases its accounts
+    accounted: Option<u32>,
 }
 
 impl Store {
@@ -159,9 +219,9 @@ struct Channel {
     bits_sent: u128,
     frames_sent: u128,
     sending: Option<u32>,
-    /// the egress buffer in bytes, on a bounded switch port (ADR-0011)
-    buffer: Option<u64>,
-    dropped: u64,
+    /// the egress account of a bounded switch port (ADR-0011, ADR-0013)
+    egress: Option<Account>,
+    dropped: u64, // by the egress account
 }
 
 struct Adapter {
@@ -186,6 +246,7 @@ struct Adapter {
 /// one completed.
 struct Transaction {
     adapter: u32,
+    slave: u32,
     timeout_ns: Option<u64>,
     sent: u64, // requests sent: the last one's id is sent - 1
     sent_at: u64,
@@ -276,11 +337,17 @@ struct PnProvider {
 }
 
 /// A Modbus TCP slave: answers Read Holding Registers for its unit id.
+/// It also counts its polls, from every master (ADR-0013).
 struct Slave {
     mac: u32,
     unit: u8,
     inbound: u32,
     out: Option<u32>,
+    requests: u64,
+    responses: u64,
+    timeouts: u64,
+    skipped: u64,
+    modbus_windows: Vec<u32>,
 }
 
 /// An MQTT broker: forwards a PUBLISH to the topic's subscribers and
@@ -300,8 +367,8 @@ struct Periodic {
     delay_ns: u64,
     delayed: bool,
     instants: Instants,
-    /// the adapter whose requests a Modbus poll counts
-    requester: Option<u32>,
+    /// the adapter and the slave whose requests a Modbus poll counts
+    requester: Option<(u32, u32)>,
     /// the transaction slot of a poll with one request in flight
     transaction: Option<u32>,
 }
@@ -310,6 +377,17 @@ struct Switch {
     inbound: u32,
     out: Vec<(i32, u32)>, // (port, channel), in port order: out[p].0 == p
     mac_table: HashMap<u32, i32>,
+    /// ingress accounts by port, if the switch has an ingress limit (ADR-0013)
+    ingress: Vec<Account>,
+    ingress_dropped: u64,
+}
+
+/// Which drops a switch's drop metric counts.
+#[derive(Clone, Copy, PartialEq)]
+enum Drops {
+    All,
+    Ingress,
+    Egress,
 }
 
 /// Where a flow's generator is, as in `smolpy.sim.engine._traffic_gen`.
@@ -354,13 +432,18 @@ enum Sampled {
     /// the window maximum, in µs
     Jitter(u32),
     WatchdogExpiries(u32),
-    /// frames dropped by these channels, in the window or so far
-    Drops(Vec<u32>, bool),
+    /// frames a switch dropped, by these channels' egress accounts or its
+    /// ingress accounts, in the window or so far
+    Drops(Vec<u32>, u32, Drops, bool),
     FramesSent(u32),
     FramesReceived(u32),
     ModbusUnanswered(u32),
     ModbusTimeouts(u32),
     ModbusSkipped(u32),
+    /// the same, over the polls of a slave (ADR-0013)
+    SlaveUnanswered(u32),
+    SlaveTimeouts(u32),
+    SlaveSkipped(u32),
 }
 
 struct Sampler {
@@ -403,8 +486,12 @@ struct Engine {
     channels: Vec<Channel>,
     adapters: Vec<Adapter>,
     switches: Vec<Switch>,
+    stored: Vec<Stored>,
+    stored_free: Vec<u32>,
     flows: Vec<FlowGen>,
     slaves: Vec<Slave>,
+    /// a slave by its MAC
+    slave_of: HashMap<u32, u32>,
     brokers: Vec<Broker>,
     periodic: Vec<Periodic>,
     transactions: Vec<Transaction>,
@@ -429,7 +516,7 @@ impl Engine {
         self.stores.push(Store {
             items,
             waiting: None,
-            bytes: None,
+            accounted: None,
         });
         (self.stores.len() - 1) as u32
     }
@@ -457,14 +544,48 @@ impl Engine {
         self.free.push(f);
     }
 
-    /// Pop the store's next frame; a bounded queue no longer counts it.
+    /// Pop the store's next frame. On a switch with buffer accounts, it
+    /// leaves its egress account, and its last copy its ingress account.
     fn pop(&mut self, store: u32) -> Option<u32> {
         let s = &mut self.stores[store as usize];
         let f = s.pop()?;
-        if let Some(bytes) = &mut s.bytes {
-            *bytes -= self.frames[f as usize].size;
+        if let Some(c) = s.accounted {
+            let fr = &mut self.frames[f as usize];
+            let size = fr.size;
+            if let Some(egress) = &mut self.channels[c as usize].egress {
+                egress.release(size);
+            }
+            if fr.stored >= 0 {
+                let st = fr.stored as u32;
+                fr.stored = -1;
+                let entry = &mut self.stored[st as usize];
+                entry.copies -= 1;
+                if entry.copies == 0 {
+                    let (w, port) = (entry.switch, entry.port);
+                    self.switches[w as usize].ingress[port as usize].release(size);
+                    self.stored_free.push(st);
+                }
+            }
         }
         Some(f)
+    }
+
+    fn new_stored(&mut self, switch: u32, port: u32) -> u32 {
+        let entry = Stored {
+            switch,
+            port,
+            copies: 0,
+        };
+        match self.stored_free.pop() {
+            Some(i) => {
+                self.stored[i as usize] = entry;
+                i
+            }
+            None => {
+                self.stored.push(entry);
+                (self.stored.len() - 1) as u32
+            }
+        }
     }
 
     fn get(&mut self, store: u32, proc: u32) {
@@ -482,21 +603,18 @@ impl Engine {
         self.schedule(Ev::Put(store), NORMAL, 0);
     }
 
-    fn enqueue(&mut self, chan: u32, f: u32) {
+    /// Queue a frame on a channel; false if its egress account drops it.
+    fn enqueue(&mut self, chan: u32, f: u32) -> bool {
         let ch = &mut self.channels[chan as usize];
-        if let Some(buffer) = ch.buffer {
+        if let Some(egress) = &mut ch.egress {
             let size = self.frames[f as usize].size;
-            let bytes = self.stores[ch.queue as usize]
-                .bytes
-                .as_mut()
-                .expect("a bounded queue counts its bytes");
-            if *bytes + size > buffer {
+            if !egress.fits(size) {
                 // tail drop: nothing is queued or scheduled
                 ch.dropped += 1;
                 self.release(f);
-                return;
+                return false;
             }
-            *bytes += size;
+            egress.charge(size);
         }
         let class = if ch.strict {
             -(self.frames[f as usize].priority as i16)
@@ -511,6 +629,7 @@ impl Engine {
             Items::Fifo(_) => unreachable!("egress queues are priority stores"),
         }
         self.schedule(Ev::Put(queue), NORMAL, 0);
+        true
     }
 
     fn on_put(&mut self, store: u32) {
@@ -626,6 +745,13 @@ impl Engine {
                         for w in &ad.modbus_windows {
                             self.windows[*w as usize].push(self.now - fr.created);
                         }
+                        if let Some(&s) = self.slave_of.get(&fr.src) {
+                            let sl = &mut self.slaves[s as usize];
+                            sl.responses += 1;
+                            for w in &sl.modbus_windows {
+                                self.windows[*w as usize].push(self.now - fr.created);
+                            }
+                        }
                     }
                     if fr.pn_ar >= 0 {
                         let pn = ad.pn;
@@ -638,7 +764,8 @@ impl Engine {
             Proc::PnDeviceRx(d) => {
                 let fr = self.frames[f as usize];
                 let dev = &self.devices[d as usize];
-                if fr.dst == dev.mac {
+                // a flow's frames (ADR-0013) are not cyclic: the consumer ignores them
+                if fr.dst == dev.mac && fr.pn_ar >= 0 {
                     let pn = dev.pn;
                     self.pn_record(pn, fr);
                 }
@@ -646,28 +773,7 @@ impl Engine {
                 self.get(store, proc);
             }
             Proc::Switch(w) => {
-                let fr = self.frames[f as usize];
-                let sw = &mut self.switches[w as usize];
-                sw.mac_table.insert(fr.src, fr.in_port);
-                match sw.mac_table.get(&fr.dst).copied() {
-                    None => {
-                        // flood a copy to every port but the one it came from
-                        let ports: Vec<(i32, u32)> = sw.out.clone();
-                        for (port, ch) in ports {
-                            if port != fr.in_port {
-                                let copy = self.alloc(fr);
-                                self.enqueue(ch, copy);
-                            }
-                        }
-                        self.release(f);
-                    }
-                    Some(port) if port != fr.in_port => {
-                        // ports are numbered 0, 1, ... in link order: out[port] is its channel
-                        let ch = sw.out[port as usize].1;
-                        self.enqueue(ch, f);
-                    }
-                    Some(_) => self.release(f), // hairpin: dropped
-                }
+                self.forward(w, f);
                 self.get(store, proc);
             }
             Proc::Slave(i) => {
@@ -737,6 +843,64 @@ impl Engine {
         }
     }
 
+    /// A frame at a switch (`_switch_forwarder`). With ingress accounts it is
+    /// dropped if its ingress port's account has no room; otherwise each
+    /// copy is admitted by its egress port, and the frame is charged once if
+    /// a copy was queued (ADR-0013).
+    fn forward(&mut self, w: u32, f: u32) {
+        let fr = self.frames[f as usize];
+        let sw = &mut self.switches[w as usize];
+        sw.mac_table.insert(fr.src, fr.in_port);
+        let dst = sw.mac_table.get(&fr.dst).copied();
+        if dst == Some(fr.in_port) {
+            self.release(f); // hairpin: dropped
+            return;
+        }
+        let entry = if sw.ingress.is_empty() {
+            None
+        } else {
+            let port = fr.in_port as u32;
+            if !sw.ingress[port as usize].fits(fr.size) {
+                sw.ingress_dropped += 1; // tail drop: no egress port is looked at
+                self.release(f);
+                return;
+            }
+            let st = self.new_stored(w, port);
+            self.frames[f as usize].stored = st as i32;
+            Some((st, port))
+        };
+        let fr = self.frames[f as usize];
+        let mut copies = 0;
+        match dst {
+            None => {
+                // flood a copy to every port but the one it came from
+                let ports: Vec<(i32, u32)> = self.switches[w as usize].out.clone();
+                for (port, ch) in ports {
+                    if port != fr.in_port {
+                        let copy = self.alloc(fr);
+                        copies += self.enqueue(ch, copy) as u32;
+                    }
+                }
+                self.release(f);
+            }
+            Some(port) => {
+                // ports are numbered 0, 1, ... in link order: out[port] is its channel
+                let ch = self.switches[w as usize].out[port as usize].1;
+                copies += self.enqueue(ch, f) as u32;
+            }
+        }
+        // a store never pops a frame within the put that queues it, so the
+        // account is charged before any copy can be taken
+        if let Some((st, port)) = entry {
+            if copies > 0 {
+                self.stored[st as usize].copies = copies;
+                self.switches[w as usize].ingress[port as usize].charge(fr.size);
+            } else {
+                self.stored_free.push(st);
+            }
+        }
+    }
+
     fn on_timeout(&mut self, proc: u32) {
         match self.procs[proc as usize] {
             Proc::Tx(c) => {
@@ -794,13 +958,15 @@ impl Engine {
             let tr = &mut self.transactions[t as usize];
             if !tr.free(now) {
                 self.adapters[tr.adapter as usize].modbus_skipped += 1;
+                self.slaves[tr.slave as usize].skipped += 1;
                 return;
             }
             frame.modbus.tid = tr.send(now);
             timeout = tr.timeout_ns.map(|d| (t, frame.modbus.tid, d));
         }
-        if let Some(a) = requester {
+        if let Some((a, s)) = requester {
             self.adapters[a as usize].modbus_requests += 1;
+            self.slaves[s as usize].requests += 1;
         }
         let f = self.alloc(frame);
         self.enqueue(chan, f);
@@ -817,6 +983,7 @@ impl Engine {
             tr.outstanding = false;
             tr.completed_at = Some(self.now);
             self.adapters[tr.adapter as usize].modbus_timeouts += 1;
+            self.slaves[tr.slave as usize].timeouts += 1;
         }
     }
 
@@ -1092,11 +1259,17 @@ impl Engine {
             Sampled::WatchdogExpiries(c) => {
                 (Some(self.pn_consumers[*c as usize].expiries as f64), 0)
             }
-            Sampled::Drops(chans, window) => {
-                let total: u128 = chans
+            Sampled::Drops(chans, w, which, window) => {
+                let egress: u128 = chans
                     .iter()
                     .map(|c| self.channels[*c as usize].dropped as u128)
                     .sum();
+                let ingress = self.switches[*w as usize].ingress_dropped as u128;
+                let total = match which {
+                    Drops::All => egress + ingress,
+                    Drops::Ingress => ingress,
+                    Drops::Egress => egress,
+                };
                 let v = if *window { total - s.last } else { total };
                 (Some(v as f64), total)
             }
@@ -1114,6 +1287,12 @@ impl Engine {
             Sampled::ModbusSkipped(a) => {
                 (Some(self.adapters[*a as usize].modbus_skipped as f64), 0)
             }
+            Sampled::SlaveUnanswered(s) => {
+                let sl = &self.slaves[*s as usize];
+                (Some((sl.requests - sl.responses) as f64), 0)
+            }
+            Sampled::SlaveTimeouts(s) => (Some(self.slaves[*s as usize].timeouts as f64), 0),
+            Sampled::SlaveSkipped(s) => (Some(self.slaves[*s as usize].skipped as f64), 0),
         };
         let s = &mut self.samplers[i as usize];
         s.last_t = now;
@@ -1122,6 +1301,50 @@ impl Engine {
             self.out[s.out].1.push((t_ms, v));
         }
     }
+}
+
+/// The flows of an end station, in statement order (ADR-0013), as the
+/// reference engine's `start_flows`.
+fn add_flows(
+    e: &mut Engine,
+    sc: &Scenario,
+    name: &str,
+    src: u32,
+    chan: u32,
+    station_mac: &[Option<u32>],
+    lookup: &dyn Fn(&str) -> Result<usize, String>,
+) -> Result<(), String> {
+    for (n, flow) in sc.flows.iter().enumerate() {
+        if flow.source != name {
+            continue;
+        }
+        let dst = lookup(&flow.destination)?;
+        let dst = station_mac[dst].ok_or("a flow goes to an end station")?;
+        let delay_ns = tb::ms_to_ns(flow.delay_ms)?;
+        let period = tb::interval_ns(flow.rate)?;
+        // source id: earlier flows between the same two ends
+        let k = sc.flows[..n]
+            .iter()
+            .filter(|f| f.source == flow.source && f.destination == flow.destination)
+            .count();
+        let id = format!("flow:{}->{}#{k}", flow.source, flow.destination);
+        e.flows.push(FlowGen {
+            src,
+            dst,
+            size: flow.size,
+            priority: flow.priority,
+            chan,
+            delay_ns,
+            pattern: flow.pattern,
+            state: FlowState::Run,
+            instants: Instants::new(delay_ns, period),
+            mean_ns: tb::ratio_f64(period.num, period.den),
+            quarter: Q::new(period.num, period.den * 4)?,
+            rng: Rng::new(stream_seed(sc.seed, &id)),
+        });
+        e.process(Proc::Flow((e.flows.len() - 1) as u32));
+    }
+    Ok(())
 }
 
 /// Run a scenario: build the model as `smolpy.sim.engine.run_simulation`
@@ -1139,8 +1362,11 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         channels: Vec::new(),
         adapters: Vec::new(),
         switches: Vec::new(),
+        stored: Vec::new(),
+        stored_free: Vec::new(),
         flows: Vec::new(),
         slaves: Vec::new(),
+        slave_of: HashMap::new(),
         brokers: Vec::new(),
         periodic: Vec::new(),
         transactions: Vec::new(),
@@ -1225,11 +1451,17 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             }
             NodeKind::ModbusSlave { mac, unit } => {
                 let mac = intern(mac);
+                e.slave_of.insert(mac, e.slaves.len() as u32);
                 e.slaves.push(Slave {
                     mac,
                     unit: *unit,
                     inbound: s,
                     out: None,
+                    requests: 0,
+                    responses: 0,
+                    timeouts: 0,
+                    skipped: 0,
+                    modbus_windows: Vec::new(),
                 });
                 role.push(e.slaves.len() - 1);
             }
@@ -1248,6 +1480,8 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     inbound: s,
                     out: Vec::new(),
                     mac_table: HashMap::new(),
+                    ingress: Vec::new(),
+                    ingress_dropped: 0,
                 });
                 role.push(e.switches.len() - 1);
             }
@@ -1255,10 +1489,22 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
     }
     let is_switch = |i: usize| matches!(sc.nodes[i].kind, NodeKind::Switch { .. });
     let strict = |i: usize| !matches!(sc.nodes[i].kind, NodeKind::Switch { fifo: true, .. });
-    // only switches bound their egress queues; end stations never drop
-    let buffer = |i: usize| match sc.nodes[i].kind {
-        NodeKind::Switch { buffer, .. } => buffer,
+    // only switches have buffer accounts; end stations never drop
+    let egress = |i: usize| match sc.nodes[i].kind {
+        NodeKind::Switch { buffer, .. } => Account::new(buffer),
         _ => None,
+    };
+    let accounted = |i: usize| {
+        matches!(
+            sc.nodes[i].kind,
+            NodeKind::Switch {
+                buffer: Some(_),
+                ..
+            } | NodeKind::Switch {
+                ingress: Some(_),
+                ..
+            }
+        )
     };
     // every node but a switch is an end station with a MAC address
     let mac_of = |i: usize| match &sc.nodes[i].kind {
@@ -1269,6 +1515,9 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         NodeKind::Switch { .. } => None,
     };
     let is_adapter = |i: usize| matches!(sc.nodes[i].kind, NodeKind::Adapter { .. });
+    let station_mac: Vec<Option<u32>> = (0..sc.nodes.len())
+        .map(|i| mac_of(i).map(|m| intern(&m)))
+        .collect();
 
     let mut next_port = vec![0i32; sc.nodes.len()];
     let mut in_channels: Vec<Vec<u32>> = vec![Vec::new(); sc.nodes.len()];
@@ -1285,8 +1534,8 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         let ifg_ns = tb::transmission_ns(IFG_BYTES, link.speed_mbps)?;
         let mut channel = |e: &mut Engine, in_port: i32, dst: usize, owner: usize| -> u32 {
             let queue = e.store(Items::Prio(BinaryHeap::new()));
-            if buffer(owner).is_some() {
-                e.stores[queue as usize].bytes = Some(0);
+            if accounted(owner) {
+                e.stores[queue as usize].accounted = Some(e.channels.len() as u32);
             }
             e.channels.push(Channel {
                 speed: link.speed_mbps,
@@ -1302,7 +1551,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 bits_sent: 0,
                 frames_sent: 0,
                 sending: None,
-                buffer: buffer(owner),
+                egress: egress(owner),
                 dropped: 0,
             });
             speeds.push(link.speed_mbps);
@@ -1342,6 +1591,15 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
         }
     }
     let _ = tx_procs;
+    // ingress accounts, one per port (ADR-0013)
+    for (i, node) in sc.nodes.iter().enumerate() {
+        if let NodeKind::Switch { ingress, .. } = node.kind {
+            if let Some(account) = Account::new(ingress) {
+                let sw = &mut e.switches[role[i]];
+                sw.ingress = vec![account; sw.out.len()];
+            }
+        }
+    }
 
     // converged MAC tables: breadth-first search through switches, the first
     // port to reach a station wins (ties to the lowest port)
@@ -1454,38 +1712,8 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     }
                 }
                 if let Some(chan) = e.adapters[a as usize].out {
-                    for (n, flow) in sc.flows.iter().enumerate() {
-                        if flow.source != node.name {
-                            continue;
-                        }
-                        let dst = lookup(&flow.destination)?;
-                        let dst_mac = mac_of(dst).ok_or("a flow goes to an adapter")?;
-                        let delay_ns = tb::ms_to_ns(flow.delay_ms)?;
-                        let period = tb::interval_ns(flow.rate)?;
-                        // source id: earlier flows between the same two ends
-                        let k = sc.flows[..n]
-                            .iter()
-                            .filter(|f| {
-                                f.source == flow.source && f.destination == flow.destination
-                            })
-                            .count();
-                        let id = format!("flow:{}->{}#{k}", flow.source, flow.destination);
-                        e.flows.push(FlowGen {
-                            src: e.adapters[a as usize].mac,
-                            dst: intern(&dst_mac),
-                            size: flow.size,
-                            priority: flow.priority,
-                            chan,
-                            delay_ns,
-                            pattern: flow.pattern,
-                            state: FlowState::Run,
-                            instants: Instants::new(delay_ns, period),
-                            mean_ns: tb::ratio_f64(period.num, period.den),
-                            quarter: Q::new(period.num, period.den * 4)?,
-                            rng: Rng::new(stream_seed(sc.seed, &id)),
-                        });
-                        e.process(Proc::Flow((e.flows.len() - 1) as u32));
-                    }
+                    let src = e.adapters[a as usize].mac;
+                    add_flows(&mut e, sc, &node.name, src, chan, &station_mac, &lookup)?;
                     // then its MQTT publications and its Modbus polls, as the
                     // reference engine starts them
                     for publish in sc.publishes.iter().filter(|p| p.source == node.name) {
@@ -1530,9 +1758,11 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                         };
                         let delay_ns = tb::ms_to_ns(poll.delay_ms)?;
                         let slave_mac = intern(mac);
+                        let s = e.slave_of[&slave_mac];
                         let transaction = if poll.one_in_flight {
                             e.transactions.push(Transaction {
                                 adapter: a,
+                                slave: s,
                                 timeout_ns: poll.timeout_ms.map(tb::ms_to_ns).transpose()?,
                                 sent: 0,
                                 sent_at: 0,
@@ -1564,7 +1794,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                             delay_ns,
                             delayed: false,
                             instants: Instants::new(delay_ns, tb::interval_ns(poll.rate)?),
-                            requester: Some(a),
+                            requester: Some((a, s)),
                             transaction,
                         });
                         e.process(Proc::Periodic((e.periodic.len() - 1) as u32));
@@ -1573,8 +1803,10 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             }
             NodeKind::ModbusSlave { .. } => {
                 let w = role[i];
-                if e.slaves[w].out.is_some() {
+                if let Some(chan) = e.slaves[w].out {
                     e.process(Proc::Slave(w as u32));
+                    let src = e.slaves[w].mac;
+                    add_flows(&mut e, sc, &node.name, src, chan, &station_mac, &lookup)?;
                 }
             }
             NodeKind::MqttBroker { .. } => {
@@ -1592,9 +1824,18 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     }
                     e.brokers[b].routes = routes;
                     e.process(Proc::Broker(b as u32));
+                    let (src, chan) = (e.brokers[b].mac, e.brokers[b].out.unwrap());
+                    add_flows(&mut e, sc, &node.name, src, chan, &station_mac, &lookup)?;
                 }
             }
-            NodeKind::ProfinetDevice { .. } => e.process(Proc::PnDeviceRx(role[i] as u32)),
+            NodeKind::ProfinetDevice { .. } => {
+                let d = role[i];
+                e.process(Proc::PnDeviceRx(d as u32));
+                if let Some(chan) = e.devices[d].out {
+                    let src = e.devices[d].mac;
+                    add_flows(&mut e, sc, &node.name, src, chan, &station_mac, &lookup)?;
+                }
+            }
             NodeKind::Switch { .. } => {
                 let w = role[i];
                 e.switches[w].mac_table = static_macs[i].clone();
@@ -1615,6 +1856,18 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             }
         };
         let adapter = is_adapter(target);
+        let slave = match sc.nodes[target].kind {
+            NodeKind::ModbusSlave { .. } => Some(role[target] as u32),
+            _ => None,
+        };
+        // an end station's single link out
+        let out_of = |e: &Engine| match sc.nodes[target].kind {
+            NodeKind::Adapter { .. } => e.adapters[role[target]].out,
+            NodeKind::ModbusSlave { .. } => e.slaves[role[target]].out,
+            NodeKind::MqttBroker { .. } => e.brokers[role[target]].out,
+            NodeKind::ProfinetDevice { .. } => e.devices[role[target]].out,
+            NodeKind::Switch { .. } => None,
+        };
         let what = match obs.metric {
             Metric::Throughput if adapter => Some(Sampled::Throughput(role[target] as u32)),
             Metric::Latency if adapter => {
@@ -1626,11 +1879,14 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             Metric::QueueDepth if is_switch(target) => {
                 Some(Sampled::QueueDepth(role[target] as u32))
             }
-            Metric::ModbusLatency if adapter => {
+            Metric::ModbusLatency if adapter || slave.is_some() => {
                 // the window mean of round-trip times, as latency
                 e.windows.push(Vec::new());
                 let w = (e.windows.len() - 1) as u32;
-                e.adapters[role[target]].modbus_windows.push(w);
+                match slave {
+                    Some(s) => e.slaves[s as usize].modbus_windows.push(w),
+                    None => e.adapters[role[target]].modbus_windows.push(w),
+                }
                 Some(Sampled::Latency(w))
             }
             Metric::Utilization if !in_channels[target].is_empty() => {
@@ -1660,22 +1916,32 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 Some(Sampled::BrokerQueue(inbound[target]))
             }
             Metric::BytesReceived if adapter => Some(Sampled::BytesReceived(role[target] as u32)),
-            Metric::BytesSent if adapter => e.adapters[role[target]].out.map(Sampled::BytesSent),
-            Metric::Drops | Metric::DropsTotal if is_switch(target) => {
-                let chans = e.switches[role[target]]
-                    .out
-                    .iter()
-                    .map(|(_, c)| *c)
-                    .collect();
-                Some(Sampled::Drops(chans, obs.metric == Metric::Drops))
+            Metric::BytesSent => out_of(&e).map(Sampled::BytesSent),
+            Metric::Drops
+            | Metric::DropsTotal
+            | Metric::IngressDropsTotal
+            | Metric::EgressDropsTotal
+                if is_switch(target) =>
+            {
+                let w = role[target] as u32;
+                let chans = e.switches[w as usize].out.iter().map(|(_, c)| *c).collect();
+                let which = match obs.metric {
+                    Metric::IngressDropsTotal => Drops::Ingress,
+                    Metric::EgressDropsTotal => Drops::Egress,
+                    _ => Drops::All,
+                };
+                Some(Sampled::Drops(chans, w, which, obs.metric == Metric::Drops))
             }
-            Metric::FramesSent if adapter => e.adapters[role[target]].out.map(Sampled::FramesSent),
+            Metric::FramesSent => out_of(&e).map(Sampled::FramesSent),
             Metric::FramesReceived if adapter => Some(Sampled::FramesReceived(role[target] as u32)),
             Metric::ModbusUnanswered if adapter => {
                 Some(Sampled::ModbusUnanswered(role[target] as u32))
             }
             Metric::ModbusTimeouts if adapter => Some(Sampled::ModbusTimeouts(role[target] as u32)),
             Metric::ModbusSkipped if adapter => Some(Sampled::ModbusSkipped(role[target] as u32)),
+            Metric::ModbusUnanswered => slave.map(Sampled::SlaveUnanswered),
+            Metric::ModbusTimeouts => slave.map(Sampled::SlaveTimeouts),
+            Metric::ModbusSkipped => slave.map(Sampled::SlaveSkipped),
             _ => None,
         };
         if let Some(what) = what {

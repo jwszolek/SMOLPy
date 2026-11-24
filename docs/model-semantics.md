@@ -82,18 +82,33 @@ On the wire it is preceded by a preamble and SFD and followed by an inter-frame 
     - frames within a class are served first in, first out;
     - service is non-preemptive: a frame in transmission is never interrupted.
 - **`qos="fifo"`** on a switch puts every frame into one class on that switch's egress queues. All other nodes, including end stations, use the 8 classes.
-- **Queues are unbounded unless a switch sets `buffer`** ([ADR-0011](adr/0011-bounded-switch-buffers.md)). Without it no frame is ever dropped for lack of buffer.
+- **Queues are unbounded unless a switch sets `buffer` or `ingress_buffer`** ([ADR-0011](adr/0011-bounded-switch-buffers.md), [ADR-0013](adr/0013-ingress-buffer-accounting.md)). Without them no frame is ever dropped for lack of buffer.
 
-**Bounded egress queues.** A switch with `buffer` (bytes) bounds each of its egress queues:
-- **What occupies the buffer:** the frame bytes ([§2](#2-frames)) of the frames queued on the port and not yet taken by its transmitter, which are the frames `queue_depth` counts. The frame in transmission does not occupy the buffer.
-- **Tail drop.** A frame of `s` bytes that arrives with `q` bytes queued is queued if `q + s ≤ buffer`, and dropped otherwise. A dropped frame is never queued, displaces nothing and schedules nothing.
-- **One limit per port,** shared by the 8 priority classes. A frame is dropped whatever its priority, under `qos="fifo"` as under `"strict"`.
-- **Flooded copies** are admitted or dropped each on its own port.
-- **The delay is bounded.** A frame admitted with `n` frames of `q` bytes ahead of it starts its preamble at most `tx(q + 20·n) + tx(8 + m) + tx(12)` after it is queued, where `m` is the largest frame of the scenario.
+**Switch buffer accounts.** A switch can have two limits, each applying to each of its ports and each in bytes or in frames:
+- **`buffer`, the egress account of a port:** the frames queued on that port.
+- **`ingress_buffer`, the ingress account of a port:** the frames that entered the switch on that port and are still queued on any of its ports.
+
+The rules:
+- **What an account holds.** A frame is queued from its admission until its port's transmitter takes it: these are the frames `queue_depth` counts. The frame in transmission is in neither account.
+- **Units.** In bytes, a frame counts its frame bytes ([§2](#2-frames)); in frames, a frame of any size counts 1.
+- **Room.** An account with limit `L` has room for a frame of `s` bytes if `q + s ≤ L` in bytes, with `q` the bytes it holds, or if `n + 1 ≤ L` in frames, with `n` the frames it holds.
+- **Admission, at the instant the switch forwards a frame ([§4](#4-switches)):**
+    1. **Ingress check.** If the frame's ingress port's account has no room, the frame is dropped, as one ingress drop. No egress account is looked at.
+    2. **Egress check.** Each copy is queued if its egress port's account has room, and is otherwise dropped, as one egress drop. A unicast frame is one copy, and a flooded frame has one per other port, in port order.
+    3. **Charge.** If at least one copy was queued, the ingress account is charged once for the frame.
+- **Tail drop.** A dropped frame or copy is never queued, displaces nothing and schedules nothing.
+- **Release.** When a transmitter takes a copy, the copy leaves its egress account. When it takes the frame's last queued copy, the frame leaves its ingress account, at the same instant.
+- **A flooded frame** counts once on its ingress port while any of its copies is queued, and each copy counts on its own egress port.
+- **Ports between switches.** A frame from another switch is accounted on the inter-switch port it arrived on. The upstream switch released it when it took it onto that link.
+- **One account per port and scope,** shared by the 8 priority classes. A frame is dropped whatever its priority, under `qos="fifo"` as under `"strict"`.
+- **The delay is bounded.** With an egress limit in bytes, a frame admitted with `n` frames of `q` bytes ahead of it starts its preamble at most `tx(q + 20·n) + tx(8 + m) + tx(12)` after it is queued, where `m` is the largest frame of the scenario.
 - **End stations are unbounded.** Adapters, brokers, Modbus slaves and PROFINET devices never drop a frame.
-- **Validation.** `buffer` is a whole number of bytes, at least 1 522 B (one maximum frame with a tag) and at least the largest frame of the scenario.
+- **Validation.**
+    - A limit in bytes is a whole number of bytes, at least 1 522 B (one maximum frame with a tag) and at least the largest frame of the scenario.
+    - A limit in frames is a whole number of at least 1.
+    - An account has one unit: bytes or frames.
 
-*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`; bounded queues in `test_buffers.py`: `test_a_frame_is_dropped_exactly_when_it_would_exceed_the_buffer`, `test_the_queue_never_holds_more_than_its_buffer`, `test_queueing_delay_is_bounded_by_the_buffer`, `test_a_buffer_that_is_never_full_changes_nothing`, `test_one_port_is_an_md1k_queue`.*
+*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`; bounded queues in `test_buffers.py`: `test_a_frame_is_dropped_exactly_when_it_would_exceed_the_buffer`, `test_the_queue_never_holds_more_than_its_buffer`, `test_queueing_delay_is_bounded_by_the_buffer`, `test_a_buffer_that_is_never_full_changes_nothing`, `test_one_port_is_an_md1k_queue`; ingress accounts and limits in frames in `test_ingress.py`: `test_a_frame_is_dropped_exactly_when_its_ingress_account_is_full`, `test_a_frame_limit_counts_a_small_frame_as_a_large_one`, `test_the_account_is_released_when_the_transmitter_takes_the_frame`, `test_a_flooded_frame_is_held_once_until_its_last_copy_is_taken`, `test_one_ingress_port_is_its_egress_port`, `test_an_ingress_limit_isolates_a_light_source`, `test_a_frame_limit_is_an_mg1k_queue`.*
 
 ## 4. Switches
 
@@ -131,7 +146,9 @@ On the wire it is preceded by a preamble and SFD and followed by an inter-frame 
 | Modbus slave | for a request with its `unit_id`: one response to the requester, with the request's MBAP transaction id |
 | PROFINET device | passes cyclic frames of its ARs to its PROFINET consumer |
 
-An end station sends everything over its single link, in the egress queue order of [§3](#3-links-and-egress-queues). Its egress queue is unbounded.
+An end station sends everything over its single link, in the egress queue order of [§3](#3-links-and-egress-queues): its own frames, and those of its flows ([§6](#6-traffic-sources)). Its egress queue is unbounded.
+
+**Any end station can send and receive flows** ([ADR-0013](adr/0013-ingress-buffer-accounting.md)). A Modbus slave can be a traffic source too, as a host that serves Modbus and streams data on one port. A station other than an adapter accepts a flow's frames at its NIC and otherwise ignores them.
 
 **When a frame is lost** at a bounded switch, nothing is retransmitted: the model has no transport layer ([ADR-0011](adr/0011-bounded-switch-buffers.md)).
 - **Modbus:** a lost request or response leaves its poll without a response, and the master does not retry. An open-loop poll sends its next requests on schedule. A poll with `outstanding=1` waits for its timeout ([§6](#6-traffic-sources)), or forever without one.
@@ -153,7 +170,7 @@ The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost se
 
 | Source | Frames |
 |---|---|
-| `Flow`, `constant` | one frame at `delay + T`, `delay + 2T`, …, each instant rounded as in [§1](#1-time-and-units) |
+| `Flow`, from any end station to another, `constant` | one frame at `delay + T`, `delay + 2T`, …, each instant rounded as in [§1](#1-time-and-units) |
 | `Flow`, `poisson` | one frame after each exponential gap with mean `T`, the first gap starting at `delay`. Each gap is rounded to ns. |
 | `Flow`, `batch` | groups at Poisson instants with mean gap `T · E[X]`. Each group is X frames queued at the same instant, X drawn per group from the batch distribution. The long-run rate is `rate`. |
 | `Flow`, `bursty` | repeated ON/OFF cycles: L = max(1, ⌊Pareto(1.5)⌋) frames spaced `T/4` (the first one `T/4` after the cycle starts), then a silence of `T · L · U(0.3, 1.2)`. A cycle lasts `T · L` on average, so the long-run rate is `rate`. Frame *j* of a cycle is at `round(j · T/4)` after the cycle starts, and the silence is rounded to ns. |
@@ -196,7 +213,7 @@ The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost se
 | `throughput` | frame bytes the adapter accepted in the window × 8 / window length | Mb/s |
 | `latency` | mean of (arrival − origin time) over frames the adapter accepted in the window, of any kind. *Window metric.* | µs |
 | `bytes_received` | total frame bytes the adapter accepted so far / 10⁶ | MB |
-| `bytes_sent` | total frame bytes whose transmission on the adapter's link has completed so far / 10⁶ | MB |
+| `bytes_sent` | total frame bytes whose transmission on the end station's link has completed so far / 10⁶ | MB |
 | `modbus_latency` | mean of (arrival − origin time) over Modbus responses the adapter accepted in the window: the round-trip time from sending the request. A late response is not counted ([§6](#6-traffic-sources)). *Window metric.* | µs |
 | `queue_depth` | frames waiting in all egress queues of the switch, not counting frames being transmitted | frames |
 | `utilization` | wire bits, frame + 20 B per frame, of the frames whose transmission completed on the links *into* the node in the window, as a share of those links' combined capacity over the window. A saturated link shows 100 %. | % |
@@ -204,13 +221,17 @@ The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost se
 | `pn_latency` | mean PROFINET latency over cyclic frames received in the window. *Window metric.* | µs |
 | `pn_jitter` | maximum jitter over the window. *Window metric.* | µs |
 | `pn_watchdog_expiries` | total expiries so far, over all ARs of the node | count |
-| `drops` | frames the switch's egress buffers dropped in the window. Sampled every time, 0 included. | frames |
-| `drops_total` | frames the switch's egress buffers dropped so far | frames |
-| `frames_sent` | frames whose transmission on the adapter's link has completed so far | frames |
+| `drops` | frames and copies the switch dropped for lack of buffer in the window: ingress and egress drops ([§3](#3-links-and-egress-queues)). Sampled every time, 0 included. | frames |
+| `drops_total` | the same, so far | frames |
+| `ingress_drops_total` | frames the switch's ingress accounts dropped so far | frames |
+| `egress_drops_total` | frames and copies the switch's egress accounts dropped so far | frames |
+| `frames_sent` | frames whose transmission on the end station's link has completed so far | frames |
 | `frames_received` | frames the adapter accepted so far | frames |
 | `modbus_unanswered` | Modbus requests the adapter's polls have sent so far, less the responses it has accepted so far: lost polls plus polls in flight. With `outstanding=1`, requests that timed out plus those outstanding. | polls |
 | `modbus_timeouts` | requests of the adapter's polls that have timed out so far | polls |
 | `modbus_skipped` | poll instants the adapter's polls have skipped so far, because a request was outstanding | polls |
+
+**On a Modbus slave** ([ADR-0013](adr/0013-ingress-buffer-accounting.md)), `modbus_latency`, `modbus_unanswered`, `modbus_timeouts` and `modbus_skipped` have the definitions above, over the polls of that slave from every master. They are measured at the masters. `frames_sent` and `bytes_sent` are observable on every end station; every other station metric only on the node types of the [language reference](language-reference.md#observe-register-a-metric-to-sample).
 
 A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)` pairs in time order.
 
@@ -223,7 +244,7 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
 - **`utilization`:** `wire_bits × 10⁵ / (Σ speed × W)` %, where `speed` is in Mb/s.
 
 **Frame bytes, not wire bytes.** The byte metrics count frames, header to FCS, without the preamble, SFD and gap, as switch and NIC counters do. So a saturated 100 Mb/s link carrying 64 B frames shows 76.2 Mb/s of `throughput` and 100 % `utilization`.
-- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`, `drops`, `drops_total`, `frames_sent`, `frames_received`, `modbus_unanswered`, `modbus_timeouts`, `modbus_skipped`) as they are.
+- **Counts** (`queue_depth`, `broker_queue`, `pn_watchdog_expiries`, `drops`, `drops_total`, `ingress_drops_total`, `egress_drops_total`, `frames_sent`, `frames_received`, `modbus_unanswered`, `modbus_timeouts`, `modbus_skipped`) as they are.
 - **Polls with one request in flight.** For an adapter whose polls all have `outstanding=1`, `modbus_unanswered` is `modbus_timeouts` plus its pairs with a request outstanding, and its poll instants so far are its requests sent plus `modbus_skipped`.
 - **Loss of a flow** `a → b`, when `a` sends nothing else: `frames_sent:a − frames_received:b` is the frames dropped plus the frames in flight, which are at most the buffers on the path and a frame per link.
 
@@ -239,7 +260,7 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
     - broker copies in subscriber order, then the PUBACK.
     - This holds on an idle port too: its transmitter takes a frame after the events already scheduled for the instant, so it takes the highest-priority frame queued by then.
 - **A poll with one request in flight** at the instant its previous request completes, by a response or a timeout, skips that instant, whichever event comes first. A response arriving at exactly its timeout is late, whichever comes first ([§6](#6-traffic-sources)). Neither rule depends on the order of events.
-- **Admissions to a bounded queue** at the same instant are decided in the order the frames are queued, each against the bytes queued at that moment ([§3](#3-links-and-egress-queues)). A frame the transmitter has taken no longer counts.
+- **Admissions to a switch's accounts** at the same instant are decided in the order the switch forwards the frames, each against what the accounts hold at that moment ([§3](#3-links-and-egress-queues)). Copies of a flooded frame are decided in port order. A frame the transmitter has taken no longer counts, in its egress account or, if it was its last copy, in its ingress account.
 
 **Start-up order** decides the scheduling order of the first events:
 - link transmitters are started first, in link order, a then b direction;
@@ -262,3 +283,5 @@ Every disagreement between this page and the intended model is listed here, with
 | 5 | One random stream for all sources | Adding or reordering one source changed the draws of all others. | resolved in ADR-0007 step 5: one stream per traffic statement |
 | 6 | SimPy did not use integer nanoseconds | Time was float µs. Periodic sources added the interval to the clock, and metrics were float sums. | resolved in ADR-0007 step 7: SimPy runs on integer nanoseconds |
 | 7 | Queues were unbounded | No frame was ever dropped, so at and above saturation delay grew without limit, where a real switch caps it and drops frames. A testbed measured a capped RTT and 0.09 % loss at ρ = 0.996, where the model predicted a p99 of 79 ms. | resolved in ADR-0011: a switch's `buffer` bounds its egress queues, with tail drop |
+| 8 | Buffers were one egress limit in bytes | A testbed switch dropped the frames of the port that congested it, small ones as often as large ones, and none of another port's frames to the same egress port. One egress limit in bytes cannot do either. | resolved in ADR-0013: ingress accounts per port, and limits in frames |
+| 9 | Only adapters sent flows | A host that is a traffic source and a Modbus server on one port needed two nodes on two links, which puts its responses on their own ingress port. | resolved in ADR-0013: flows between any two end stations |

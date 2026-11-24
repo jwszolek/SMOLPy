@@ -1,0 +1,50 @@
+# Ingress buffer accounting (ADR-0013): the port that congests the switch
+# loses its frames, and another port's frames to the same place do not.
+#
+# The testbed of ADR-0011 to ADR-0013, as measured: a TP-Link LS108GP. A
+# Raspberry Pi on a 1 Gb/s port sends Poisson UDP traffic of 1518 B frames to
+# a laptop on a 100 Mb/s port, at 99.7 % of that port, and is also the Modbus
+# TCP server the laptop polls every 10 ms: one station that sends a flow and
+# answers polls on its one port. A Waveshare relay module on another 1 Gb/s
+# port is polled every 20 ms. Both servers' responses are small, and both
+# queue on the laptop's port behind the UDP stream.
+#
+# The switch holds 60 frames per ingress port, whatever their size: the Pi's
+# port fills, and drops its UDP frames and its responses alike, while the
+# Waveshare's responses always fit. On the hardware 0.44 % of the Pi's polls
+# were retransmitted, none of the Waveshare's, and 0.66 % of the UDP frames
+# were lost.
+#
+# The Modbus metrics observed on each slave count the polls of that slave.
+# Replace ingress_buffer=60frames with buffer=91080, one egress buffer of 60
+# full frames, to see the Waveshare lose responses too.
+#
+# It runs headless, so on every backend: --backend rust, or --backend ns3 to
+# run the polls over ns-3's TCP, where a lost response is retransmitted
+# after about 210 ms instead of timing out.
+
+network "ingress" {
+
+    switch       sw        ports=3 ingress_buffer=60frames
+    modbus_slave pi        ip=10.0.0.1 unit_id=1
+    modbus_slave waveshare ip=10.0.0.3 unit_id=1
+    adapter      laptop    ip=10.0.0.2
+
+    link pi        -- sw speed=1000 length=2
+    link waveshare -- sw speed=1000 length=2
+    link laptop    -- sw speed=100  length=2
+
+    # 8100 frames/s of 1518 B, 1538 B on the wire: 99.7 % of 100 Mb/s
+    flow pi     -> laptop    rate=8100 size=1518 pattern=poisson
+    poll laptop -> pi        register=0 count=10 rate=100 outstanding=1 timeout=1000
+    poll laptop -> waveshare register=0 count=1  rate=50  outstanding=1 timeout=1000
+
+    observe modbus_latency      on pi        every=10
+    observe modbus_timeouts     on pi        every=1000
+    observe modbus_timeouts     on waveshare every=1000
+    observe frames_sent         on pi        every=1000
+    observe ingress_drops_total on sw        every=1000
+    observe egress_drops_total  on sw        every=1000
+
+    simulate duration=30000 mode=headless
+}

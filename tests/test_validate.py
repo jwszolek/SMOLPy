@@ -133,7 +133,11 @@ INVALID = [
         "source and destination are the same",
         ("traffic", 1),
     ),
-    (_with("traffic", 1, destination="sw"), "'sw' is a Switch, expected Adapter", ("traffic", 1)),
+    (
+        _with("traffic", 1, destination="sw"),
+        "'sw' is a Switch, expected an end station",
+        ("traffic", 1),
+    ),
     (_with("traffic", 2, qos=2), "invalid qos 2", ("traffic", 2)),
     (_with("traffic", 2, topic=""), "topic must be a non-empty string", ("traffic", 2)),
     (_with("traffic", 2, broker="slave"), "expected MQTTBroker", ("traffic", 2)),
@@ -276,7 +280,7 @@ def test_python_api_rejects_unsupported_metric() -> None:
 @pytest.mark.parametrize(
     "call, message",
     [
-        (lambda net, a, b, sw: a.sends(sw, rate=10), "expected Adapter"),
+        (lambda net, a, b, sw: a.sends(sw, rate=10), "expected an end station"),
         (lambda net, a, b, sw: a.sends(b, rate=-1), "rate must be a positive number"),
         (lambda net, a, b, sw: a.publishes(b, topic="t"), "expected MQTTBroker"),
         (lambda net, a, b, sw: a.polls(b, register=0, count=1), "expected ModbusSlave"),

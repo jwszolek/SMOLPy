@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -19,7 +20,9 @@ class SwitchDecl:
     line: int
     qos: str = "strict"
     mac_table: str = "learning"
-    buffer: int | float | str | None = None  # bytes; suffixes resolved by the transformer
+    # bytes, or Frames; suffixes resolved by the transformer (ADR-0011, ADR-0013)
+    buffer: Any = None
+    ingress_buffer: Any = None
 
 
 @dataclass

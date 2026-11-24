@@ -24,7 +24,7 @@ FrameSize = int | Literal["imix"]
 class TrafficSpec:
     def __init__(
         self,
-        destination: Adapter,
+        destination: Station,
         rate: float,
         size: FrameSize,
         pattern: TrafficPattern,
@@ -105,21 +105,17 @@ class ProfinetSpec:
         self.output_frame_size: int = pn_frame_size(output_bytes)
 
 
-class Adapter(Node):
-    """NIC — generates and receives Ethernet frames."""
+class Station(Node):
+    """An end station: one link, and flows to any other end station
+    (ADR-0013). Adapters, Modbus slaves, MQTT brokers and PROFINET devices
+    are stations."""
 
-    def __init__(self, name: str, ip: str, mac: str | None = None) -> None:
+    ip: str
+    mac: str
+
+    def __init__(self, name: str) -> None:
         super().__init__(name)
-        self.ip = ip
-        self.mac = mac or _derive_mac(ip)
         self.traffic_specs: list[TrafficSpec] = []
-        self.mqtt_specs: list[MQTTSpec] = []
-        self.modbus_specs: list[ModbusSpec] = []
-        self.profinet_specs: list[ProfinetSpec] = []
-        check_node(self.to_spec())
-
-    def to_spec(self) -> model.AdapterNode:
-        return model.AdapterNode(self.name, self.ip, self.mac)
 
     def _check(self, statement: model.TrafficSpec, *others: Node) -> None:
         """Rules of *statement* (smolpy.model.validate), at the call that made it."""
@@ -127,7 +123,7 @@ class Adapter(Node):
 
     def sends(
         self,
-        to: Adapter,
+        to: Station,
         rate: float,
         size: FrameSize = 512,
         pattern: TrafficPattern = "constant",
@@ -147,6 +143,38 @@ class Adapter(Node):
         self.traffic_specs.append(
             TrafficSpec(to, rate, size, pattern, delay_ms, batch=group, priority=priority)
         )
+
+    def _flows(self) -> list[model.Flow]:
+        """Its flows, as IR statements, in the order they were declared."""
+        return [
+            model.Flow(
+                self.name,
+                t.destination.name,
+                t.rate,
+                t.size,
+                t.pattern,
+                t.delay_ms,
+                t.batch,
+                t.priority,
+            )
+            for t in self.traffic_specs
+        ]
+
+
+class Adapter(Station):
+    """NIC — generates and receives Ethernet frames."""
+
+    def __init__(self, name: str, ip: str, mac: str | None = None) -> None:
+        super().__init__(name)
+        self.ip = ip
+        self.mac = mac or _derive_mac(ip)
+        self.mqtt_specs: list[MQTTSpec] = []
+        self.modbus_specs: list[ModbusSpec] = []
+        self.profinet_specs: list[ProfinetSpec] = []
+        check_node(self.to_spec())
+
+    def to_spec(self) -> model.AdapterNode:
+        return model.AdapterNode(self.name, self.ip, self.mac)
 
     def publishes(
         self,

@@ -246,3 +246,22 @@ The same bottleneck at 99 % load, with `buffer=91080`, so that a full queue drop
 - **ns-3** runs the poll over TCP with Linux's minimum RTO of 200 ms: 11 lost responses are retransmitted and arrive 210 to 216 ms after their requests, and no poll times out.
 
 See [Modbus TCP](modbus.md#one-request-in-flight) for the model.
+
+## 13. A switch that bounds each ingress port — [`example_ingress_buffer.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_ingress_buffer.smol)
+
+The testbed of [ADR-0013](adr/0013-ingress-buffer-accounting.md): a Raspberry Pi is one `modbus_slave` that sends Poisson UDP at 99.7 % of the laptop's 100 Mb/s port and answers the laptop's polls every 10 ms; a Waveshare relay module on another port is polled every 20 ms. The switch holds `ingress_buffer=60frames` per ingress port. Simulation: **30 s**, seed 42.
+
+| Switch | Backend | Pi: `modbus_timeouts` | Waveshare: `modbus_timeouts` | Dropped (ingress / egress) |
+|---|---|---|---|---|
+| `ingress_buffer=60frames` | `simpy` | 11 | 0 | 1 490 / 0 |
+| | `rust` | 14 | 0 | 1 300 / 0 |
+| | `ns3` | 0, 16 windows above 100 ms | 0 | 1 520 / 0 |
+| `buffer=91080` | `simpy` | 11 | 4 | 0 / 1 493 |
+| | `rust` | 13 | 11 | 0 / 1 300 |
+| | `ns3` | 0, 14 windows above 100 ms | 0 | 0 / 1 528 |
+
+- **The Pi's port fills, the Waveshare's never does.** With ingress accounts, the Pi's UDP frames and its responses are dropped alike, 0.63 % of its frames, and the Waveshare loses nothing, as on the hardware.
+- **With one egress buffer**, the Waveshare's responses queue behind the same full port and are lost too.
+- **On ns-3** a lost response is retransmitted by TCP after about 210 ms, so `modbus_latency:pi` has windows above 100 ms and no poll times out.
+
+See [Execution backends](backends.md#ingress-buffers) for the testbed comparison.

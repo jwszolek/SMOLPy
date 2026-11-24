@@ -11,6 +11,8 @@ python -m benchmarks loss [--loads 0.93 0.996] [--duration 30000] [--backend sim
 python -m benchmarks loss-summary benchmarks/results/<file>.json
 python -m benchmarks closed-loop [--loads 0.99] [--duration 30000] [--backend simpy rust ns3]
 python -m benchmarks closed-loop-summary benchmarks/results/<file>.json
+python -m benchmarks ingress [--loads 0.997] [--duration 30000] [--backend simpy rust ns3]
+python -m benchmarks ingress-summary benchmarks/results/<file>.json
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from benchmarks import closed_loop, loss
+from benchmarks import closed_loop, ingress, loss
 from benchmarks.load import DURATION_MS, LOADS, run_load, summarize_load
 from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
@@ -121,6 +123,19 @@ def main() -> None:
     )
     closed_summ.add_argument("file", type=Path)
 
+    ing = sub.add_parser(
+        "ingress", help="the testbed of ADR-0013, ingress accounts in frames, every engine"
+    )
+    ing.add_argument("--loads", nargs="+", type=float, default=list(ingress.LOADS))
+    ing.add_argument("--duration", type=float, default=ingress.DURATION_MS, help="simulated ms")
+    ing.add_argument("--backend", nargs="+", default=list(ingress.ENGINES))
+    ing.add_argument("--model", nargs="+", default=list(ingress.MODELS), choices=ingress.MODELS)
+    ing.add_argument("--label", default="ingress-buffers")
+    ing.add_argument("--out", type=Path, default=None)
+
+    ing_summ = sub.add_parser("ingress-summary", help="markdown table of an ingress results file")
+    ing_summ.add_argument("file", type=Path)
+
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
@@ -149,6 +164,14 @@ def main() -> None:
         print(closed_loop.summarize_closed_loop(out))
     elif a.cmd == "closed-loop-summary":
         print(closed_loop.summarize_closed_loop(a.file))
+    elif a.cmd == "ingress":
+        out = ingress.run_ingress(
+            a.loads, a.duration, a.backend, a.label, a.out, models=tuple(a.model)
+        )
+        print(f"results written to {out}")
+        print(ingress.summarize_ingress(out))
+    elif a.cmd == "ingress-summary":
+        print(ingress.summarize_ingress(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
         r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)

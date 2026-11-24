@@ -72,6 +72,9 @@ class _Frame:
     priority: int = field(default=0)  # 802.1Q PCP 0-7
     pn_ar_id: int | None = field(default=None)  # PROFINET RT AR this frame belongs to
     pn_cycle_counter: int = field(default=0)
+    # the ingress account of the switch that holds it, while it is queued there
+    # (ADR-0013); shared by a flooded frame's copies
+    stored: _Stored | None = field(default=None)
 
 
 def _resolve_size(size: int | str, rng: random.Random) -> int:
@@ -104,8 +107,24 @@ def _emit(sinks: Sinks, value: int) -> None:
         window.append(value)
 
 
-class _AdapterCounters:
+class _PollCounts:
+    """The Modbus counts of the polls of one slave, from every master
+    (ADR-0013): the Modbus metrics observed on a slave."""
+
+    __slots__ = ("requests", "responses", "timeouts", "skipped", "rtt_sinks")
+
     def __init__(self) -> None:
+        self.requests = 0
+        self.responses = 0
+        self.timeouts = 0
+        self.skipped = 0
+        self.rtt_sinks: Sinks = []
+
+
+class _AdapterCounters:
+    def __init__(self, polled: dict[str, _PollCounts] | None = None) -> None:
+        # the counts of every slave, by its MAC, shared by every master
+        self.polled: dict[str, _PollCounts] = {} if polled is None else polled
         self.bytes_received: int = 0
         self.frames_received: int = 0
         self.modbus_requests: int = 0  # sent by this adapter's polls
@@ -129,14 +148,22 @@ class _AdapterCounters:
             self.modbus_responses += 1
             if self.modbus_rtt_sinks:
                 _emit(self.modbus_rtt_sinks, now - frame.created_at_ns)
+            slave = self.polled.get(frame.src_mac)
+            if slave is not None:
+                slave.responses += 1
+                if slave.rtt_sinks:
+                    _emit(slave.rtt_sinks, now - frame.created_at_ns)
 
 
 class _Transaction:
     """The transaction slot of a poll with one request in flight (ADR-0012):
     the request outstanding, if any, and when the previous one completed."""
 
-    def __init__(self, counters: _AdapterCounters, timeout_ns: int | None) -> None:
+    def __init__(
+        self, counters: _AdapterCounters, slave: _PollCounts, timeout_ns: int | None
+    ) -> None:
         self.counters = counters
+        self.slave = slave
         self.timeout_ns = timeout_ns
         self.tid = -1  # the last request's transaction id
         self.sent_at = 0
@@ -171,6 +198,7 @@ class _Transaction:
             self.outstanding = False
             self.completed_at = now
             self.counters.modbus_timeouts += 1
+            self.slave.timeouts += 1
 
 
 # ---------------------------------------------------------------------------
@@ -178,22 +206,67 @@ class _Transaction:
 # ---------------------------------------------------------------------------
 
 
-class _BoundedQueue(simpy.PriorityStore):
-    """An egress queue that counts the frame bytes it holds (ADR-0011).
+class _Account:
+    """A switch buffer account (ADR-0011, ADR-0013): what it holds of the
+    frames queued, in frame bytes or in frames, against its limit."""
 
-    A frame leaves the buffer when the transmitter takes it, which is when
+    __slots__ = ("limit", "in_frames", "held")
+
+    def __init__(self, limit: int, in_frames: bool) -> None:
+        self.limit = limit
+        self.in_frames = in_frames
+        self.held = 0
+
+    def fits(self, size: int) -> bool:
+        return self.held + (1 if self.in_frames else size) <= self.limit
+
+    def charge(self, size: int) -> None:
+        self.held += 1 if self.in_frames else size
+
+    def release(self, size: int) -> None:
+        self.held -= 1 if self.in_frames else size
+
+
+def _account(limit: tuple[int, str] | None) -> _Account | None:
+    return None if limit is None else _Account(limit[0], limit[1] == "frames")
+
+
+class _Stored:
+    """A frame admitted to an ingress account: it leaves the account when
+    the last of its queued copies is taken (ADR-0013)."""
+
+    __slots__ = ("account", "copies")
+
+    def __init__(self, account: _Account) -> None:
+        self.account = account
+        self.copies = 0
+
+
+class _BoundedQueue(simpy.PriorityStore):
+    """An egress queue of a switch with buffer accounts (ADR-0011, ADR-0013).
+
+    A frame leaves its accounts when the transmitter takes it, which is when
     SimPy pops it from the store: at once when the transmitter asks for the
     next frame, or, if it was idle, when the Put of a queued frame is
-    processed. The frame in transmission is therefore not counted."""
+    processed. The frame in transmission is therefore not counted. The last
+    copy of a frame taken releases its ingress account."""
 
-    def __init__(self, env: _Environment) -> None:
+    def __init__(self, env: _Environment, egress: _Account | None) -> None:
         super().__init__(env)
-        self.queued_bytes = 0
+        self.egress = egress
 
     def _do_get(self, event: simpy.resources.store.StoreGet) -> None:
         if self.items:
             item = heapq.heappop(self.items)
-            self.queued_bytes -= item.item.size_bytes
+            frame: _Frame = item.item
+            if self.egress is not None:
+                self.egress.release(frame.size_bytes)
+            stored = frame.stored
+            if stored is not None:
+                frame.stored = None
+                stored.copies -= 1
+                if stored.copies == 0:
+                    stored.account.release(frame.size_bytes)
             event.succeed(item)
 
 
@@ -204,9 +277,9 @@ class _LinkChannel:
     FIFO within a class, non-preemptive). With strict_priority=False every
     frame is treated as priority 0, i.e. plain FIFO.
 
-    With *buffer_bytes* the queue is bounded: a frame that would take the
-    frame bytes waiting beyond it is dropped on arrival, whatever its
-    priority (tail drop, ADR-0011).
+    On a switch with buffer accounts (*accounted*), the queue counts what it
+    holds; with an *egress* account, a frame that does not fit is dropped on
+    arrival, whatever its priority (tail drop, ADR-0011, ADR-0013).
     """
 
     def __init__(
@@ -217,7 +290,8 @@ class _LinkChannel:
         in_port: int,
         dst_store: simpy.Store,
         strict_priority: bool = True,
-        buffer_bytes: int | None = None,
+        egress: _Account | None = None,
+        accounted: bool = False,
     ) -> None:
         self.env = env
         self.speed_mbps = speed_mbps
@@ -228,12 +302,12 @@ class _LinkChannel:
         self.in_port = in_port
         self.dst_store = dst_store
         self.strict_priority = strict_priority
-        self.buffer_bytes = buffer_bytes
-        self.frames_dropped: int = 0
-        # Only a bounded queue counts its bytes: unbounded ones, every end
-        # station's among them, run exactly as before.
+        self.egress = egress
+        self.frames_dropped: int = 0  # by the egress account
+        # Only a switch with accounts counts what its queues hold: every
+        # other queue, every end station's among them, runs exactly as before.
         self.queue: simpy.PriorityStore = (
-            simpy.PriorityStore(env) if buffer_bytes is None else _BoundedQueue(env)
+            _BoundedQueue(env, egress) if accounted else simpy.PriorityStore(env)
         )
         # PriorityItem compares on the key only, so the sequence number is what
         # keeps equal-priority frames in FIFO order.
@@ -242,15 +316,17 @@ class _LinkChannel:
         self.frames_sent: int = 0  # those frames; each also took 20 B of wire overhead
         env.process(self._run())
 
-    def enqueue(self, frame: _Frame) -> None:
-        if self.buffer_bytes is not None:
-            queue: _BoundedQueue = self.queue  # type: ignore[assignment]
-            if queue.queued_bytes + frame.size_bytes > self.buffer_bytes:
+    def enqueue(self, frame: _Frame) -> bool:
+        """Queue *frame*; False if the egress account drops it."""
+        egress = self.egress
+        if egress is not None:
+            if not egress.fits(frame.size_bytes):
                 self.frames_dropped += 1  # tail drop: nothing is queued or scheduled
-                return
-            queue.queued_bytes += frame.size_bytes
+                return False
+            egress.charge(frame.size_bytes)
         cls = -frame.priority if self.strict_priority else 0
         self.queue.put(simpy.PriorityItem((cls, next(self._seq)), frame))
+        return True
 
     def _run(self) -> Generator:
         # Serialization (tx) is the only thing that occupies the wire: the next
@@ -426,6 +502,7 @@ def _modbus_poll_gen(
     rate_hz: float,
     channel: _LinkChannel,
     counters: _AdapterCounters,
+    slave: _PollCounts,
     delay_ns: int = 0,
     transaction: _Transaction | None = None,  # with outstanding=1
 ) -> Generator:
@@ -441,9 +518,11 @@ def _modbus_poll_gen(
         if transaction is not None:
             if not transaction.free(env.now):
                 counters.modbus_skipped += 1
+                slave.skipped += 1
                 continue
             tid = transaction.send(env.now)
         counters.modbus_requests += 1
+        slave.requests += 1
         channel.enqueue(
             _Frame(
                 src_mac=src_mac,
@@ -719,28 +798,60 @@ def _topology_mac_table(
     return table
 
 
+class _Ingress:
+    """A switch's ingress accounts, by port, and the frames they dropped
+    (ADR-0013)."""
+
+    def __init__(self, accounts: dict[int, _Account]) -> None:
+        self.accounts = accounts
+        self.dropped = 0
+
+
 def _switch_forwarder(
     env: _Environment,
     inbound: simpy.Store,
     out_channels: dict[int, _LinkChannel],
     initial_mac: dict[str, int] | None = None,
+    ingress: _Ingress | None = None,
 ) -> Generator:
     """MAC-learning store-and-forward switch.
 
     initial_mac pre-seeds the table for adapters whose MACs are known from
     topology wiring, preventing spurious flooding toward silent endpoints.
+
+    With *ingress* accounts, a frame is dropped if its ingress port's
+    account has no room; otherwise each copy is admitted by its egress port,
+    and the frame is charged once if a copy was queued (ADR-0013).
     """
     mac_table: dict[str, int] = dict(initial_mac) if initial_mac else {}
     while True:
         frame: _Frame = yield inbound.get()
         mac_table[frame.src_mac] = frame.in_port
         dst_port = mac_table.get(frame.dst_mac)
+        if dst_port == frame.in_port:
+            continue  # hairpin, drop silently
+        if ingress is None:
+            if dst_port is None:
+                # Unknown destination: flood to all ports except the one it arrived on
+                _replicate(frame, out_channels)
+            else:
+                out_channels[dst_port].enqueue(frame)
+            continue
+        account = ingress.accounts[frame.in_port]
+        if not account.fits(frame.size_bytes):
+            ingress.dropped += 1  # tail drop: no egress port is looked at
+            continue
+        stored = frame.stored = _Stored(account)
         if dst_port is None:
-            # Unknown destination: flood to all ports except the one it arrived on
-            _replicate(frame, out_channels)
-        elif dst_port != frame.in_port:
-            out_channels[dst_port].enqueue(frame)
-        # dst_port == in_port → hairpin, drop silently
+            for port, ch in out_channels.items():
+                if port != frame.in_port and ch.enqueue(copy.copy(frame)):
+                    stored.copies += 1
+        elif out_channels[dst_port].enqueue(frame):
+            stored.copies = 1
+        # a store never pops a frame within the put that queues it, so the
+        # account is charged before any copy can be taken
+        if stored.copies:
+            account.charge(frame.size_bytes)
 
 
 def _adapter_receiver(
@@ -797,8 +908,14 @@ def _count_sampler(
             last = total
 
 
-def _dropped(ports: list[_LinkChannel]) -> Callable[[], int]:
-    return lambda: sum(ch.frames_dropped for ch in ports)
+def _dropped(ports: list[_LinkChannel], ingress: _Ingress | None, metric: str) -> Callable[[], int]:
+    """Frames a switch dropped: by its egress accounts, its ingress accounts,
+    or both (ADR-0013)."""
+    if metric == "ingress_drops_total":
+        return lambda: 0 if ingress is None else ingress.dropped
+    if metric == "egress_drops_total" or ingress is None:
+        return lambda: sum(ch.frames_dropped for ch in ports)
+    return lambda: ingress.dropped + sum(ch.frames_dropped for ch in ports)
 
 
 def _sent(channel: _LinkChannel) -> Callable[[], int]:
@@ -813,6 +930,15 @@ def _received(counters: _AdapterCounters, metric: str) -> Callable[[], int]:
     if metric == "modbus_skipped":
         return lambda: counters.modbus_skipped
     return lambda: counters.modbus_requests - counters.modbus_responses  # modbus_unanswered
+
+
+def _polled(slave: _PollCounts, metric: str) -> Callable[[], int]:
+    """A Modbus count of the polls of one slave (ADR-0013)."""
+    if metric == "modbus_timeouts":
+        return lambda: slave.timeouts
+    if metric == "modbus_skipped":
+        return lambda: slave.skipped
+    return lambda: slave.requests - slave.responses  # modbus_unanswered
 
 
 def _queue_depth_sampler(
@@ -908,8 +1034,14 @@ def run_simulation(
     # Every node gets an inbound store where delivered frames arrive
     inbound: dict[str, simpy.Store] = {name: simpy.Store(env) for name in nodes}
 
+    # the polls of every slave, by its MAC, counted at their masters (ADR-0013)
+    polled: dict[str, _PollCounts] = {
+        node.mac: _PollCounts()
+        for node in nodes.values()
+        if isinstance(node, model.ModbusSlaveNode)
+    }
     adapter_counters: dict[str, _AdapterCounters] = {
-        name: _AdapterCounters()
+        name: _AdapterCounters(polled)
         for name, node in nodes.items()
         if isinstance(node, model.AdapterNode)
     }
@@ -923,9 +1055,19 @@ def run_simulation(
     def _strict(node: model.NodeSpec) -> bool:
         return not (isinstance(node, model.SwitchNode) and node.qos == "fifo")
 
-    def _buffer(node: model.NodeSpec) -> int | None:
-        # only switches bound their egress queues; end stations never drop
-        return node.buffer_bytes if isinstance(node, model.SwitchNode) else None
+    def _accounted(node: model.NodeSpec) -> bool:
+        # only switches have buffer accounts; end stations never drop
+        return isinstance(node, model.SwitchNode) and node.bounded
+
+    def _egress(node: model.NodeSpec) -> _Account | None:
+        return _account(node.egress_limit) if isinstance(node, model.SwitchNode) else None
+
+    # ingress accounts, by switch and port (ADR-0013)
+    ingress: dict[str, _Ingress] = {
+        name: _Ingress({})
+        for name, node in nodes.items()
+        if isinstance(node, model.SwitchNode) and node.ingress_limit is not None
+    }
 
     # Build directed link channels from topology
     next_port: dict[str, int] = defaultdict(int)
@@ -946,11 +1088,29 @@ def run_simulation(
         prop_ns = tb.propagation_ns(link.length_m)
         # ch_ab is a's egress queue, ch_ba is b's — each follows its owner's QoS.
         ch_ab = _LinkChannel(
-            env, link.speed_mbps, prop_ns, port_b, inbound[b.name], _strict(a), _buffer(a)
+            env,
+            link.speed_mbps,
+            prop_ns,
+            port_b,
+            inbound[b.name],
+            _strict(a),
+            _egress(a),
+            _accounted(a),
         )
         ch_ba = _LinkChannel(
-            env, link.speed_mbps, prop_ns, port_a, inbound[a.name], _strict(b), _buffer(b)
+            env,
+            link.speed_mbps,
+            prop_ns,
+            port_a,
+            inbound[a.name],
+            _strict(b),
+            _egress(b),
+            _accounted(b),
         )
+        for node, port in ((a, port_a), (b, port_b)):
+            if node.name in ingress:
+                assert isinstance(node, model.SwitchNode)
+                ingress[node.name].accounts[port] = _account(node.ingress_limit)  # type: ignore[assignment]
 
         out_channels[a.name][port_a] = ch_ab
         out_channels[b.name][port_b] = ch_ba
@@ -972,6 +1132,30 @@ def run_simulation(
         if isinstance(node, model.SwitchNode) and node.mac_table == "topology":
             for mac, port in _topology_mac_table(nodes, name, neighbours).items():
                 static_macs[name].setdefault(mac, port)
+
+    def start_flows(name: str, node: model.NodeSpec) -> None:
+        """The flows of an end station, in statement order (ADR-0013)."""
+        ch = adapter_out.get(name)
+        if ch is None:
+            return
+        for spec in sourced.get(name, []):
+            if isinstance(spec, model.Flow):
+                dst = _lookup(nodes, spec.destination, f"flow {name} -> {spec.destination}")
+                env.process(
+                    _traffic_gen(
+                        env,
+                        node.mac,  # type: ignore[union-attr]
+                        dst.mac,  # type: ignore[union-attr]
+                        spec.rate,
+                        spec.size,
+                        spec.pattern,
+                        ch,
+                        rng(spec),
+                        delay_ns=tb.ms_to_ns(spec.delay_ms),
+                        batch=spec.batch,
+                        priority=spec.priority,
+                    )
+                )
 
     # Start one process per node
     ar_ids = itertools.count()
@@ -1024,24 +1208,7 @@ def run_simulation(
                     )
                 )
             if ch:
-                for spec in specs:
-                    if isinstance(spec, model.Flow):
-                        dst = _lookup(nodes, spec.destination, f"flow {name} -> {spec.destination}")
-                        env.process(
-                            _traffic_gen(
-                                env,
-                                node.mac,
-                                dst.mac,  # type: ignore[union-attr]
-                                spec.rate,
-                                spec.size,
-                                spec.pattern,
-                                ch,
-                                rng(spec),
-                                delay_ns=tb.ms_to_ns(spec.delay_ms),
-                                batch=spec.batch,
-                                priority=spec.priority,
-                            )
-                        )
+                start_flows(name, node)
                 for spec in specs:
                     if isinstance(spec, model.Publish):
                         broker = _lookup(nodes, spec.broker, f"publish {name} -> {spec.broker}")
@@ -1068,7 +1235,7 @@ def run_simulation(
                             timeout_ns = (
                                 None if spec.timeout_ms is None else tb.ms_to_ns(spec.timeout_ms)
                             )
-                            transaction = _Transaction(counters, timeout_ns)
+                            transaction = _Transaction(counters, polled[slave.mac], timeout_ns)
                             counters.transactions[slave.mac] = transaction
                         env.process(
                             _modbus_poll_gen(
@@ -1081,6 +1248,7 @@ def run_simulation(
                                 spec.rate,
                                 ch,
                                 counters,
+                                polled[slave.mac],
                                 delay_ns=tb.ms_to_ns(spec.delay_ms),
                                 transaction=transaction,
                             )
@@ -1096,15 +1264,24 @@ def run_simulation(
                             for s in route.subscribers
                         ]
                 env.process(_mqtt_broker_forwarder(env, inbound[name], node.mac, topic_subs, ch))
+            start_flows(name, node)
         elif isinstance(node, model.ModbusSlaveNode):
             ch = adapter_out.get(name)
             if ch:
                 env.process(_modbus_slave_responder(env, inbound[name], node.mac, node.unit_id, ch))
+            start_flows(name, node)
         elif isinstance(node, model.ProfinetDeviceNode):
             env.process(_pn_device_receiver(env, inbound[name], node.mac, pn_consumers[name]))
+            start_flows(name, node)
         elif isinstance(node, model.SwitchNode):
             env.process(
-                _switch_forwarder(env, inbound[name], out_channels[name], static_macs.get(name))
+                _switch_forwarder(
+                    env,
+                    inbound[name],
+                    out_channels[name],
+                    static_macs.get(name),
+                    ingress.get(name),
+                )
             )
 
     # Start metric samplers
@@ -1119,6 +1296,9 @@ def run_simulation(
             all_samples[key] = []
         samples = all_samples[key]
         adapter = isinstance(target, model.AdapterNode)
+        station = isinstance(target, _ENDPOINTS)
+        # the polls of a slave, observed on it (ADR-0013)
+        polls_of = polled.get(target.mac) if isinstance(target, model.ModbusSlaveNode) else None
 
         if obs.metric == "throughput" and adapter:
             env.process(_throughput_sampler(env, adapter_counters[target.name], period, samples))
@@ -1133,14 +1313,16 @@ def run_simulation(
                 env.process(_utilization_sampler(env, chs, period, samples))
         elif obs.metric == "bytes_received" and adapter:
             env.process(_bytes_rx_sampler(env, adapter_counters[target.name], period, samples))
-        elif obs.metric == "bytes_sent" and adapter:
+        elif obs.metric == "bytes_sent" and station:
             ch = adapter_out.get(target.name)
             if ch:
                 env.process(_bytes_tx_sampler(env, ch, period, samples))
         elif obs.metric == "broker_queue" and isinstance(target, model.MqttBrokerNode):
             env.process(_broker_queue_sampler(env, inbound[target.name], period, samples))
-        elif obs.metric == "modbus_latency" and adapter:
-            sinks = adapter_counters[target.name].modbus_rtt_sinks
+        elif obs.metric == "modbus_latency" and (adapter or polls_of is not None):
+            sinks = (
+                adapter_counters[target.name].modbus_rtt_sinks if adapter else polls_of.rtt_sinks  # type: ignore[union-attr]
+            )
             env.process(_window_sampler(env, sinks, _mean_us, period, samples))
         elif obs.metric == "pn_latency" and target.name in pn_consumers:
             sinks = pn_consumers[target.name].latency_sinks
@@ -1150,11 +1332,17 @@ def run_simulation(
             env.process(_window_sampler(env, sinks, _max_us, period, samples))
         elif obs.metric == "pn_watchdog_expiries" and target.name in pn_consumers:
             env.process(_pn_expiries_sampler(env, pn_consumers[target.name], period, samples))
-        elif obs.metric in ("drops", "drops_total") and isinstance(target, model.SwitchNode):
-            dropped = _dropped(list(out_channels[target.name].values()))
+        elif obs.metric in (
+            "drops",
+            "drops_total",
+            "ingress_drops_total",
+            "egress_drops_total",
+        ) and isinstance(target, model.SwitchNode):
+            ports = list(out_channels[target.name].values())
+            dropped = _dropped(ports, ingress.get(target.name), obs.metric)
             window = obs.metric == "drops"
             env.process(_count_sampler(env, dropped, period, samples, window))
-        elif obs.metric == "frames_sent" and adapter:
+        elif obs.metric == "frames_sent" and station:
             ch = adapter_out.get(target.name)
             if ch:
                 env.process(_count_sampler(env, _sent(ch), period, samples))
@@ -1165,6 +1353,11 @@ def run_simulation(
         ):
             count = _received(adapter_counters[target.name], obs.metric)
             env.process(_count_sampler(env, count, period, samples))
+        elif (
+            obs.metric in ("modbus_unanswered", "modbus_timeouts", "modbus_skipped")
+            and polls_of is not None
+        ):
+            env.process(_count_sampler(env, _polled(polls_of, obs.metric), period, samples))
 
     if _n_chunks > 1:
         sleep_s = 8.0 / _n_chunks  # target ~8 s total wall time

@@ -54,7 +54,10 @@ class Capabilities:
     patterns: frozenset[str]  # of flows
     metrics: frozenset[str]
     # "imix": IMIX frame sizes; "bounded_buffer": switch buffers (ADR-0011);
-    # "modbus_outstanding": polls with one request in flight (ADR-0012)
+    # "modbus_outstanding": polls with one request in flight (ADR-0012);
+    # "ingress_buffer": ingress accounts, "buffer_frames": limits in frames,
+    # "station_flows": flows from and to any end station, and
+    # "slave_metrics": Modbus metrics on a slave (ADR-0013)
     features: frozenset[str] = frozenset()
     priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
@@ -77,6 +80,18 @@ class Backend(Protocol):
 _NODE_KINDS = frozenset({"adapter", "switch", "mqtt_broker", "modbus_slave", "profinet_device"})
 _TRAFFIC_KINDS = frozenset({"flow", "publish", "route", "poll", "profinet_ar"})
 _PATTERNS = frozenset({"constant", "poisson", "bursty", "batch"})
+_FEATURES = frozenset(
+    {
+        "imix",
+        "bounded_buffer",
+        "modbus_outstanding",
+        # ADR-0013
+        "ingress_buffer",
+        "buffer_frames",
+        "station_flows",
+        "slave_metrics",
+    }
+)
 
 
 class SimPyBackend:
@@ -95,7 +110,7 @@ class SimPyBackend:
             traffic=_TRAFFIC_KINDS,
             patterns=_PATTERNS,
             metrics=frozenset(METRIC_TARGETS),
-            features=frozenset({"imix", "bounded_buffer", "modbus_outstanding"}),
+            features=_FEATURES,
             dashboards=True,
         )
 
@@ -226,9 +241,11 @@ class Ns3Backend:
                     "modbus_unanswered",
                     "modbus_timeouts",
                     "modbus_skipped",
+                    "ingress_drops_total",
+                    "egress_drops_total",
                 }
             ),
-            features=frozenset({"imix", "bounded_buffer", "modbus_outstanding"}),
+            features=_FEATURES,
         )
 
     def run(self, scenario: Scenario) -> SimulationResult:
@@ -277,7 +294,14 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
     installed, the scenario has a run section and is valid
     (``smolpy.model.validate``), and it uses only what the backend supports.
     *dashboard* asks for the live or text mode. Returns the backend."""
-    from smolpy.model.validate import ScenarioError, Section, describe, validate
+    from smolpy.model import AdapterNode, Flow, SwitchNode
+    from smolpy.model.validate import (
+        STATION_METRIC_FEATURES,
+        ScenarioError,
+        Section,
+        describe,
+        validate,
+    )
 
     b = get(backend)
     if scenario.run is None:
@@ -297,9 +321,16 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
     for i, node in enumerate(scenario.nodes):
         if node.kind not in caps.nodes:
             raise unsupported(node, label(node.kind), ("nodes", i))
-        bounded = getattr(node, "buffer_bytes", None) is not None
-        if bounded and "bounded_buffer" not in caps.features:
+        if not isinstance(node, SwitchNode):
+            continue
+        egress, ingress = node.egress_limit, node.ingress_limit
+        if egress is not None and "bounded_buffer" not in caps.features:
             raise unsupported(node, "bounded switch buffers", ("nodes", i))
+        if ingress is not None and "ingress_buffer" not in caps.features:
+            raise unsupported(node, "ingress buffer limits", ("nodes", i))
+        in_frames = any(lim is not None and lim[1] == "frames" for lim in (egress, ingress))
+        if in_frames and "buffer_frames" not in caps.features:
+            raise unsupported(node, "buffer limits in frames", ("nodes", i))
     for i, link in enumerate(scenario.links):
         if not link.duplex and not caps.half_duplex:
             raise unsupported(link, "half-duplex links", ("links", i))
@@ -314,11 +345,23 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
         closed = getattr(t, "outstanding", None) is not None
         if closed and "modbus_outstanding" not in caps.features:
             raise unsupported(t, "polls with one request in flight", ("traffic", i))
+        if isinstance(t, Flow) and "station_flows" not in caps.features:
+            for end in (t.source, t.destination):
+                if not isinstance(scenario.node(end), AdapterNode):
+                    raise unsupported(
+                        t, "flows from or to a station other than an adapter", ("traffic", i)
+                    )
         if getattr(t, "priority", 0) > 0 and not caps.priorities:
             raise unsupported(t, "802.1Q priorities", ("traffic", i))
     for i, o in enumerate(scenario.observations):
         if o.metric not in caps.metrics:
             raise unsupported(o, f"metric {o.metric!r}", ("observations", i))
+        feature = STATION_METRIC_FEATURES.get(o.metric)
+        station = not isinstance(scenario.node(o.target), AdapterNode)
+        if feature is not None and station and feature not in caps.features:
+            raise unsupported(
+                o, f"metric {o.metric!r} on a station other than an adapter", ("observations", i)
+            )
     if dashboard and not caps.dashboards:
         raise ValueError(
             f"the {b.name} backend runs headless: the live and text modes need backend='simpy'"
