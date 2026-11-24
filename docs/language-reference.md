@@ -39,7 +39,7 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>]
 ```
 
 `mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
@@ -50,14 +50,21 @@ switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [
 
 A frame that does not fit is dropped, whatever its priority, and the frame being transmitted does not count. The ingress limit is checked first, then each copy's egress limit. Without either, the queues are unbounded and nothing is dropped.
 
-A `<limit>` is in bytes or in frames:
+A `<limit>` is in bytes, in frames or in cells:
 - **Bytes:** a number, with the optional suffixes `kB` (10³), `MB` (10⁶), `KiB` (2¹⁰) and `MiB` (2²⁰). It must come out as a whole number of bytes, at least 1522 and at least the largest frame of the scenario.
 - **Frames:** `<n>frames`, for switches that count descriptors, whatever the frame size. `<n>` is a whole number of at least 1.
+- **Cells:** `<n>cells`, for switches that store frames in cells of `cell` bytes ([ADR-0014](adr/0014-buffer-cells-and-hysteresis.md)). A frame takes ⌈bytes / `cell`⌉ cells, so at `cell=128` a 64 B frame takes 1 and a 1518 B frame 12. `<n>` must hold the largest frame of the scenario, and `cell` is required with a limit in cells and an error without one.
+
+**A resume threshold.** `resume` (for `buffer`) and `ingress_resume` (for `ingress_buffer`) are a level in the limit's unit, below the limit ([ADR-0014](adr/0014-buffer-cells-and-hysteresis.md)):
+- **The drop state.** When a frame does not fit and the account holds more than its resume level, the account enters the drop state. It then drops every frame it decides, small ones too, until a transmitter taking a frame brings it to the resume level.
+- **Runs.** So a full port loses frames in runs, as many switches do.
+- **Without a resume level** the limit is plain tail drop.
 
 ```
 switch sw ports=8 buffer=115kB
 switch sw ports=8 ingress_buffer=60frames
 switch sw ports=8 buffer=115kB ingress_buffer=60frames
+switch sw ports=8 cell=128 ingress_buffer=740cells ingress_resume=668cells
 ```
 
 ### `mqtt_broker` — MQTT message broker
@@ -166,6 +173,10 @@ observe <metric> on <node> every=<ms>
 | `modbus_skipped` | polls | Adapter (master), ModbusSlave (its polls): poll instants skipped so far, because a request was outstanding |
 | `ingress_drops_total` | frames | Switch: dropped by its ingress accounts so far |
 | `egress_drops_total` | frames | Switch: dropped by its egress accounts so far |
+| `ingress_drop_episodes_total` | episodes | Switch: runs of drops by its ingress accounts so far |
+| `egress_drop_episodes_total` | episodes | Switch: runs of drops by its egress accounts so far |
+| `ingress_drop_time_total` | ms | Switch: time its ingress accounts spent in the drop state so far |
+| `egress_drop_time_total` | ms | Switch: time its egress accounts spent in the drop state so far |
 
 Observing a metric on the wrong node type (or a metric that doesn't exist) is a semantic error, caught before the simulation runs.
 

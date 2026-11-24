@@ -14,6 +14,8 @@
 
 ## Context
 
+> *Note, 2026-11-24:* the unit is refuted by [ADR-0014](0014-buffer-cells-and-hysteresis.md). Burst tests with 512 B and 64 B frames show that the testbed switch counts 128 B cells, not frames, and its loss runs show a resume threshold. The scope of this ADR, accounting per ingress port, is confirmed. The text below is as it was decided.
+
 ### The testbed, measured more widely
 
 The testbed of ADR-0011 is the following:

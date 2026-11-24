@@ -150,6 +150,9 @@ class Network:
         mac_table: MacTableMode = "learning",
         buffer: Limit | None = None,
         ingress_buffer: Limit | None = None,
+        cell: int | None = None,
+        resume: Limit | None = None,
+        ingress_resume: Limit | None = None,
     ) -> Switch:
         node = Switch(
             name,
@@ -159,6 +162,9 @@ class Network:
             mac_table=mac_table,
             buffer=buffer,
             ingress_buffer=ingress_buffer,
+            cell=cell,
+            resume=resume,
+            ingress_resume=ingress_resume,
         )
         self._register(node)
         return node

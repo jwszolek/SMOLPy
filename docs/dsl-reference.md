@@ -52,6 +52,20 @@ sw = net.switch("sw", ports=8, buffer=115_000, ingress_buffer=Frames(60))
 - **Release.** A frame leaves its ingress account when the transmitter takes its last queued copy. A flooded frame counts once.
 - **The port that congests the switch loses its frames,** and another port's frames to the same egress port do not. With a limit in frames, a 64 B frame is dropped as often as a 1518 B one.
 - **One unit per limit.** An `int` is bytes and `Frames(n)` is frames. `n` is a whole number of at least 1.
+
+**Limits in cells, and a resume threshold** ([ADR-0014](adr/0014-buffer-cells-and-hysteresis.md)). Many switch chips store frames in fixed-size cells, and once a port's buffer is full they drop everything arriving on it until it has drained to a lower level:
+
+```python
+from smolpy import Cells
+
+sw = net.switch("sw", ports=8, cell=128, ingress_buffer=Cells(740), ingress_resume=Cells(668))
+```
+
+- **Cells.** `Cells(n)` is a limit in cells of `cell` bytes. A frame takes ⌈bytes / `cell`⌉ of them: 1, 4 and 12 for 64 B, 512 B and 1518 B frames at `cell=128`.
+- **The drop state.** `resume` and `ingress_resume`, in the unit of their limit, below it, are the resume levels. A frame that does not fit puts the account in the drop state if it holds more than that level. It then drops every frame, whatever its size, until a release brings it to the level. So losses come in runs, and small frames are lost with large ones.
+- **Metrics.** `ingress_drop_episodes_total` and `egress_drop_episodes_total` count the runs of drops, so the mean run is drops over episodes. `ingress_drop_time_total` and `egress_drop_time_total` give the time spent in the drop state, in ms.
+- **Tail drop** is the default, without a resume level. In frames, `resume = limit − 1` is tail drop too.
+- **Validation.** `cell` is a whole number of bytes, required with a limit in cells and an error otherwise. A limit in cells holds the largest frame. A resume level is in its limit's unit: `int`, `Frames` or `Cells`, as the limit.
 - **On loss there is no retransmission** on SimPy and Rust. A poll whose request or response is lost stays unanswered (`modbus_unanswered`), or times out with `outstanding=1` and a timeout (below). On ns-3, Modbus and MQTT run over TCP, which retransmits ([Execution backends](backends.md#bounded-switch-buffers)).
 
 ## Traffic
@@ -187,6 +201,10 @@ net.observe(metric, on=node, every=interval_ms)
 | `modbus_skipped` | polls | Adapter (master), ModbusSlave (its polls): poll instants skipped so far, because a request was outstanding |
 | `ingress_drops_total` | frames | Switch: dropped by its ingress accounts so far |
 | `egress_drops_total` | frames | Switch: dropped by its egress accounts so far |
+| `ingress_drop_episodes_total` | episodes | Switch: runs of drops by its ingress accounts so far |
+| `egress_drop_episodes_total` | episodes | Switch: runs of drops by its egress accounts so far |
+| `ingress_drop_time_total` | ms | Switch: time its ingress accounts spent in the drop state so far |
+| `egress_drop_time_total` | ms | Switch: time its egress accounts spent in the drop state so far |
 
 ## Simulation
 
@@ -223,7 +241,7 @@ result.export("out.csv", format="csv")   # explicit format override
 - **`smolpy.backends.installed()`** lists the backends that can run here.
 
 **The Rust backend** runs the whole model:
-- adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables, egress and ingress limits in bytes or frames), links and flows between any end stations with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
+- adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables, egress and ingress limits in bytes, frames or cells, with or without resume levels), links and flows between any end stations with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
 - Modbus TCP: slaves, `polls()`, open loop or with one request in flight, and `modbus_latency`;
 - MQTT: brokers, `publishes()` with QoS 0 and 1, `routes()` and `broker_queue`;
 - PROFINET RT: devices, `controls()` and its watchdog, `pn_latency`, `pn_jitter` and `pn_watchdog_expiries`;

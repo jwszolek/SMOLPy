@@ -95,9 +95,9 @@ def test_a_limit_is_validated(kwargs: dict, message: str) -> None:
 
 
 def test_one_account_has_one_unit() -> None:
-    with pytest.raises(ScenarioError, match="buffer is given both in bytes and in frames"):
+    with pytest.raises(ScenarioError, match="buffer is given in more than one unit"):
         check_node(SwitchNode("sw", 2, buffer_bytes=2_000, buffer_frames=2))
-    with pytest.raises(ScenarioError, match="ingress_buffer is given both"):
+    with pytest.raises(ScenarioError, match="ingress_buffer is given in more than one unit"):
         check_node(SwitchNode("sw", 2, ingress_buffer_bytes=2_000, ingress_buffer_frames=2))
 
 
@@ -317,9 +317,9 @@ class _Audit:
             held = audit.held(account)
             assert account.held == held, (account.held, held)
             ok = fits(account, size)
-            unit = 1 if account.in_frames else size
+            unit = account.units(size)
             assert ok == (held + unit <= account.limit)
-            audit.records.append((held, size, account.limit, account.in_frames, ok))
+            audit.records.append((held, size, account.limit, account.unit == "frames", ok))
             now = audit.envs[0].now
             audit.times.append(now)
             if ok and held + 2 * unit > account.limit and audit.releases.get(id(account)) == now:
@@ -345,12 +345,12 @@ class _Audit:
                             if f.in_port == port:
                                 assert f.stored is not None and f.stored.account is account
                                 frames[id(f.stored)] = f.size_bytes
-                    return len(frames) if account.in_frames else sum(frames.values())
+                    return sum(account.units(size) for size in frames.values())
         for out, _ in self.switches:
             for ch in out.values():
                 if ch.egress is account:
                     sizes = [item.item.size_bytes for item in ch.queue.items]
-                    return len(sizes) if account.in_frames else sum(sizes)
+                    return sum(account.units(size) for size in sizes)
         # an egress account of a switch without ingress accounts
         return account.held
 

@@ -13,6 +13,8 @@ python -m benchmarks closed-loop [--loads 0.99] [--duration 30000] [--backend si
 python -m benchmarks closed-loop-summary benchmarks/results/<file>.json
 python -m benchmarks ingress [--loads 0.997] [--duration 30000] [--backend simpy rust ns3]
 python -m benchmarks ingress-summary benchmarks/results/<file>.json
+python -m benchmarks cells [--duration 30000] [--backend simpy rust ns3]
+python -m benchmarks cells-summary benchmarks/results/<file>.json
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from benchmarks import closed_loop, ingress, loss
+from benchmarks import cells, closed_loop, ingress, loss
 from benchmarks.load import DURATION_MS, LOADS, run_load, summarize_load
 from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
@@ -136,6 +138,17 @@ def main() -> None:
     ing_summ = sub.add_parser("ingress-summary", help="markdown table of an ingress results file")
     ing_summ.add_argument("file", type=Path)
 
+    cel = sub.add_parser(
+        "cells", help="the testbed of ADR-0014, cells with a resume threshold, every engine"
+    )
+    cel.add_argument("--duration", type=float, default=cells.DURATION_MS, help="simulated ms")
+    cel.add_argument("--backend", nargs="+", default=list(cells.ENGINES))
+    cel.add_argument("--label", default="buffer-cells")
+    cel.add_argument("--out", type=Path, default=None)
+
+    cel_summ = sub.add_parser("cells-summary", help="markdown tables of a cells results file")
+    cel_summ.add_argument("file", type=Path)
+
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
@@ -172,6 +185,12 @@ def main() -> None:
         print(ingress.summarize_ingress(out))
     elif a.cmd == "ingress-summary":
         print(ingress.summarize_ingress(a.file))
+    elif a.cmd == "cells":
+        out = cells.run_cells(a.duration, a.backend, a.label, a.out)
+        print(f"results written to {out}")
+        print(cells.summarize_cells(out))
+    elif a.cmd == "cells-summary":
+        print(cells.summarize_cells(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
         r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)

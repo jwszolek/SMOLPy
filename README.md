@@ -36,7 +36,7 @@ SMOLPy lets you describe a network topology in pure Python, define traffic flows
 | **Modbus TCP** | TCP/IP | Request / response polling (Read Holding Registers, FC 03) | `ModbusSlave`, `Adapter.polls()` | `modbus_slave`, `poll` | `modbus_latency`, `modbus_unanswered`, `modbus_timeouts`, `modbus_skipped` |
 | **PROFINET RT** | Layer 2 (EtherType 0x8892), 802.1Q priority 6 | Cyclic producer / consumer exchange with watchdog | `ProfinetDevice`, `Adapter.controls()` | `profinet_device`, `control` | `pn_latency`, `pn_jitter`, `pn_watchdog_expiries` |
 
-Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation), unbounded or bounded with tail drop per egress or ingress port (`buffer=`, `ingress_buffer=`, in bytes or `Frames(n)`). Every end station can send flows, so a Modbus server can also stream data on its one port. One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
+Infrastructure: MAC-learning **switches** with 802.1Q strict-priority egress queues (`qos="strict"`, or `qos="fifo"` to disable prioritisation), unbounded or bounded with tail drop per egress or ingress port (`buffer=`, `ingress_buffer=`, in bytes, `Frames(n)` or `Cells(n)`, with optional resume levels). Every end station can send flows, so a Modbus server can also stream data on its one port. One `Adapter` can act in several roles at once — e.g. a PLC that is a Modbus master, an MQTT publisher and a PROFINET controller.
 
 **Not supported (yet):** PROFINET IRT, PROFIBUS, EtherNet/IP, EtherCAT, OPC UA, Modbus RTU (serial), and Modbus write function codes. See the [Architecture Decision Records](https://jwszolek.github.io/SMOLPy/adr/0001-protocol-package-structure/) for what is planned.
 
@@ -306,6 +306,10 @@ net.observe(metric, on=node, every=interval_ms)
 | `modbus_skipped` | polls | Adapter (master), ModbusSlave (its polls): poll instants skipped so far, because a request was outstanding |
 | `ingress_drops_total` | frames | Switch: dropped by its ingress accounts so far |
 | `egress_drops_total` | frames | Switch: dropped by its egress accounts so far |
+| `ingress_drop_episodes_total` | episodes | Switch: runs of drops by its ingress accounts so far |
+| `egress_drop_episodes_total` | episodes | Switch: runs of drops by its egress accounts so far |
+| `ingress_drop_time_total` | ms | Switch: time its ingress accounts spent in the drop state so far |
+| `egress_drop_time_total` | ms | Switch: time its egress accounts spent in the drop state so far |
 
 ### Simulation
 
@@ -500,7 +504,7 @@ The model every engine implements:
 - **MAC-learning switch** — each switch pre-seeds its forwarding table from the topology wiring, eliminating spurious flooding toward silent endpoints (e.g. a server that only receives).  Dynamic learning still operates for traffic through intermediate switches.
 - **Store-and-forward model** — transmission delay + propagation delay per hop.
 - **Queuing** — each link direction has its own egress queue with 8 strict 802.1Q priority classes (FIFO within a class, non-preemptive); `qos="fifo"` on a switch ignores priorities. `queue_depth` reports buffered frames at the switch's outbound ports.
-- **Bounded buffers** — a switch with `buffer` (per egress port) or `ingress_buffer` (per ingress port), in bytes or in frames, drops a frame that does not fit, with tail drop: delay is capped and loss appears, as on real switches near saturation ([ADR-0011](https://jwszolek.github.io/SMOLPy/adr/0011-bounded-switch-buffers/), [ADR-0013](https://jwszolek.github.io/SMOLPy/adr/0013-ingress-buffer-accounting/)). Without them queues are unbounded.
+- **Bounded buffers** — a switch with `buffer` (per egress port) or `ingress_buffer` (per ingress port), in bytes, frames or cells, drops a frame that does not fit, with tail drop or with a resume threshold ([ADR-0014](https://jwszolek.github.io/SMOLPy/adr/0014-buffer-cells-and-hysteresis/)): delay is capped and loss appears, as on real switches near saturation ([ADR-0011](https://jwszolek.github.io/SMOLPy/adr/0011-bounded-switch-buffers/), [ADR-0013](https://jwszolek.github.io/SMOLPy/adr/0013-ingress-buffer-accounting/)). Without them queues are unbounded.
 - **Traffic shaping** — constant, Poisson, Pareto-burst and batch patterns; IMIX frame-size distribution.
 - **Live mode** (SimPy only) — simulation runs in 200 chunks (~8 s total wall time); the dashboard reads shared metric arrays between chunks via Python's GIL.
 

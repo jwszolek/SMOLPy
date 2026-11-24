@@ -6,7 +6,7 @@ from typing import Any
 from lark import Lark, Token, Transformer, UnexpectedInput, v_args
 from lark.exceptions import VisitError
 
-from smolpy.ethernet.switch import Frames
+from smolpy.ethernet.switch import Cells, Frames
 from smolpy.lang.ast import (
     AdapterDecl,
     ControlDecl,
@@ -63,21 +63,22 @@ def _bytes(raw: Any) -> Any:
     return raw
 
 
-_FRAME_SUFFIXES = ("frames", "frame")
+_UNIT_SUFFIXES = (("frames", Frames), ("frame", Frames), ("cells", Cells), ("cell", Cells))
 
 
 def _limit(raw: Any) -> Any:
-    """A switch buffer limit (ADR-0011, ADR-0013): ``<n>frames`` is a limit
-    in frames, a :class:`Frames`; anything else is bytes, as for
-    :func:`_bytes`. A value that is neither is left for validation."""
+    """A switch buffer limit or resume level (ADR-0011, ADR-0013, ADR-0014):
+    ``<n>frames`` is in frames, a :class:`Frames`, and ``<n>cells`` in cells,
+    a :class:`Cells`; anything else is bytes, as for :func:`_bytes`. A value
+    that is neither is left for validation."""
     if isinstance(raw, str):
-        for suffix in _FRAME_SUFFIXES:
+        for suffix, unit in _UNIT_SUFFIXES:
             if raw.endswith(suffix):
                 number = _coerce(raw[: -len(suffix)])
                 if isinstance(number, float) and number == int(number):
                     number = int(number)
                 if isinstance(number, (int, float)) and not isinstance(number, bool):
-                    return Frames(number)  # type: ignore[arg-type]
+                    return unit(number)  # type: ignore[arg-type]
                 return raw
     return _bytes(raw)
 
@@ -150,6 +151,9 @@ class _SmolTransformer(Transformer):
             mac_table=str(kw.get("mac_table", "learning")),
             buffer=_limit(kw["buffer"]) if "buffer" in kw else None,
             ingress_buffer=_limit(kw["ingress_buffer"]) if "ingress_buffer" in kw else None,
+            cell=_bytes(kw["cell"]) if "cell" in kw else None,
+            resume=_limit(kw["resume"]) if "resume" in kw else None,
+            ingress_resume=_limit(kw["ingress_resume"]) if "ingress_resume" in kw else None,
         )
 
     def mqtt_broker_decl(self, meta: Any, children: list) -> MqttBrokerDecl:

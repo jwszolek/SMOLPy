@@ -39,6 +39,10 @@ uv run python -m benchmarks closed-loop-summary benchmarks/results/<file>.json
 uv run python -m benchmarks ingress
 uv run python -m benchmarks ingress-summary benchmarks/results/<file>.json
 
+# limits in cells with a resume threshold: the testbed, burst tests and batch case of ADR-0014
+uv run python -m benchmarks cells
+uv run python -m benchmarks cells-summary benchmarks/results/<file>.json
+
 # profiling (reports go to benchmarks/profiles/, not committed)
 uv run python -m benchmarks profile --scenario B3 --frames 1M --tool cprofile
 uv run python -m benchmarks profile --scenario B1 --frames 1M --metrics on --tool tracemalloc

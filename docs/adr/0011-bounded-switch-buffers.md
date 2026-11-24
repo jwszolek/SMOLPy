@@ -3,7 +3,7 @@
 **Status:** Accepted  
 **Date:** 2026-11-23  
 **Amends:** ADR-0007 (a new optional field of the IR, which stays version 2), ADR-0004 (the `smol-ns3` line format becomes version 2), [Model Semantics](../model-semantics.md) §3, §5, §8 and §9  
-**Amended by:** [ADR-0013](0013-ingress-buffer-accounting.md) (ingress accounts and limits in frames)  
+**Amended by:** [ADR-0013](0013-ingress-buffer-accounting.md) (ingress accounts and limits in frames), [ADR-0014](0014-buffer-cells-and-hysteresis.md) (limits in cells; tail drop as the case without a resume level)  
 **Roadmap:** the candidate "Bounded switch buffers with frame loss"
 
 ---

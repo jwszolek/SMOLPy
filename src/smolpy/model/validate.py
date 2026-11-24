@@ -27,6 +27,7 @@ from smolpy.model.frames import (
     PN_CYCLES_MS,
     PN_MAX_IO_BYTES,
     flow_frame_size,
+    frame_cells,
     modbus_response_frame_size,
     mqtt_publish_frame_size,
     pn_frame_size,
@@ -101,6 +102,11 @@ METRIC_TARGETS: dict[str, tuple[type, ...] | None] = {
     # ADR-0013: drops by account
     "ingress_drops_total": (SwitchNode,),
     "egress_drops_total": (SwitchNode,),
+    # ADR-0014: drop episodes and the time in the drop state
+    "ingress_drop_episodes_total": (SwitchNode,),
+    "egress_drop_episodes_total": (SwitchNode,),
+    "ingress_drop_time_total": (SwitchNode,),
+    "egress_drop_time_total": (SwitchNode,),
 }
 
 # Metrics that a station other than an adapter carries only since ADR-0013,
@@ -202,30 +208,66 @@ def check_node(node: NodeSpec) -> None:
         _one_of(node, "mode", node.mode, SWITCH_MODES)
         _one_of(node, "qos", node.qos, SWITCH_QOS)
         _one_of(node, "mac_table", node.mac_table, MAC_TABLES)
-        for label, in_bytes, in_frames in (
-            ("buffer", node.buffer_bytes, node.buffer_frames),
-            ("ingress_buffer", node.ingress_buffer_bytes, node.ingress_buffer_frames),
-        ):
-            _check_limit(node, label, in_bytes, in_frames)
+        _check_switch_buffers(node)
     if isinstance(node, ModbusSlaveNode):
         _in_range(node, "unit_id", node.unit_id, 0, 255)
 
 
-def _check_limit(node: SwitchNode, label: str, in_bytes: object, in_frames: object) -> None:
-    """A switch's limit of one account: bytes or frames, not both (ADR-0011,
-    ADR-0013)."""
-    if in_bytes is not None and in_frames is not None:
-        raise _fail(node, f"{label} is given both in bytes and in frames; give one of them")
+def _check_switch_buffers(node: SwitchNode) -> None:
+    """A switch's limits, cell size and resume levels (ADR-0011, ADR-0013,
+    ADR-0014)."""
+    scopes = (
+        ("buffer", "resume", node.buffer_bytes, node.buffer_frames, node.buffer_cells,
+         node.buffer_resume),
+        ("ingress_buffer", "ingress_resume", node.ingress_buffer_bytes,
+         node.ingress_buffer_frames, node.ingress_buffer_cells, node.ingress_buffer_resume),
+    )  # fmt: skip
+    for label, resume_label, in_bytes, in_frames, in_cells, resume in scopes:
+        _check_limit(node, label, in_bytes, in_frames, in_cells)
+        limit = next((v for v in (in_bytes, in_frames, in_cells) if v is not None), None)
+        if resume is None:
+            continue
+        if limit is None:
+            raise _fail(node, f"{resume_label} needs {label}: it is a level of that limit")
+        if not _integer(resume) or not 0 <= resume < limit:
+            unit = (
+                "bytes" if in_bytes is not None else "frames" if in_frames is not None else "cells"
+            )
+            raise _fail(
+                node,
+                f"{resume_label} must be a whole number of {unit} from 0 to less than"
+                f" {label} ({limit}), got {resume!r}",
+            )
+    in_cells = node.buffer_cells is not None or node.ingress_buffer_cells is not None
+    cell = node.cell_bytes
+    if cell is not None and (not _integer(cell) or cell < 1):
+        raise _fail(node, f"cell must be a whole number of bytes, at least 1, got {cell!r}")
+    if in_cells and cell is None:
+        raise _fail(node, "a limit in cells needs cell, the cell size in bytes")
+    if cell is not None and not in_cells:
+        raise _fail(node, "cell is the size of the cells of a limit in cells; no limit is in cells")
+
+
+def _check_limit(
+    node: SwitchNode, label: str, in_bytes: object, in_frames: object, in_cells: object = None
+) -> None:
+    """A switch's limit of one account: in bytes, frames or cells, one of
+    them (ADR-0011, ADR-0013, ADR-0014)."""
+    if sum(v is not None for v in (in_bytes, in_frames, in_cells)) > 1:
+        raise _fail(
+            node, f"{label} is given in more than one unit (bytes, frames, cells); give one"
+        )
     if in_bytes is not None and (not _integer(in_bytes) or in_bytes < MAX_STANDARD_FRAME_BYTES):  # type: ignore[operator]
         raise _fail(
             node,
             f"{label} must be a whole number of bytes, at least one maximum frame"
             f" ({MAX_STANDARD_FRAME_BYTES} B), got {in_bytes!r}",
         )
-    if in_frames is not None and (not _integer(in_frames) or in_frames < 1):  # type: ignore[operator]
-        raise _fail(
-            node, f"{label} in frames must be a whole number of at least 1, got {in_frames!r}"
-        )
+    for unit, value in (("frames", in_frames), ("cells", in_cells)):
+        if value is not None and (not _integer(value) or value < 1):  # type: ignore[operator]
+            raise _fail(
+                node, f"{label} in {unit} must be a whole number of at least 1, got {value!r}"
+            )
 
 
 def check_link(link: Link) -> None:
@@ -431,6 +473,20 @@ def validate(scenario: Scenario) -> None:
                 raise ScenarioError(
                     f"{describe(node)}: {label} {in_bytes} B is smaller than the"
                     f" largest frame of the scenario, {largest} B, which it would always drop",
+                    ("nodes", i),
+                )
+        for label, in_cells in (
+            ("buffer", node.buffer_cells),
+            ("ingress_buffer", node.ingress_buffer_cells),
+        ):
+            if in_cells is None or node.cell_bytes is None or largest == 0:
+                continue
+            need = frame_cells(largest, node.cell_bytes)
+            if in_cells < need:
+                raise ScenarioError(
+                    f"{describe(node)}: {label} {in_cells} cells is smaller than the largest"
+                    f" frame of the scenario, {largest} B in {need} cells of"
+                    f" {node.cell_bytes} B, which it would always drop",
                     ("nodes", i),
                 )
 

@@ -4,11 +4,12 @@
 // scenario that smolpy.ns3 has lowered to plain lines of integers, with every
 // time already in integer nanoseconds (Model Semantics §1):
 //
-//     smol-ns3 4
+//     smol-ns3 5
 //     duration <ns>
 //     tcp <min RTO ns> <clock granularity ns> <delayed ACK ns> <SYN RTO ns>
 //     adapter <mac> <ipv4>                   nodes, numbered from 0 in order
-//     switch <egress limit> <unit> <ingress limit> <unit>   b: bytes, f: frames; 0: none
+//     switch <cell B> <egress limit> <unit> <egress resume> <ingress limit> <unit> <ingress resume>
+//                                           b: bytes, f: frames, c: cells; 0: no limit, -1: no resume
 //     link <a> <b> <speed num> <speed den> <propagation ns> <gap ns> <strict a> <strict b>
 //     static <switch> <mac> <port>          a switch's MAC table at the start
 //     flow <src> <dst ipv4> <udp payload> <priority> <delay ns> <period num> <period den>
@@ -62,6 +63,9 @@
 //   and are still queued on any port, a flooded frame once (ADR-0013): a
 //   frame that does not fit is dropped before any egress port is looked at,
 //   and the account is released when the transmitter takes the last copy.
+//   Limits are in bytes, frames or cells; with a resume level, a full
+//   account drops every frame until a release brings it to that level
+//   (ADR-0014).
 // - Neighbour caches start full: SMOL models no ARP.
 
 #include "ns3/core-module.h"
@@ -279,21 +283,54 @@ constexpr uint16_t PN_ETHERTYPE = 0x8892;
 constexpr uint8_t PN_RT_PRIORITY = 6;
 
 // A switch buffer account, as smolpy.sim.engine._Account: what it holds of
-// the frames queued, in frame bytes or in frames, against its limit.
+// the frames queued, in frame bytes, frames or cells, against its limit.
+// With a resume level, a frame that does not fit puts it in the drop state
+// if it holds more than that level, and it then refuses every frame until a
+// release brings it to the level (ADR-0014). It counts its drop episodes,
+// the runs of refusals with no admission between them, and its time in the
+// drop state.
 struct Account
 {
     uint64_t limit = 0; // 0: none
-    bool frames = false;
+    char unit = 'b';    // b: bytes, f: frames, c: cells
+    uint64_t cell = 1;
+    int64_t resume = -1; // -1: none
     uint64_t held = 0;
+    bool dropping = false;
+    bool refused = false;
+    uint64_t episodes = 0;
+    uint64_t since = 0;
+    uint64_t dropNs = 0;
 
     uint64_t Unit(uint64_t bytes) const
     {
-        return frames ? 1 : bytes;
+        return unit == 'f' ? 1 : unit == 'c' ? (bytes + cell - 1) / cell : bytes;
     }
 
     bool Fits(uint64_t bytes) const
     {
         return held + Unit(bytes) <= limit;
+    }
+
+    // Decide a frame: false if it is dropped, by tail drop or the drop state.
+    bool Admit(uint64_t bytes)
+    {
+        if (Fits(bytes) && !dropping)
+        {
+            refused = false;
+            return true;
+        }
+        if (!refused)
+        {
+            refused = true;
+            ++episodes;
+        }
+        if (!dropping && resume >= 0 && held > static_cast<uint64_t>(resume))
+        {
+            dropping = true;
+            since = Simulator::Now().GetNanoSeconds();
+        }
+        return false;
     }
 
     void Charge(uint64_t bytes)
@@ -304,6 +341,16 @@ struct Account
     void Release(uint64_t bytes)
     {
         held -= Unit(bytes);
+        if (dropping && held <= static_cast<uint64_t>(resume))
+        {
+            dropping = false;
+            dropNs += Simulator::Now().GetNanoSeconds() - since;
+        }
+    }
+
+    uint64_t DropTime() const
+    {
+        return dropNs + (dropping ? Simulator::Now().GetNanoSeconds() - since : 0);
     }
 };
 
@@ -451,7 +498,7 @@ class SmolDevice : public NetDevice
     {
         if (m_egress.limit > 0)
         {
-            if (!m_egress.Fits(frame.bytes))
+            if (!m_egress.Admit(frame.bytes))
             {
                 ++dropped; // tail drop: nothing is queued or scheduled
                 return false;
@@ -471,6 +518,11 @@ class SmolDevice : public NetDevice
     uint64_t QueueLength() const
     {
         return m_queued; // the frame on the wire is not queued
+    }
+
+    const Account& Egress() const
+    {
+        return m_egress;
     }
 
     uint64_t bitsSent = 0;       // frame bits whose transmission has completed
@@ -803,7 +855,7 @@ class SmolSwitch
         std::shared_ptr<Stored> stored;
         if (!ingress.empty())
         {
-            if (!ingress[in].Fits(frame.bytes))
+            if (!ingress[in].Admit(frame.bytes))
             {
                 ++ingressDropped; // tail drop: no egress port is looked at
                 return;
@@ -855,6 +907,29 @@ class SmolSwitch
         for (const auto& port : ports)
         {
             n += port->dropped;
+        }
+        return n;
+    }
+
+    // Drop episodes, or time in the drop state in ns, of the egress or the
+    // ingress accounts (ADR-0014).
+    uint64_t Episodes(bool ingressAccounts, bool time) const
+    {
+        uint64_t n = 0;
+        auto add = [&](const Account& a) { n += time ? a.DropTime() : a.episodes; };
+        if (ingressAccounts)
+        {
+            for (const Account& a : ingress)
+            {
+                add(a);
+            }
+        }
+        else if (egress.limit > 0)
+        {
+            for (const auto& port : ports)
+            {
+                add(port->Egress());
+            }
         }
         return n;
     }
@@ -1447,6 +1522,10 @@ enum class Kind
     Drops, // drops and drops_total: the total so far
     IngressDrops,
     EgressDrops,
+    IngressEpisodes, // drop episodes and drop time (ADR-0014)
+    EgressEpisodes,
+    IngressDropTime,
+    EgressDropTime,
     FramesSent,
     FramesReceived,
     ModbusUnanswered,
@@ -1522,6 +1601,13 @@ Sample(Observation* o)
     case Kind::EgressDrops:
         a = o->sw->EgressDropped();
         break;
+    case Kind::IngressEpisodes:
+    case Kind::EgressEpisodes:
+    case Kind::IngressDropTime:
+    case Kind::EgressDropTime:
+        a = o->sw->Episodes(o->kind == Kind::IngressEpisodes || o->kind == Kind::IngressDropTime,
+                            o->kind == Kind::IngressDropTime || o->kind == Kind::EgressDropTime);
+        break;
     case Kind::FramesSent:
         a = o->device->framesSent;
         break;
@@ -1570,9 +1656,9 @@ Run(std::istream& in, std::ostream& out)
 
     std::string word;
     uint32_t version = 0;
-    if (!(in >> word >> version) || word != "smol-ns3" || version != 4)
+    if (!(in >> word >> version) || word != "smol-ns3" || version != 5)
     {
-        Fail("not a smol-ns3 version 4 scenario");
+        Fail("not a smol-ns3 version 5 scenario");
     }
 
     uint64_t durationNs = 0;
@@ -1636,22 +1722,31 @@ Run(std::istream& in, std::ostream& out)
             {
                 switches.emplace_back();
                 SmolSwitch& sw = switches.back();
+                uint64_t cell;
                 std::string egressUnit;
                 std::string ingressUnit;
-                s >> sw.egress.limit >> egressUnit >> sw.ingressLimit.limit >> ingressUnit;
+                s >> cell >> sw.egress.limit >> egressUnit >> sw.egress.resume >>
+                    sw.ingressLimit.limit >> ingressUnit >> sw.ingressLimit.resume;
                 auto unit = [&](const std::string& u) {
-                    if (u != "b" && u != "f")
+                    if (u != "b" && u != "f" && u != "c")
                     {
                         Fail("bad switch: " + line);
                     }
-                    return u == "f";
+                    return u[0];
                 };
-                if (!s)
+                if (!s || cell == 0)
                 {
                     Fail("bad switch: " + line);
                 }
-                sw.egress.frames = unit(egressUnit);
-                sw.ingressLimit.frames = unit(ingressUnit);
+                for (Account* a : {&sw.egress, &sw.ingressLimit})
+                {
+                    a->unit = unit(a == &sw.egress ? egressUnit : ingressUnit);
+                    a->cell = cell;
+                    if (a->resume >= 0 && static_cast<uint64_t>(a->resume) >= a->limit)
+                    {
+                        Fail("bad switch: " + line);
+                    }
+                }
                 macs.emplace_back();
                 ips.emplace_back();
             }
@@ -2051,6 +2146,15 @@ Run(std::istream& in, std::ostream& out)
             {
                 o->kind = Kind::PnWatchdogExpiries;
                 o->host = &hosts.at(target);
+            }
+            else if (kind == "ingress_episodes" || kind == "egress_episodes" ||
+                     kind == "ingress_drop_time" || kind == "egress_drop_time")
+            {
+                o->kind = kind == "ingress_episodes"  ? Kind::IngressEpisodes
+                          : kind == "egress_episodes" ? Kind::EgressEpisodes
+                          : kind == "ingress_drop_time" ? Kind::IngressDropTime
+                                                        : Kind::EgressDropTime;
+                o->sw = &switches[switchOf[target]];
             }
             else if (kind == "drops" || kind == "ingress_drops" || kind == "egress_drops")
             {

@@ -70,6 +70,12 @@ def modbus_response_frame_size(count: int) -> int:
     return padded(ETHERNET_IP_TCP_BYTES + modbus_response_message_bytes(count))
 
 
+def frame_cells(size: int, cell: int) -> int:
+    """The buffer cells of *cell* bytes a frame of *size* bytes takes, rounded
+    up (ADR-0014): 64 B, 512 B and 1518 B take 1, 4 and 12 cells of 128 B."""
+    return -(-size // cell)
+
+
 def pn_frame_size(io_bytes: int) -> int:
     """PROFINET RT: Ethernet (14) + 802.1Q (4) + FrameID (2) + IO data + APDU status (4)
     + FCS (4), padded to the 64 B minimum."""

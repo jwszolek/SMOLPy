@@ -218,3 +218,51 @@ Each load runs 30 simulated seconds with 5 seeds. The table gives sums over the 
 
 The results are in `benchmarks/results/*-ingress-buffers.json`. `python -m benchmarks ingress-summary <file>` prints their table, with the round trip's median and p99 and the spread of the long round trips.
 
+### Cells and a resume threshold
+
+A switch limit can be in cells of `cell` bytes, and an account can have a resume level: once a frame does not fit, the account drops every frame until it has drained to that level ([ADR-0014](adr/0014-buffer-cells-and-hysteresis.md)). The engines apply the same rules:
+- **Rust** gives SimPy's results bit for bit, drop episodes and event counts included.
+- **ns-3** does too for Ethernet over UDP and PROFINET RT, random traffic included with the same seed.
+- **Modbus and MQTT** differ by TCP, as before.
+
+`python -m benchmarks cells` runs scenario T4: T3 above at the testbed's 8 100 frames/s, with three models of the switch. Each case runs 30 simulated seconds with 5 seeds:
+- **`cells`:** `cell=128 ingress_buffer=740cells ingress_resume=668cells`, ADR-0014's calibration;
+- **`cells-tail`:** the same 740 cells, with tail drop;
+- **`frames`:** ADR-0013's `ingress_buffer=60frames`.
+
+The columns:
+- **UDP loss:** the Pi's frames dropped, as a share of those it sent.
+- **Mean run:** `ingress_drops_total / ingress_drop_episodes_total`.
+- **Single-frame runs:** from an audit of SimPy's decisions, since no metric gives each run's length.
+- **Pi's polls:** lost on SimPy and Rust, or retransmitted on ns-3.
+
+| Model | Engine | UDP loss | Mean run | Single-frame runs | Pi's polls | Waveshare's polls |
+|---|---|---|---|---|---|---|
+| `cells` | SimPy | 0.73 % | 6.28 | 0.5 % of 1 424 | 0.49 % | 0 |
+| | Rust | 0.64 % | 6.25 | | 0.40 % | 0 |
+| | ns-3 | 0.74 % | 6.23 | | 0.55 % | 0 |
+| `cells-tail` | SimPy / Rust / ns-3 | 0.70 / 0.62 / 0.70 % | 1.35 / 1.33 / 1.35 | 72 % | 0 | 0 |
+| `frames` | SimPy / Rust / ns-3 | 0.71 / 0.63 / 0.73 % | 1.35 / 1.34 / 1.34 | 72 % | 0.81 / 0.56 / 0.72 % | 0 |
+| **the testbed** | | **0.55–0.66 %** | **6.4–6.7** | **none** | **0.44 %** | **0** |
+
+- **Only cells with a resume level give the runs:** about 6 frames, almost never one, as on the hardware. Tail drop, in cells or frames, gives runs of 1.35 with 72 % single frames, as M/D/1/K predicts.
+- **The Pi's small responses are lost in the runs:** 0.40 to 0.55 % of its polls, against 0.44 %. With tail drop in cells they always fit and are never lost, and with frames they are lost at the UDP rate.
+- **The UDP loss is 0.64 to 0.74 %,** a little above the hardware's 0.55 to 0.66 %.
+
+**The batch case.** Poisson groups of 8 back-to-back 1 518 B frames at 7 500 frames/s, with the same polls. The ratio is the Pi's polls affected over its UDP loss:
+
+| Model | SimPy | Rust | ns-3 | The testbed |
+|---|---|---|---|---|
+| `cells` | 0.65 | 0.56 | 0.63 | **0.55** |
+| `cells-tail` | 0 | 0 | 0 | |
+| `frames` | 0.37 | 0.29 | 0.32 | |
+
+**The burst test.** The Pi sent N frames back to back, at its measured send rate or the 1 Gb/s line rate if that was lower. The model sends the same and counts the frames received. Measured against the 57 bursts of the testbed's CSVs:
+- **Bursts that do not fill the port** give exactly the measured count in cells, with or without a resume level: every burst of 40 and 60 full frames, of 100 and 200 frames of 512 B, and of 64 B frames up to 2 000. `frames` already drops some of the 512 B and 64 B ones.
+- **`frames` holds 60 frames of any size,** so it receives 105 to 220 of the 512 B bursts where the hardware received 240 to 355, and about 650 too few of the 64 B ones.
+- **`cells` holds what the hardware held, a little less:** received less what drained, 56–60 full frames against 60–65, 170–185 of 512 B against 181–196, and 672–732 of 64 B against 716–776. The resume level costs up to 72 cells at the end of a burst that ends in a drop state.
+
+**Calibration.** 740 and 668 are first estimates, and 668 came from a fit to the run lengths. A limit of 770 cells resuming at 698, the same gap, fits the burst tests better: the mean error of the received count goes from −4, −9 and −21 frames at 1 518, 512 and 64 B to −0.5, −1.7 and −3.4. On SimPy it lowers the UDP loss to 0.69 %, with the same runs (6.28) and Pi's polls (0.53 %). It is reported here, not put into the scenario.
+
+The results are in `benchmarks/results/2026-11-24-1006-simpy-rust-ns3-jaws-zbook-buffer-cells.json`. `python -m benchmarks cells-summary <file>` prints their tables, every burst included.
+
