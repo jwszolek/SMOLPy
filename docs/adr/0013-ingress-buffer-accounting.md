@@ -322,7 +322,7 @@ The switch is SMOL's own (`SmolDevice`, `SmolSwitch`), not ns-3's queues:
     - **with `ingress_buffer=60frames`,** the Waveshare loses none of its polls, on every engine and at every load, as on the hardware. With `buffer=91080` it loses 0.54 to 0.58 % at ρ = 0.997;
     - **at ρ = 0.997, on ns-3,** 0.62 % of the Pi's polls are retransmitted, against 0.44 % on the hardware, and 0.74 % of the Pi's frames are dropped, against 0.66 % of its UDP frames;
     - **every lost response comes back after the RTO,** 210 to 217 ms, and one lost twice after 636 ms.
-- **The `smolpy-engine-rs` floor is `>=1.12.0`.** No development build of the next release exists yet, so a floor of `1.12.1.dev0` cannot be locked. 1.12.0 refuses a scenario with these limits by its capabilities. Raise the floor to the next release when it is published.
+- **The `smolpy-engine-rs` floor.** It was `>=1.12.0` while no build of the engine with this ADR existed to lock; 1.12.0 refuses a scenario with these limits by its capabilities. Since 1.13.0, the release with this ADR, it is `>=1.13.0`.
 
 ### Steps
 
