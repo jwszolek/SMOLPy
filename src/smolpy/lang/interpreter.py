@@ -129,6 +129,7 @@ class _Interpreter:
                         pool=d.pool,
                         ingress_reserve=d.ingress_reserve,
                         ingress_drain=d.ingress_drain,
+                        ingress_drop=d.ingress_drop,  # type: ignore[arg-type]
                     )
                 elif isinstance(d, smol_ast.MqttBrokerDecl):
                     net.mqtt_broker(d.name, ip=d.ip)

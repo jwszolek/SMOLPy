@@ -39,7 +39,7 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>] [pool=<limit>] [ingress_reserve=<limit>] [ingress_drain=<limit>]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>] [pool=<limit>] [ingress_reserve=<limit>] [ingress_drain=<limit>] [ingress_drop=port|switch]
 ```
 
 `mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
@@ -66,6 +66,7 @@ switch sw ports=8 ingress_buffer=60frames
 switch sw ports=8 buffer=115kB ingress_buffer=60frames
 switch sw ports=8 cell=128 ingress_buffer=740cells ingress_resume=668cells
 switch sw ports=8 cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells
+switch sw ports=8 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch
 ```
 
 **A shared pool** ([ADR-0015](adr/0015-shared-pool-and-drain-resume.md)):
@@ -78,6 +79,12 @@ switch sw ports=8 cell=128 pool=716cells ingress_reserve=54cells ingress_drain=7
     - `ingress_drain` needs `pool` or `ingress_buffer`;
     - `ingress_drain` and `ingress_resume` exclude each other;
     - `ingress_buffer`, if set, still caps each port.
+
+**One drop state for the whole switch** ([ADR-0016](adr/0016-switch-wide-drop-state.md)). `ingress_drop` is the scope of the ingress drop state:
+- **`port`,** the default: each ingress port has its own, as above.
+- **`switch`:** one for the switch. Any port's refusal starts it. In it, a frame is admitted only if it fits in its own port's `ingress_reserve`, so a light port keeps its frames while the others lose theirs. It ends once the switch has freed `ingress_drain`.
+- **Rules:** `switch` needs `ingress_drain`, and so excludes `ingress_resume`. With one sender `switch` gives the same results as `port`.
+- **Metrics.** With `switch`, `ingress_drop_episodes_total` counts the switch's entries into its drop state, and `ingress_drop_time_total` its time in it.
 
 ### `mqtt_broker` — MQTT message broker
 

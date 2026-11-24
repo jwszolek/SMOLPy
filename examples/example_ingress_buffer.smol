@@ -1,7 +1,9 @@
-# The calibrated LS108GP (ADR-0013 to ADR-0015): one packet memory shared by
-# its ports, a reserve for each, and a drop state that ends once the switch
-# has freed some of it. The port that congests the switch loses its frames,
-# in runs, and another port's frames to the same place do not.
+# The calibrated LS108GP (ADR-0013 to ADR-0016): one packet memory shared by
+# its ports, a reserve for each, and one drop state for the whole switch that
+# ends once the switch has freed some of it. The port that congests the switch
+# loses its frames, in runs, and another port's frames to the same place do
+# not: in the drop state a frame is still admitted if it fits in its port's
+# reserve.
 #
 # The testbed of ADR-0011 to ADR-0013, as measured: a TP-Link LS108GP. A
 # Raspberry Pi on a 1 Gb/s port sends Poisson UDP traffic of 1518 B frames to
@@ -13,18 +15,21 @@
 #
 # The switch stores frames in cells of 128 B, a frame taking ceil(bytes / 128)
 # of them: 12 for a UDP frame, 1 for a Modbus response. Each port has a
-# reserve of 54 cells, and beyond it the ports share a pool of 716. When a
-# frame finds no room, its port drops every frame arriving on it until the
-# switch has freed 72 cells, 6 full frames: so the Pi's UDP frames are lost in
-# runs of about 6, and its small responses with them, while the Waveshare's
-# few frames always fit in its reserve. The three values were fitted on burst
-# tests, a reserve test and loss runs, and then predicted two Pis sending at
-# once, a 10 Mb/s port, and 512 B and mixed frames (docs/backends.md). On the hardware 0.44 % of the Pi's
+# reserve of 60 cells, and beyond it the ports share a pool of 710. When a
+# frame finds no room, the switch drops every frame that does not fit in its
+# port's reserve until it has freed 72 cells, 6 full frames: so the Pi's UDP
+# frames are lost in runs of about 6, and its small responses with them, while
+# the Waveshare's few frames always fit in its reserve. With two senders both
+# lose their frames in the same drop states, as the hardware does. The three
+# values were fitted on burst tests, a reserve test and loss runs, and then
+# predicted two Pis sending at once at 10 and 100 Mb/s, a 10 Mb/s port, and
+# 512 B and mixed frames (docs/backends.md). On the hardware 0.44 % of the Pi's
 # polls were retransmitted, none of the Waveshare's, 0.55-0.66 % of the UDP
 # frames were lost, in runs of 6.4-6.7 and never alone.
 #
-# With one sender this is ADR-0014's ingress_buffer=770cells with a resume
-# level 72 cells lower. ADR-0013's ingress_buffer=60frames gives the same
+# With one sender this is ADR-0015's drop state per port, the same results to
+# the frame, and ADR-0014's ingress_buffer=770cells with a resume level 72
+# cells lower. ADR-0013's ingress_buffer=60frames gives the same
 # numbers for 1518 B frames, but holds 60 frames of any size: three times too
 # few 512 B frames, and twelve times too few 64 B ones.
 #
@@ -39,7 +44,8 @@
 
 network "ingress" {
 
-    switch       sw        ports=3 cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells
+    switch       sw        ports=3 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch
+    # ADR-0015: switch sw ports=3 cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells
     # ADR-0014: switch sw ports=3 cell=128 ingress_buffer=740cells ingress_resume=668cells
     # ADR-0013: switch sw ports=3 ingress_buffer=60frames
     modbus_slave pi        ip=10.0.0.1 unit_id=1

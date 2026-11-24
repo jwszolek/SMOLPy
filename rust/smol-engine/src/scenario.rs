@@ -49,6 +49,9 @@ pub enum NodeKind {
         pool: Option<Limit>,
         reserve: Option<u64>,
         drain: Option<u64>,
+        /// one drop state for the whole switch, `ingress_drop: "switch"`
+        /// (ADR-0016)
+        switch_drop: bool,
     },
 }
 
@@ -302,6 +305,8 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         // ADR-0015
         "buffer_pool",
         "drain_resume",
+        // ADR-0016
+        "switch_drop_state",
     ],
     notes: &[],
 };
@@ -568,6 +573,16 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
             let ingress_resume = take("ingress_buffer_resume", true)?;
             let reserve = take("ingress_reserve", false)?;
             let drain = take("ingress_drain", false)?;
+            let scope = f
+                .take_or("ingress_drop")
+                .map(|v| v.as_str().unwrap_or("?").to_string());
+            let switch_drop = match scope.as_deref() {
+                None | Some("port") => false,
+                Some("switch") => true,
+                Some(other) => {
+                    return Err(format!("switch {name}: unknown ingress_drop {other:?}"))
+                }
+            };
             let cells = |l: Option<Limit>| matches!(l, Some(Limit::Cells(_)));
             if (cells(buffer) || cells(ingress) || cells(pool)) != cell.is_some() {
                 return Err(format!(
@@ -603,6 +618,11 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                     "switch {name}: ingress_drain needs pool or ingress_buffer, alone"
                 ));
             }
+            if switch_drop && drain.is_none() {
+                return Err(format!(
+                    "switch {name}: ingress_drop=switch needs ingress_drain"
+                ));
+            }
             NodeKind::Switch {
                 fifo,
                 topology,
@@ -614,6 +634,7 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 pool,
                 reserve,
                 drain,
+                switch_drop,
             }
         }
         "modbus_slave" => {

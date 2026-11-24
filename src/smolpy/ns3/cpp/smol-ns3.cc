@@ -4,13 +4,14 @@
 // scenario that smolpy.ns3 has lowered to plain lines of integers, with every
 // time already in integer nanoseconds (Model Semantics §1):
 //
-//     smol-ns3 6
+//     smol-ns3 7
 //     duration <ns>
 //     tcp <min RTO ns> <clock granularity ns> <delayed ACK ns> <SYN RTO ns>
 //     adapter <mac> <ipv4>                   nodes, numbered from 0 in order
-//     switch <cell B> <egress limit> <unit> <egress resume> <ingress limit> <unit> <ingress resume> <pool> <reserve> <drain>
+//     switch <cell B> <egress limit> <unit> <egress resume> <ingress limit> <unit> <ingress resume> <pool> <reserve> <drain> <scope>
 //            b: bytes, f: frames, c: cells; 0: no limit, -1: no resume; the pool, reserve and
-//            drain in the ingress unit, 0 for none
+//            drain in the ingress unit, 0 for none; the scope of the ingress drop state,
+//            0: each port's, 1: the switch's
 //     link <a> <b> <speed num> <speed den> <propagation ns> <gap ns> <strict a> <strict b>
 //     static <switch> <mac> <port>          a switch's MAC table at the start
 //     flow <src> <dst ipv4> <udp payload> <priority> <delay ns> <period num> <period den>
@@ -68,7 +69,9 @@
 //   account drops every frame until a release brings it to that level
 //   (ADR-0014). A pool is shared by the ingress ports beyond their reserves,
 //   and a drain ends a port's drop state once the switch has freed that much
-//   (ADR-0015).
+//   (ADR-0015). With scope 1 the drop state is the switch's: any ingress
+//   refusal enters it, in it a frame is admitted only within its port's
+//   reserve, and the drain ends it (ADR-0016).
 // - Neighbour caches start full: SMOL models no ARP.
 
 #include "ns3/core-module.h"
@@ -950,6 +953,24 @@ class SmolSwitch
         Account& a = ingress[in];
         uint64_t u = a.Unit(bytes);
         bool fits = a.Fits(bytes) && (pool.limit == 0 || pool.Fits(a.held, u));
+        if (switchDrop)
+        {
+            // the switch's drop state (ADR-0016): in it, only within the
+            // port's reserve; outside it, a refusal enters it
+            if (state.dropping)
+            {
+                return a.held + u <= pool.reserve;
+            }
+            if (fits)
+            {
+                return true;
+            }
+            ++state.episodes;
+            state.dropping = true;
+            state.since = Simulator::Now().GetNanoSeconds();
+            state.drainStart = freed;
+            return false;
+        }
         bool was = a.dropping;
         bool ok = a.Decide(fits, freed);
         if (!was && a.dropping && a.drain >= 0)
@@ -995,6 +1016,11 @@ class SmolSwitch
                 ++it;
             }
         }
+        if (switchDrop && state.dropping &&
+            freed - state.drainStart >= static_cast<uint64_t>(state.drain))
+        {
+            state.Leave();
+        }
         if (a.dropping && a.resume >= 0 && a.held <= static_cast<uint64_t>(a.resume))
         {
             a.Leave();
@@ -1004,6 +1030,8 @@ class SmolSwitch
     Pool pool;
     uint64_t freed = 0;            // units freed, in the ingress unit (ADR-0015)
     std::vector<uint32_t> draining; // ports whose drop state a drain ends
+    bool switchDrop = false;        // one drop state for the switch (ADR-0016)
+    Account state;                  // it, with its drain, entries and time
 
     uint64_t QueueDepth() const
     {
@@ -1031,7 +1059,11 @@ class SmolSwitch
     {
         uint64_t n = 0;
         auto add = [&](const Account& a) { n += time ? a.DropTime() : a.episodes; };
-        if (ingressAccounts)
+        if (ingressAccounts && switchDrop)
+        {
+            add(state); // the switch's entries and time (ADR-0016)
+        }
+        else if (ingressAccounts)
         {
             for (const Account& a : ingress)
             {
@@ -1780,9 +1812,9 @@ Run(std::istream& in, std::ostream& out)
 
     std::string word;
     uint32_t version = 0;
-    if (!(in >> word >> version) || word != "smol-ns3" || version != 6)
+    if (!(in >> word >> version) || word != "smol-ns3" || version != 7)
     {
-        Fail("not a smol-ns3 version 6 scenario");
+        Fail("not a smol-ns3 version 7 scenario");
     }
 
     uint64_t durationNs = 0;
@@ -1850,10 +1882,17 @@ Run(std::istream& in, std::ostream& out)
                 std::string egressUnit;
                 std::string ingressUnit;
                 int64_t drain;
+                int scope;
                 s >> cell >> sw.egress.limit >> egressUnit >> sw.egress.resume >>
                     sw.ingressLimit.limit >> ingressUnit >> sw.ingressLimit.resume >>
-                    sw.pool.limit >> sw.pool.reserve >> drain;
-                sw.ingressLimit.drain = drain > 0 ? drain : -1;
+                    sw.pool.limit >> sw.pool.reserve >> drain >> scope;
+                if (scope != 0 && (scope != 1 || drain <= 0))
+                {
+                    Fail("bad switch: " + line);
+                }
+                sw.switchDrop = scope == 1;
+                sw.state.drain = drain > 0 ? drain : -1;
+                sw.ingressLimit.drain = drain > 0 && !sw.switchDrop ? drain : -1;
                 auto unit = [&](const std::string& u) {
                     if (u != "b" && u != "f" && u != "c")
                     {

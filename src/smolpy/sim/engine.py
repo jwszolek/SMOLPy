@@ -278,6 +278,9 @@ class _Account:
     def admit(self, size: int) -> bool:
         """Decide a frame: False if it is dropped, by tail drop or the drop
         state; a refusal that follows an admission starts an episode."""
+        state = None if self.switch is None else self.switch.state
+        if state is not None:
+            return self._admit_in_switch(size, state)
         if self.fits(size) and not self.dropping:
             self.refused = False
             return True
@@ -286,14 +289,30 @@ class _Account:
             self.episodes += 1
         if not self.dropping:
             if self.drain is not None:
-                self.dropping = True
-                self.since = self.env._now
-                self.drain_start = self.switch.freed  # type: ignore[union-attr]
-                self.switch.draining.append(self)  # type: ignore[union-attr]
+                self.enter()
             elif self.resume is not None and self.held > self.resume:
                 self.dropping = True
                 self.since = self.env._now
         return False
+
+    def _admit_in_switch(self, size: int, state: _Account) -> bool:
+        """Decide a frame with a drop state for the whole switch (ADR-0016):
+        in the state, only a frame that fits in its port's reserve; outside
+        it, by the cap, the reserve and the pool, a refusal entering it."""
+        if state.dropping:
+            return self.held + self.units(size) <= self.switch.reserve  # type: ignore[union-attr]
+        if self.fits(size):
+            return True
+        state.episodes += 1
+        state.enter()
+        return False
+
+    def enter(self) -> None:
+        """Enter a drop state ended by a drain (ADR-0015)."""
+        self.dropping = True
+        self.since = self.env._now
+        self.drain_start = self.switch.freed  # type: ignore[union-attr]
+        self.switch.draining.append(self)  # type: ignore[union-attr]
 
     def charge(self, size: int) -> None:
         u = self.units(size)
@@ -914,14 +933,18 @@ class _Pool:
 class _Ingress:
     """A switch's ingress accounts, by port, the frames they dropped, and
     with a pool, the pool, what the switch has freed so far and the ports
-    whose drop state a drain ends (ADR-0013, ADR-0015)."""
+    whose drop state a drain ends (ADR-0013, ADR-0015). With a drop state
+    for the whole switch, *state* holds it: its drop state, entries and time,
+    with no limit of its own (ADR-0016)."""
 
     def __init__(self, accounts: dict[int, _Account], pool: _Pool | None = None) -> None:
         self.accounts = accounts
         self.dropped = 0
         self.pool = pool
+        self.reserve = 0 if pool is None else pool.reserve
         self.freed = 0  # units freed by releases, in the ingress scope's unit
         self.draining: list[_Account] = []  # in their drop state, with a drain
+        self.state: _Account | None = None
 
     def free(self, u: int) -> None:
         """A release of *u*: every drained drop state ends at the release at
@@ -1041,7 +1064,12 @@ def _episodes(
     """A switch's drop episodes, or its accounts' time in the drop state in
     ns, by its ingress or its egress accounts (ADR-0014)."""
     if metric.startswith("ingress_"):
-        accounts = [] if ingress is None else list(ingress.accounts.values())
+        if ingress is None:
+            accounts = []
+        elif ingress.state is not None:
+            accounts = [ingress.state]  # the switch's entries and time (ADR-0016)
+        else:
+            accounts = list(ingress.accounts.values())
     else:
         accounts = [ch.egress for ch in ports if ch.egress is not None]
     if metric.endswith("_episodes_total"):
@@ -1223,7 +1251,8 @@ def run_simulation(
             node.cell_bytes,
             node.ingress_buffer_resume,
             ingress_of[node.name],
-            node.ingress_drain,
+            # with a switch-wide drop state the ports have none of their own
+            None if node.ingress_drop == "switch" else node.ingress_drain,
         )
 
     def _egress(node: model.NodeSpec) -> _Account | None:
@@ -1236,6 +1265,14 @@ def run_simulation(
             pool = node.pool_limit
             shared = None if pool is None else _Pool(pool[0], node.ingress_reserve or 0)
             ingress[name] = _Ingress({}, shared)
+            if node.ingress_drop == "switch":
+                ingress[name].state = _Account(
+                    None,
+                    node.ingress_unit,  # type: ignore[arg-type]
+                    env,
+                    switch=ingress[name],
+                    drain=node.ingress_drain,
+                )
     ingress_of = ingress
 
     # Build directed link channels from topology

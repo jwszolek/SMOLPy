@@ -281,9 +281,27 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
 **Why.** Two senders to one port lost twice as many frames as ADR-0014 predicted, in runs half as long. The delay stayed capped as by one shared limit, and the Waveshare still lost nothing.
 
 **Still open:**
-- **Why two ports' drop states never overlap on the hardware.** In the model nearly half do.
+- ~~**Why two ports' drop states never overlap on the hardware.**~~ They do: the hardware's "0 of 2 072" was an analysis error, two unaligned sender clocks. Resolved by [ADR-0016](adr/0016-switch-wide-drop-state.md).
 - **The pool's scope:** switch-wide or per egress port. A run with two congested egress ports would tell.
 - **Per-port metrics,** dynamic thresholds, and a drain for egress accounts.
+
+## A drop state for the whole switch ([ADR-0016](adr/0016-switch-wide-drop-state.md))
+
+**Status: done.** With `ingress_drop=switch` a switch has one drop state: any port's refusal enters it, in it a frame is admitted only within its port's reserve, and ADR-0015's drain ends it. On all three backends.
+
+1. **The scenario: done.** `ingress_drop`, `port` or `switch`, validated. One optional IR field, so the IR stays version 2.
+2. **SimPy: done.** The switch's state, its metrics, the one-sender identity with ADR-0015, and two senders' losses per episode given its duration.
+3. **Rust: done.** Bit for bit with SimPy, event counts included.
+4. **ns-3: done.** Ethernet and PROFINET bit for bit with SimPy. `smol-ns3` format 7.
+5. **The testbed: done.** The reserve refitted, 710 / 60 / 72 cells, then validated on two Pis at 10 and 100 Mb/s: 96–97 % of runs overlap, as measured on one clock ([Execution backends](backends.md#a-drop-state-for-the-whole-switch-the-ls108gp-refitted-and-validated)).
+
+**Why.** Measured on the laptop's one clock, two Pis' loss runs almost always come together, and each is about half a single sender's. A drop state per port overlaps half as often, with runs too long and rarely single.
+
+**Still open:**
+- **The pool's scope:** switch-wide or per egress port, with two congested egress ports.
+- **The two-sender loss gap:** the model loses 3–22 % less than the hardware with two senders, whatever the scope.
+- **Per-port metrics,** so that a port's runs need no audit.
+- **Dynamic thresholds.**
 
 ## Candidates (not yet scheduled)
 

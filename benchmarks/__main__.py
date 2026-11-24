@@ -17,6 +17,8 @@ python -m benchmarks cells [--duration 30000] [--backend simpy rust ns3]
 python -m benchmarks cells-summary benchmarks/results/<file>.json
 python -m benchmarks pool [--duration 60000] [--backend simpy rust ns3]
 python -m benchmarks pool-summary benchmarks/results/<file>.json
+python -m benchmarks switch-drop [--duration 60000] [--backend simpy rust ns3]
+python -m benchmarks switch-drop-summary benchmarks/results/<file>.json
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from benchmarks import cells, closed_loop, ingress, loss, pool
+from benchmarks import cells, closed_loop, ingress, loss, pool, switch_drop
 from benchmarks.load import DURATION_MS, LOADS, run_load, summarize_load
 from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
@@ -162,6 +164,20 @@ def main() -> None:
     po_summ = sub.add_parser("pool-summary", help="markdown tables of a pool results file")
     po_summ.add_argument("file", type=Path)
 
+    sd = sub.add_parser(
+        "switch-drop", help="ADR-0016: refit the reserve under a switch-wide drop state, validate"
+    )
+    sd.add_argument("--duration", type=float, default=60_000, help="simulated ms per run")
+    sd.add_argument("--backend", nargs="+", default=list(switch_drop.ENGINES))
+    sd.add_argument("--label", default="switch-drop-state")
+    sd.add_argument("--out", type=Path, default=None)
+    sd.add_argument(
+        "--calibration", type=Path, default=None, help="reuse an earlier file's calibration"
+    )
+
+    sd_summ = sub.add_parser("switch-drop-summary", help="markdown tables of a switch-drop file")
+    sd_summ.add_argument("file", type=Path)
+
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
@@ -210,6 +226,14 @@ def main() -> None:
         print(pool.summarize_pool(out))
     elif a.cmd == "pool-summary":
         print(pool.summarize_pool(a.file))
+    elif a.cmd == "switch-drop":
+        out = switch_drop.run_switch_drop(
+            a.duration, a.backend, a.label, a.out, calibration=a.calibration
+        )
+        print(f"results written to {out}")
+        print(switch_drop.summarize(out))
+    elif a.cmd == "switch-drop-summary":
+        print(switch_drop.summarize(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
         r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)

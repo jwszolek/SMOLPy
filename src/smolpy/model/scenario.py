@@ -48,6 +48,8 @@ _OMITTED_WHEN_UNSET = {
     "pool_cells",
     "ingress_reserve",
     "ingress_drain",
+    # ADR-0016: the scope of the ingress drop state
+    "ingress_drop",
     "outstanding",
     "timeout_ms",
 }
@@ -55,6 +57,7 @@ _OMITTED_WHEN_UNSET = {
 SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
 MacTableMode = Literal["learning", "topology"]
+DropScope = Literal["port", "switch"]
 TrafficPattern = Literal["constant", "poisson", "bursty", "batch"]
 FrameSize = int | Literal["imix"]
 
@@ -88,7 +91,9 @@ class SwitchNode:
     A *pool* is shared by the ingress ports, for what each holds beyond its
     *ingress_reserve*; with *ingress_drain*, a port's drop state ends once
     the switch has freed that much since it began (ADR-0015). All of the
-    ingress scope is in one unit."""
+    ingress scope is in one unit. With *ingress_drop* ``"switch"`` the drop
+    state belongs to the whole switch, and in it a frame is admitted only
+    within its port's reserve (ADR-0016); ``None`` is ``"port"``."""
 
     kind: ClassVar[str] = "switch"
     name: str
@@ -110,6 +115,7 @@ class SwitchNode:
     pool_cells: int | None = None
     ingress_reserve: int | None = None
     ingress_drain: int | None = None
+    ingress_drop: DropScope | None = None
 
     @property
     def bounded(self) -> bool:

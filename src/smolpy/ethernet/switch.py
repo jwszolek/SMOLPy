@@ -10,6 +10,7 @@ from smolpy.model.validate import ScenarioError, check_node
 SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
 MacTableMode = Literal["learning", "topology"]
+DropScope = Literal["port", "switch"]
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,11 @@ class Switch(Node):
     its ingress_reserve; ingress_drain ends a port's drop state once the
     switch has freed that much (ADR-0015). They share the ingress scope's
     unit with ingress_buffer.
+
+    ingress_drop="switch" gives the switch one drop state, entered at any
+    ingress refusal and ended by ingress_drain; in it a frame is admitted
+    only if it fits in its port's ingress_reserve (ADR-0016). None, the
+    default, is "port": a drop state per ingress port.
     """
 
     def __init__(
@@ -103,6 +109,7 @@ class Switch(Node):
         pool: Limit | None = None,
         ingress_reserve: Limit | None = None,
         ingress_drain: Limit | None = None,
+        ingress_drop: DropScope | None = None,
     ) -> None:
         super().__init__(name)
         self.ports = ports
@@ -117,6 +124,7 @@ class Switch(Node):
         self.pool = pool
         self.ingress_reserve = ingress_reserve
         self.ingress_drain = ingress_drain
+        self.ingress_drop = ingress_drop
         check_node(self.to_spec())
 
     def to_spec(self) -> SwitchNode:
@@ -144,4 +152,5 @@ class Switch(Node):
             pool_cells,
             _resume(self.name, "ingress_reserve", scope, self.ingress_reserve),
             _resume(self.name, "ingress_drain", scope, self.ingress_drain),
+            self.ingress_drop,
         )
