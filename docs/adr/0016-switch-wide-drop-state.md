@@ -380,7 +380,7 @@ ADR-0015's split between calibration and validation holds.
     - **at 100 Mb/s it does not:** 0.38 % against 0.45 %, with 0.53 % measured. That is within the seeds' spread, 0.30–0.58 %, and Rust and ns-3 give 0.30–0.50 % and 0.40–0.56 %.
 - **The two-sender loss gap stays.** The scope does not change the loss per stream. The model is below the hardware by 22 % at 2 × 405 (0.62 % against 0.79 %), 3 % at 2 × 425, 9 % at 2 × 4 050, and about 37 % at 2 × 3 900 from about 30 runs a seed. With one Pi at the same load, the hardware lost 0.60 % and the model 0.68 %.
 - **The measure of polls.** A poll still in flight at the end of a run is not retransmitted. The benchmark counts a model's poll as retransmitted by its round trip of 200 ms or more, or by its timeout, not as unanswered: at 10 Mb/s a request is nearly always in flight when the run ends.
-- **The `smolpy-engine-rs` floor** is raised to the release that carries this ADR, once it is published.
+- **The `smolpy-engine-rs` floor** is `>=1.16.0`, the release that carries this ADR. 1.15 refuses `ingress_drop` by its capabilities.
 
 ### Steps
 
