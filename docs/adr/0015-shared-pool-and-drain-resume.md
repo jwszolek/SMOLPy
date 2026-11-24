@@ -341,7 +341,7 @@ The parameters are fitted on one set of measurements and then checked, without r
     - **10 Mb/s, 512 B, mixed sizes and the batch ratio,** each as measured.
     - **The response-loss gap** of ADR-0014 is mostly a denominator: per poll sent the hardware retransmitted 0.49 %, and the model gives 0.44–0.62 %.
 - **Not reproduced: the overlap of drop states.** On the hardware no Pi's drop state overlaps the other's (0 of 2 072). In the model, 1 092 of 2 461 do: a port refused while the pool is full is often refused again while the other drains it. So the model's two-sender runs are a little long, 3.8 against 3.3, and rarely single, 7 % against 13 %. Some mechanism keeps the other ports admitting while one port is in its drop state. It is the first open item.
-- **The `smolpy-engine-rs` floor** stays `>=1.14.0` until the release that carries this ADR. Raise it to that release, never to a pre-release.
+- **The `smolpy-engine-rs` floor** is `>=1.15.0`, the release that carries this ADR. 1.14 refuses these scenarios by its capabilities.
 
 ### Steps
 
