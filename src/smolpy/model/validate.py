@@ -125,6 +125,7 @@ STATION_METRIC_FEATURES = {
 SWITCH_MODES = ("store-and-forward", "cut-through")
 SWITCH_QOS = ("strict", "fifo")
 MAC_TABLES = ("learning", "topology")
+DROP_SCOPES = ("port", "switch")
 PATTERNS = ("constant", "poisson", "bursty", "batch")
 MQTT_QOS = (0, 1)  # QoS 2 is not modelled
 MODBUS_MAX_REGISTERS = 125  # Read Holding Registers limit
@@ -295,6 +296,14 @@ def _check_pool(node: SwitchNode) -> None:
         if node.ingress_buffer_resume is not None:
             raise _fail(
                 node, "ingress_drain and ingress_resume both end a drop state; give one of them"
+            )
+    if node.ingress_drop is not None:
+        _one_of(node, "ingress_drop", node.ingress_drop, DROP_SCOPES)
+        if node.ingress_drop == "switch" and node.ingress_drain is None:
+            raise _fail(
+                node,
+                "ingress_drop=switch needs ingress_drain: a switch-wide drop state ends"
+                " once the switch has freed that much",
             )
 
 

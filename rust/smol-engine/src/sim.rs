@@ -483,6 +483,9 @@ struct Switch {
     /// drop state a drain ends, in the order they entered it (ADR-0015)
     freed: u64,
     draining: Vec<usize>,
+    /// the switch's own drop state, ended by its drain, with its entries
+    /// and time, if it has one for every port (`_Ingress.state`, ADR-0016)
+    state: Option<Account>,
 }
 
 impl Switch {
@@ -491,6 +494,21 @@ impl Switch {
         let acc = &self.ingress[port];
         let u = acc.units(size);
         let fits = acc.fits(size) && self.pool.as_ref().is_none_or(|p| p.fits(acc.held, u));
+        if let Some(state) = &mut self.state {
+            // `_Account._admit_in_switch`: in the state, only within the
+            // port's reserve; outside it, a refusal enters it
+            if state.dropping {
+                return acc.held + u <= self.pool.map_or(0, |p| p.reserve);
+            }
+            if fits {
+                return true;
+            }
+            state.episodes += 1;
+            state.dropping = true;
+            state.since = now;
+            state.drain_start = self.freed;
+            return false;
+        }
         let was = acc.dropping;
         let freed = self.freed;
         let acc = &mut self.ingress[port];
@@ -532,6 +550,13 @@ impl Switch {
                 }
                 !done
             });
+        }
+        if let Some(state) = &mut self.state {
+            if state.dropping
+                && self.freed - state.drain_start >= state.drain.expect("a drained state")
+            {
+                state.leave(now);
+            }
         }
         let acc = &mut self.ingress[port];
         if acc.dropping && acc.resume.is_some_and(|r| acc.held <= r) {
@@ -1464,8 +1489,12 @@ impl Engine {
                 (Some(used as f64), 0)
             }
             Sampled::Episodes(chans, w, ingress, time) => {
-                let accounts: Vec<&Account> = if *ingress {
-                    self.switches[*w as usize].ingress.iter().collect()
+                let sw = &self.switches[*w as usize];
+                let accounts: Vec<&Account> = if *ingress && sw.state.is_some() {
+                    // the switch's entries and time (ADR-0016)
+                    sw.state.iter().collect()
+                } else if *ingress {
+                    sw.ingress.iter().collect()
                 } else {
                     chans
                         .iter()
@@ -1672,6 +1701,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     pool: None,
                     freed: 0,
                     draining: Vec::new(),
+                    state: None,
                 });
                 role.push(e.switches.len() - 1);
             }
@@ -1795,6 +1825,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             pool,
             reserve,
             drain,
+            switch_drop,
             ..
         } = node.kind
         {
@@ -1806,8 +1837,15 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 Limit::Cells(_) => Limit::Cells(u64::MAX / 2),
             }));
             if let Some(mut account) = Account::new(cap, cell, ingress_resume) {
-                account.drain = drain;
                 let sw = &mut e.switches[role[i]];
+                if switch_drop {
+                    // the ports have no drop state of their own (ADR-0016)
+                    let mut state = account;
+                    state.drain = drain;
+                    sw.state = Some(state);
+                } else {
+                    account.drain = drain;
+                }
                 sw.ingress = vec![account; sw.out.len()];
                 sw.pool = pool.map(|p| Pool {
                     limit: match p {

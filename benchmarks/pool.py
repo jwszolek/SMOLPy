@@ -103,18 +103,18 @@ def seq_stats(name: str, data: Path = DATA) -> dict[str, float]:
     }
 
 
-def rtt_stats(name: str, data: Path = DATA) -> dict[str, float]:
-    """Polls sent and retransmitted (a round trip over LONG_MS), and the
-    p99 and maximum of the others, in ms."""
+def rtt_stats(name: str, data: Path = DATA, long_ms: float = LONG_MS) -> dict[str, float]:
+    """Polls sent and retransmitted (a round trip of *long_ms* or more), and
+    the p99 and maximum of the others, in ms."""
     with open(data / name, newline="") as f:
         v = [float(r["rtt_us"]) / 1_000 for r in csv.DictReader(f)]
-    short = sorted(x for x in v if x < LONG_MS)
+    short = sorted(x for x in v if x < long_ms)
     q = statistics.quantiles(short, n=100)
-    long = sum(x >= LONG_MS for x in v)
+    long = sum(x >= long_ms for x in v)
     return {"sent": len(v), "affected": long / len(v), "p99": q[98], "max": short[-1]}
 
 
-def hardware(data: Path = DATA) -> dict[str, dict]:
+def hardware(data: Path = DATA, long_ms: float = LONG_MS) -> dict[str, dict]:
     two = "2026-11-24_dwa_rpi/powtorka"
     adr14 = "2026-11-24_prognoza_adr0014"
     out = {
@@ -126,37 +126,41 @@ def hardware(data: Path = DATA) -> dict[str, dict]:
         },
         "two 4050": {
             "udp": [seq_stats(f"{two}/r4050_{p}", data) for p in ("pi1", "pi2")],
-            "pi": [rtt_stats(f"{two}/r4050_{p}.csv", data) for p in ("pi1", "pi2")],
-            "waveshare": rtt_stats(f"{two}/r4050_ws.csv", data),
-            "overlap": "0 of 2 072 episodes (ADR-0015, merged by send time)",
+            "pi": [rtt_stats(f"{two}/r4050_{p}.csv", data, long_ms) for p in ("pi1", "pi2")],
+            "waveshare": rtt_stats(f"{two}/r4050_ws.csv", data, long_ms),
+            # ADR-0015's "0 of 2 072" merged two Pis' unaligned clocks; with
+            # the clocks aligned from the losses the overlap is only bounded,
+            # about 18 % of runs at ±1 ms (ADR-0016)
+            "overlap": "not measurable: no receive times; about 18 % of runs with clocks"
+            " aligned to ±1 ms (ADR-0016)",
         },
         "two 3900": {
             "udp": [seq_stats(f"{two}/r3900_{p}", data) for p in ("pi1", "pi2")],
-            "pi": [rtt_stats(f"{two}/r3900_{p}.csv", data) for p in ("pi1", "pi2")],
-            "waveshare": rtt_stats(f"{two}/r3900_ws.csv", data),
+            "pi": [rtt_stats(f"{two}/r3900_{p}.csv", data, long_ms) for p in ("pi1", "pi2")],
+            "waveshare": rtt_stats(f"{two}/r3900_ws.csv", data, long_ms),
         },
         "10Mb 808": {
             "udp": [seq_stats("2026-11-24_10Mb/r809", data)],
-            "pi": [rtt_stats("2026-11-24_10Mb/r809_pi1.csv", data)],
+            "pi": [rtt_stats("2026-11-24_10Mb/r809_pi1.csv", data, long_ms)],
         },
         "10Mb 846": {
             "udp": [seq_stats("2026-11-24_10Mb/r850", data)],
-            "pi": [rtt_stats("2026-11-24_10Mb/r850_pi1.csv", data)],
+            "pi": [rtt_stats("2026-11-24_10Mb/r850_pi1.csv", data, long_ms)],
         },
         "512 B": {
             "udp": [seq_stats(f"{adr14}/s512", data)],
-            "pi": [rtt_stats(f"{adr14}/s512_rpi.csv", data)],
-            "waveshare": rtt_stats(f"{adr14}/s512_ws.csv", data),
+            "pi": [rtt_stats(f"{adr14}/s512_rpi.csv", data, long_ms)],
+            "waveshare": rtt_stats(f"{adr14}/s512_ws.csv", data, long_ms),
         },
         "mixed": {
             "udp": [seq_stats(f"{adr14}/mix1518", data), seq_stats(f"{adr14}/mix512", data)],
-            "pi": [rtt_stats(f"{adr14}/mix_rpi.csv", data)],
-            "waveshare": rtt_stats(f"{adr14}/mix_ws.csv", data),
+            "pi": [rtt_stats(f"{adr14}/mix_rpi.csv", data, long_ms)],
+            "waveshare": rtt_stats(f"{adr14}/mix_ws.csv", data, long_ms),
         },
         "ingress 8100": {
             "udp_loss": 16_630 / 2_510_616,  # sink.txt
-            "pi": [rtt_stats("2026-11-24_ingress_test/rpi.csv", data)],
-            "waveshare": rtt_stats("2026-11-24_ingress_test/waveshare.csv", data),
+            "pi": [rtt_stats("2026-11-24_ingress_test/rpi.csv", data, long_ms)],
+            "waveshare": rtt_stats("2026-11-24_ingress_test/waveshare.csv", data, long_ms),
         },
         "batch": {"ratio": 0.55},
     }
@@ -420,7 +424,7 @@ def testbed(
     for node, rate, count in servers:
         laptop.polls(node, register=0, count=count, rate=rate, outstanding=1, timeout_ms=1_000)
         net.observe("modbus_latency", on=node, every=1)
-        for m in ("modbus_unanswered", "modbus_skipped"):
+        for m in ("modbus_unanswered", "modbus_skipped", "modbus_timeouts"):
             net.observe(m, on=node, every=end)
     for node in nodes:
         net.observe("frames_sent", on=node, every=end)
@@ -429,12 +433,14 @@ def testbed(
     return net.to_scenario(duration=duration_ms, seed=seed)
 
 
-def _polls(metrics: dict, server: str, poll_rate: float) -> dict:
+def _polls(metrics: dict, server: str, poll_rate: float, long_ms: float = LONG_MS) -> dict:
+    """Polls sent and affected, a round trip of *long_ms* or more or none,
+    and the p99 and maximum of the others, in ms."""
     rtt = [v / 1_000 for _, v in metrics[f"modbus_latency:{server}"]]
-    short = sorted(x for x in rtt if x < LONG_MS)
+    short = sorted(x for x in rtt if x < long_ms)
     at, skipped = metrics[f"modbus_skipped:{server}"][-1]
     sent = cells._instants(at, poll_rate) - skipped
-    affected = sum(x >= LONG_MS for x in rtt) + metrics[f"modbus_unanswered:{server}"][-1][1]
+    affected = sum(x >= long_ms for x in rtt) + metrics[f"modbus_unanswered:{server}"][-1][1]
     q = statistics.quantiles(short, n=100) if len(short) > 1 else [math.nan] * 99
     return {
         "sent": sent,

@@ -289,7 +289,7 @@ A switch can share one pool among its ingress ports, beyond a reserve each, and 
 | Measured: arrived | 5–9 (6.5) | 4–9 (6.5) | 7–12 (9) | 50 | 71–100 (100) | 112–168 (144) | 203–227 (207) |
 | Model, R = 54 | 4–10 (6.5) | 4–10 (6.5) | 4–10 (6.5) | 50 | 56–100 (96) | 68–176 (126) | 181–257 (202) |
 
-**The fitted LS108GP:** `cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells`.
+**The fitted LS108GP:** `cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells`. [ADR-0016](adr/0016-switch-wide-drop-state.md) refits it with one drop state for the switch, [below](#a-drop-state-for-the-whole-switch-the-ls108gp-refitted-and-validated).
 
 **Validation,** with those values. Three seeds per case, 60 s each, or 240 s at 10 Mb/s. Runs and single-frame shares are SimPy's, from an audit of its decisions:
 
@@ -323,9 +323,70 @@ A switch can share one pool among its ingress ports, beyond a reserve each, and 
     - the batch ratio, 0.59–0.63 against 0.55.
 - **The Pi's responses.** In ADR-0013's test the hardware retransmitted 133 of the 27 160 polls it sent, 0.49 %, not 0.44 %: it sent only 27 160 of its 30 000 poll instants. Counted the same way, the model's 0.44–0.62 % is within its engines' spread, so the residual gap of ADR-0014 is mostly this difference of denominators. The pool and the reserve do not change it.
 - **What the model does not get:**
-    - **The two Pis' drop states overlap in the model, and never on the hardware.** In SimPy 1 092 of 2 461 drop states of one Pi overlap one of the other's; on the hardware 0 of 2 072, merged by send time. A port refused while the pool is full is refused again while the other port drains the pool, so its runs are a little long (3.8 against 3.3) and rarely single (7 % against 13 %). The hardware seems to keep the other ports admitting while one is in its drop state. Finding how is the next step.
+    - **The two Pis' runs are a little long, 3.8 against 3.3, and rarely single, 7 % against 13 %.** In SimPy 1 092 of 2 461 drop states of one Pi overlap one of the other's. The hardware's "0 of 2 072" that ADR-0015 set against it was an analysis error: the episodes were merged by two unaligned sender clocks. Measured on one clock, 96–97 % of the two Pis' runs overlap, and one drop state for the whole switch reproduces that ([below](#a-drop-state-for-the-whole-switch-the-ls108gp-refitted-and-validated), [ADR-0016](adr/0016-switch-wide-drop-state.md)).
     - **The round trips are a little shorter,** 8.2 / 8.5 ms against 8.5 / 9.3 ms. The model has no host processing time on either end.
     - **At 2 × 3 900/s the model loses about 60 % of the hardware's frames,** 0.021–0.024 % against 0.036–0.039 %, from only about 30 runs per seed.
 
 The results are in `benchmarks/results/2026-11-24-1538-simpy-rust-ns3-jaws-zbook-shared-pool.json`. `python -m benchmarks pool-summary <file>` prints the calibration and validation tables.
+
+### A drop state for the whole switch: the LS108GP refitted and validated
+
+With `ingress_drop=switch` a switch has one drop state, entered at any port's refusal and ended by ADR-0015's drain, and in it a frame is admitted only within its port's reserve ([ADR-0016](adr/0016-switch-wide-drop-state.md)). The engines apply the same rules:
+- **Rust** gives SimPy's results bit for bit, event counts included.
+- **ns-3** does too for Ethernet and PROFINET.
+- **With one sender** it is ADR-0015's per-port state, exactly.
+
+**Two Pis measured on one clock.** The laptop's port is FIFO, so the order in which the laptop receives frames is the order in which the switch admitted them. A second measurement at 10 Mb/s records the laptop's kernel receive times of both streams (`.seq.r`). A run's interval goes from the stream's last frame before it to its first frame after it, by those times on the hardware and by admission times in the model. A run overlaps if its interval meets one of the other stream's.
+
+`python -m benchmarks switch-drop` refits the reserve, then predicts without refitting. It computes the hardware's numbers from the raw files, and counts a poll as retransmitted at a round trip of 200 ms, the TCP RTO: at 10 Mb/s a round trip with no retransmission reaches 170 ms.
+
+**The refit.** With one sender nothing changes, so ADR-0015's L = P + R = 770 and D = 72 stand: every burst and the loss runs are the same under both scopes. R is refitted on the reserve test, with the pace of Pi 2's 64 B bursts beside it:
+
+| R (cells) | 0 | 12 | 24 | 36 | 48 | 54 | **60** | 66 | 72 | 84 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Error | 33.3 | 5.4 | 2.1 | 1.2 | 0.57 | 0.45 | **0.25** | 0.36 | 0.52 | 0.92 |
+
+| Pi 2's burst | 10 × 1 518 B | 20 × 1 518 B | 40 × 1 518 B | 50 × 64 B | 100 × 64 B | 200 × 64 B | 400 × 64 B |
+|---|---|---|---|---|---|---|---|
+| Measured: arrived | 5–9 (6.5) | 4–9 (6.5) | 7–12 (9) | 50 | 71–100 (100) | 112–168 (144) | 203–227 (207) |
+| Model, R = 60 | 5–10 (7.5) | 5–10 (7.5) | 5–10 (7.5) | 50 | 62–100 (89.5) | 114–132 (126) | 182–242 (209) |
+
+**The refitted LS108GP:** `cell=128 pool=710cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch`. R is determined to about ±12 cells, and the reserve is needed: R = 0 does not fit.
+
+**Validation,** three seeds per case, at the hardware's durations at 10 Mb/s, 900 s and 300 s. Runs and overlaps are SimPy's, from an audit of its decisions. The last column is ADR-0015's per-port state, with its own fit:
+
+| Case | | Hardware | `switch`: SimPy / Rust / ns-3 | `port`, SimPy |
+|---|---|---|---|---|
+| 10 Mb/s, 2 × 405/s | loss per stream | 0.82 / 0.77 % | 0.55–0.65 / 0.54–0.66 / 0.56–0.65 % | 0.55–0.67 % |
+| | mean run | 3.34 / 3.20 | 3.20–3.34 | 3.69 |
+| | single-frame runs | 14 % | 13–14 % | 7 % |
+| | runs overlapping the other Pi's (shifted 500 ms) | 96 % (2 %) | 97 % (3–5 %) | 45 % |
+| | episodes with both Pis | 93 % | 93–95 % | |
+| | Pi polls retransmitted | 0.61 / 0.62 % | 0.44–0.56 / 0.45–0.50 / 0.38–0.60 % | 0.31–0.45 % |
+| | Pi RTT p99 / max (ms) | 82.8 / 87.3 | 82.2 / 86.5 | |
+| | Waveshare | 0 of 18 387 | 0 | |
+| 10 Mb/s, 2 × 425/s | loss per stream | 4.98 / 5.01 % | 4.71–4.90 / 4.63–4.92 / 4.80–4.88 % | 4.71–4.93 % |
+| | mean run | 3.38 / 3.39 | 3.36–3.45 | 3.81 |
+| | single-frame runs | 12 % | 12 % | 6 % |
+| | runs overlapping (shifted) | 97 % (5 %) | 97 % (11–13 %) | 50 % |
+| | episodes with both Pis | 94 % | 94 % | |
+| | Pi polls retransmitted | 4.13 / 4.22 % | 3.6–4.6 / 3.5–4.6 / 3.4–4.3 % | 2.9–3.6 % |
+| | Waveshare | 0 of 3 397 | 0 | |
+| 100 Mb/s, 2 × 4 050/s | loss per stream | 0.66 / 0.69 % | 0.57–0.68 / 0.49–0.67 / 0.59–0.67 % | 0.57–0.69 % |
+| | mean run | 3.24 / 3.35 | 3.22–3.39 | 3.72 |
+| | single-frame runs | 13 % | 13 % | 7 % |
+| | runs overlapping | not measurable | 96 % (1–2 %) | 47 % |
+| | Pi polls retransmitted | 0.53 / 0.54 % | 0.33–0.40 / 0.30–0.50 / 0.40–0.56 % | 0.30–0.58 % |
+| | Waveshare | 0 of 6 000 | 0 | |
+| 100 Mb/s, 2 × 3 900/s | loss per stream | 0.036 / 0.039 % | 0.01–0.04 % | 0.01–0.04 % |
+| | mean run | 3.14 / 3.29 | 3.1–3.6 | 3.67 |
+| | runs overlapping | not measurable | 90–94 % | 45 % |
+
+- **The overlap, the halving of the runs and the single-frame share are predicted,** at 10 and at 100 Mb/s. A drop state per port gets none of them.
+- **No overlap is measured at 100 Mb/s.** Those files have only the senders' clocks, and aligned from the losses they are good to about 1 ms, where a run lasts about 0.4 ms. They bound the overlap at about 18 %, which says nothing about the true value.
+- **The single-source cases do not move.** 10 Mb/s with one Pi, 512 B, mixed sizes, ADR-0013's test and the batch case give the [previous section's](#a-shared-pool-the-ls108gp-calibrated-and-validated) results bit for bit, every seed and engine: L is the same, and the light ports always fit in their reserves.
+- **The Pi's responses** are now lost in any drop state while the Pi's port is beyond its reserve. At 10 Mb/s that brings them near the hardware: 0.49 % against 0.37 % per port, with 0.61 % measured, and 4.0 % against 3.1 %, with 4.2 %. At 100 Mb/s it does not, 0.38 % against 0.45 %, with 0.53 % measured, within the seeds' spread.
+- **What the model does not get: the two-sender loss.** The scope does not change it. It stays below the hardware by 22 % at 2 × 405, 3 % at 2 × 425, 9 % at 2 × 4 050 and about 37 % at 2 × 3 900, from about 30 runs a seed. With one Pi at the same 10 Mb/s load the hardware lost 0.60 %.
+
+The results are in `benchmarks/results/2026-11-24-2122-simpy-rust-ns3-jaws-zbook-switch-drop-state.json`. `python -m benchmarks switch-drop-summary <file>` prints the tables.
 

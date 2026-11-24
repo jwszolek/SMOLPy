@@ -9,11 +9,14 @@
 - ADR-0004: the `smol-ns3` line format becomes version 6.
 - [Model Semantics](../model-semantics.md) §3, §8, §9 and the open issues.
 
-**Roadmap:** the "shared pool with dynamic thresholds" left open by ADR-0013 and ADR-0014.
+**Roadmap:** the "shared pool with dynamic thresholds" left open by ADR-0013 and ADR-0014.  
+**Amended by:** [ADR-0016](0016-switch-wide-drop-state.md): the drop state can belong to the whole switch, and the two-sender overlap below is corrected.
 
 ---
 
 ## Context
+
+> **Correction (2026-11-24, [ADR-0016](0016-switch-wide-drop-state.md)).** The two-sender overlap of 0 of 2 072 below was an analysis error: the episodes were merged by two unaligned sender clocks, 63.77 s apart. Measured on the laptop's one clock, 96–97 % of the two Pis' loss runs overlap one of the other's. ADR-0016 corrects it with a drop state for the whole switch. The history below is left as it was written.
 
 ### ADR-0014 predicts every single-source measurement
 

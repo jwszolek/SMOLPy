@@ -249,10 +249,10 @@ See [Modbus TCP](modbus.md#one-request-in-flight) for the model.
 
 ## 13. The calibrated LS108GP — [`example_ingress_buffer.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_ingress_buffer.smol)
 
-The testbed of [ADR-0013](adr/0013-ingress-buffer-accounting.md) to [ADR-0015](adr/0015-shared-pool-and-drain-resume.md):
+The testbed of [ADR-0013](adr/0013-ingress-buffer-accounting.md) to [ADR-0016](adr/0016-switch-wide-drop-state.md):
 - a Raspberry Pi is one `modbus_slave` that sends Poisson UDP at 99.7 % of the laptop's 100 Mb/s port and answers the laptop's polls every 10 ms;
 - a Waveshare relay module on another port is polled every 20 ms;
-- the switch is the fitted LS108GP, `cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells`: one pool shared by its ports, a reserve for each, and a drop state that ends once 72 cells have been freed.
+- the switch is the fitted LS108GP, `cell=128 pool=710cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch`: one pool shared by its ports, a reserve for each, and one drop state for the switch that ends once 72 cells have been freed. In it a frame is still admitted if it fits in its port's reserve.
 
 Simulation: **30 s**, seed 42.
 
@@ -265,6 +265,7 @@ Simulation: **30 s**, seed 42.
 - **The Pi's port fills, the Waveshare's never does:** its few frames always fit in its reserve.
 - **Losses come in runs of about 6 frames** (`ingress_drops_total / ingress_drop_episodes_total`), and the Pi's small responses are lost with them, as on the hardware.
 - **On ns-3** a lost response is retransmitted by TCP after about 210 ms, so no poll times out.
-- **The earlier models** are kept as comments in the file: ADR-0014's 740 cells resuming at 668, and ADR-0013's 60 frames.
+- **With one sender the switch's drop state is ADR-0015's per port,** so these are ADR-0015's numbers to the frame: the pool and reserve were refitted, 710 + 60 for 716 + 54, with their sum unchanged.
+- **The earlier models** are kept as comments in the file: ADR-0015's per-port drop state, ADR-0014's 740 cells resuming at 668, and ADR-0013's 60 frames.
 
 See [Execution backends](backends.md#a-shared-pool-the-ls108gp-calibrated-and-validated) for the calibration and the validation.

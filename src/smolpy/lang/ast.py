@@ -29,6 +29,7 @@ class SwitchDecl:
     pool: Any = None  # ADR-0015
     ingress_reserve: Any = None
     ingress_drain: Any = None
+    ingress_drop: str | None = None  # port | switch (ADR-0016)
 
 
 @dataclass

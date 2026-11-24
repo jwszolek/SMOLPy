@@ -311,3 +311,69 @@ def test_pool_hardware_numbers_are_computed_from_the_raw_files() -> None:
     (a, b) = hw["two 4050"]["udp"]
     assert 0.006 < a["loss"] < 0.007 and 3.1 < a["mean_run"] < 3.4
     assert hw["two 4050"]["waveshare"]["affected"] == 0
+
+
+def test_switch_drop_measure_of_a_run() -> None:
+    """ADR-0016's measure: a run's interval is between the admitted frames
+    on either side of it; runs overlap if their intervals meet, and an
+    episode merges the overlapping ones of both streams."""
+    from benchmarks import switch_drop as sd
+
+    a = sd.runs_from_decisions(
+        [(0, True), (1, False), (2, False), (3, True), (8, False), (9, True)]
+    )
+    assert a == [(0, 3, 2), (3, 9, 1)]
+    a = [(0.0, 3.0, 2), (5.0, 6.0, 1), (9.5, 11.0, 1)]
+    b = [(0.0, 1.0, 3), (2.5, 4.0, 1), (10.0, 11.0, 1)]
+    s = sd.overlap_stats(a, b)
+    # a's first and last meet one of b's, a's second none; each of b's one of a's
+    assert (s["overlapping"], s["runs_total"]) == (2 + 3, 6)
+    assert (s["episodes"], s["episodes_both"]) == (3, 2)
+    assert s["mean_run"] == [4 / 3, 5 / 3] and s["single"] == 4 / 6
+
+
+def test_switch_drop_testbed_has_the_switch_scope() -> None:
+    from benchmarks import pool
+    from benchmarks import switch_drop as sd
+    from smolpy.model import SwitchNode
+
+    pis, mbps, poll_ms, registers, ws, seconds = sd.CASES["10Mb two 405"]
+    assert (mbps, poll_ms, registers, seconds) == (10, 100, 4, 900)
+    sc = pool.testbed(sd.switch(716, 54, 72), pis, 100, 1, mbps, poll_ms, registers, ws)
+    (sw,) = [n for n in sc.nodes if isinstance(n, SwitchNode)]
+    assert (sw.pool_cells, sw.ingress_reserve, sw.ingress_drain, sw.ingress_drop) == (
+        716,
+        54,
+        72,
+        "switch",
+    )
+
+
+def test_switch_drop_validation_case_runs() -> None:
+    from benchmarks import switch_drop as sd
+
+    sd.CASES["short"] = (*sd.CASES["10Mb two 405"][:5], 60)
+    try:
+        (row,) = sd.validate_case(sd.switch(716, 54, 72), "short", 0, (1,), ["simpy"], lambda s: 0)
+    finally:
+        del sd.CASES["short"]
+    o = row["overlap"]
+    assert o["overlapping"] / o["runs_total"] > 0.8  # the switch's state: runs come together
+    assert row["control"]["overlapping"] / row["control"]["runs_total"] < 0.2
+    assert all(1 <= x < 5 for x in row["mean_run"])
+
+
+def test_switch_drop_hardware_numbers_are_computed_from_the_raw_files() -> None:
+    from benchmarks import switch_drop as sd
+
+    if not (sd.DATA / sd.TEN).is_dir():
+        pytest.skip("the testbed's raw data is not here")
+    hw = sd.hardware()
+    h = hw["10Mb two 405"]
+    assert [round(u["loss"], 4) for u in h["udp"]] == [0.0082, 0.0077]
+    o, c = h["overlap"], h["control"]
+    assert round(o["overlapping"] / o["runs_total"], 2) == 0.96
+    assert round(o["episodes_both"] / o["episodes"], 2) == 0.93
+    assert c["overlapping"] / c["runs_total"] < 0.05
+    assert [round(p["affected"], 4) for p in h["pi"]] == [0.0061, 0.0062]
+    assert h["waveshare"]["affected"] == 0

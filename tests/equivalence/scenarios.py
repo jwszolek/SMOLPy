@@ -599,12 +599,14 @@ def flood_drop_state() -> Scenario:
     return net.to_scenario(duration=40)
 
 
-def pool_two_sources() -> Scenario:
+def pool_two_sources(drop: str | None = None) -> Scenario:
     """A shared pool (ADR-0015): two constant sources fill a pool of 60
     cells of 128 B beyond reserves of 6, with drop states ended by a drain
     of 36 cells; a light port of small frames is admitted in its reserve
-    while the pool is full; PROFINET beside them."""
-    net = Network("pool-two-sources")
+    while the pool is full; PROFINET beside them. With *drop* "switch", the
+    drop state is the switch's (ADR-0016): both sources are refused in one
+    episode, and the light port is admitted in its reserve in it."""
+    net = Network("pool-two-sources" if drop is None else "switch-drop-two-ports")
     sw = net.switch(
         "sw",
         ports=6,
@@ -612,6 +614,7 @@ def pool_two_sources() -> Scenario:
         pool=Cells(60),
         ingress_reserve=Cells(6),
         ingress_drain=Cells(36),
+        ingress_drop=drop,  # type: ignore[arg-type]
     )
     left = net.adapter("left", ip="10.0.0.1")
     right = net.adapter("right", ip="10.0.0.2")
@@ -639,18 +642,20 @@ def pool_two_sources() -> Scenario:
     return net.to_scenario(duration=40)
 
 
-def drain_tie() -> Scenario:
+def drain_tie(drop: str | None = None) -> Scenario:
     """Drop states ended by a drain at the instants of arrivals (ADR-0015):
     two constant sources of 1230 B frames into one 100 Mb/s port, which takes
     a frame every 100 us, B's link long enough (99 050 ns) that its frames
-    arrive exactly when the port takes one."""
-    net = Network("drain-tie")
+    arrive exactly when the port takes one. With *drop* "switch", the
+    switch's state ends there (ADR-0016)."""
+    net = Network("drain-tie" if drop is None else "switch-drop-tie")
     sw = net.switch(
         "sw",
         ports=3,
         pool=Frames(4),
         ingress_reserve=Frames(1),
         ingress_drain=Frames(2),
+        ingress_drop=drop,  # type: ignore[arg-type]
         mac_table="topology",
     )
     a = net.adapter("a", ip="10.0.0.1")
@@ -668,18 +673,20 @@ def drain_tie() -> Scenario:
     return net.to_scenario(duration=20)
 
 
-def flood_full_pool() -> Scenario:
+def flood_full_pool(drop: str | None = None) -> Scenario:
     """Flooding with a full pool (ADR-0015): frames to a station behind a
     second switch are flooded while another source keeps the pool full; a
     flooded frame is charged once, to its port's reserve and the pool, and
-    an egress limit in bytes stands beside the pool."""
-    net = Network("flood-full-pool")
+    an egress limit in bytes stands beside the pool. With *drop* "switch",
+    flooded frames are decided in the switch's state (ADR-0016)."""
+    net = Network("flood-full-pool" if drop is None else "switch-drop-flood")
     sw = net.switch(
         "sw",
         ports=4,
         pool=Frames(8),
         ingress_reserve=Frames(2),
         ingress_drain=Frames(4),
+        ingress_drop=drop,  # type: ignore[arg-type]
         buffer=14 * 1_500,
     )
     far = net.switch("far", ports=2)
@@ -800,6 +807,10 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "pool-two-sources": pool_two_sources,
     "drain-tie": drain_tie,
     "flood-full-pool": flood_full_pool,
+    # ADR-0016: a drop state for the whole switch
+    "switch-drop-two-ports": lambda: pool_two_sources("switch"),
+    "switch-drop-tie": lambda: drain_tie("switch"),
+    "switch-drop-flood": lambda: flood_full_pool("switch"),
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
     "random-load": random_load,

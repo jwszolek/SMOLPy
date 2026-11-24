@@ -60,7 +60,8 @@ class Capabilities:
     # "slave_metrics": Modbus metrics on a slave (ADR-0013); "buffer_cells":
     # limits in cells, "buffer_hysteresis": resume levels (ADR-0014);
     # "buffer_pool": a shared pool and reserves, "drain_resume": drop states
-    # ended by a drain (ADR-0015)
+    # ended by a drain (ADR-0015); "switch_drop_state": the ingress_drop
+    # scope, a drop state for the whole switch (ADR-0016)
     features: frozenset[str] = frozenset()
     priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
@@ -99,6 +100,8 @@ _FEATURES = frozenset(
         # ADR-0015
         "buffer_pool",
         "drain_resume",
+        # ADR-0016
+        "switch_drop_state",
     }
 )
 
@@ -361,6 +364,8 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
             raise unsupported(node, "a shared buffer pool", ("nodes", i))
         if node.ingress_drain is not None and "drain_resume" not in caps.features:
             raise unsupported(node, "drop states ended by a drain", ("nodes", i))
+        if node.ingress_drop is not None and "switch_drop_state" not in caps.features:
+            raise unsupported(node, "the scope of the ingress drop state", ("nodes", i))
     for i, link in enumerate(scenario.links):
         if not link.duplex and not caps.half_duplex:
             raise unsupported(link, "half-duplex links", ("links", i))

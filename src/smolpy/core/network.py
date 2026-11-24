@@ -9,7 +9,7 @@ from smolpy.core.adapter import Adapter, Station
 from smolpy.core.link import Link
 from smolpy.core.node import Node
 from smolpy.core.observation import MetricName, Observation
-from smolpy.ethernet.switch import Limit, MacTableMode, Switch, SwitchMode, SwitchQoS
+from smolpy.ethernet.switch import DropScope, Limit, MacTableMode, Switch, SwitchMode, SwitchQoS
 from smolpy.modbus.slave import ModbusSlave
 from smolpy.mqtt.broker import MQTTBroker
 from smolpy.profinet.device import ProfinetDevice
@@ -156,6 +156,7 @@ class Network:
         pool: Limit | None = None,
         ingress_reserve: Limit | None = None,
         ingress_drain: Limit | None = None,
+        ingress_drop: DropScope | None = None,
     ) -> Switch:
         node = Switch(
             name,
@@ -171,6 +172,7 @@ class Network:
             pool=pool,
             ingress_reserve=ingress_reserve,
             ingress_drain=ingress_drain,
+            ingress_drop=ingress_drop,
         )
         self._register(node)
         return node
