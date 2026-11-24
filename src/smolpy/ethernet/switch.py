@@ -54,8 +54,8 @@ def _resume(name: str, label: str, limit: Limit | None, resume: Limit | None) ->
     if limit is not None and type(resume) is not type(limit):
         unit = {Frames: "Frames(n)", Cells: "Cells(n)"}.get(type(limit), "an int, in bytes")
         raise ScenarioError(
-            f"Switch {name!r}: {label} is a level of its limit, so it is given in the"
-            f" limit's unit: {unit}, got {resume!r}"
+            f"Switch {name!r}: {label} is given in the unit of its scope's limit:"
+            f" {unit}, got {resume!r}"
         )
     return resume.n if isinstance(resume, Frames | Cells) else resume
 
@@ -81,6 +81,11 @@ class Switch(Node):
     resume and ingress_resume, in the unit of their limit, make a full
     account drop every frame until a release brings it to that level: a
     resume threshold (ADR-0014). None, the default, is tail drop.
+
+    pool is a buffer shared by the ingress ports, for what each holds beyond
+    its ingress_reserve; ingress_drain ends a port's drop state once the
+    switch has freed that much (ADR-0015). They share the ingress scope's
+    unit with ingress_buffer.
     """
 
     def __init__(
@@ -95,6 +100,9 @@ class Switch(Node):
         cell: int | None = None,
         resume: Limit | None = None,
         ingress_resume: Limit | None = None,
+        pool: Limit | None = None,
+        ingress_reserve: Limit | None = None,
+        ingress_drain: Limit | None = None,
     ) -> None:
         super().__init__(name)
         self.ports = ports
@@ -106,11 +114,16 @@ class Switch(Node):
         self.cell = cell
         self.resume = resume
         self.ingress_resume = ingress_resume
+        self.pool = pool
+        self.ingress_reserve = ingress_reserve
+        self.ingress_drain = ingress_drain
         check_node(self.to_spec())
 
     def to_spec(self) -> SwitchNode:
         buffer_bytes, buffer_frames, buffer_cells = _split(self.buffer)
         ingress_bytes, ingress_frames, ingress_cells = _split(self.ingress_buffer)
+        pool_bytes, pool_frames, pool_cells = _split(self.pool)
+        scope = self.ingress_buffer if self.ingress_buffer is not None else self.pool
         return SwitchNode(
             self.name,
             self.ports,
@@ -126,4 +139,9 @@ class Switch(Node):
             ingress_cells,
             _resume(self.name, "resume", self.buffer, self.resume),
             _resume(self.name, "ingress_resume", self.ingress_buffer, self.ingress_resume),
+            pool_bytes,
+            pool_frames,
+            pool_cells,
+            _resume(self.name, "ingress_reserve", scope, self.ingress_reserve),
+            _resume(self.name, "ingress_drain", scope, self.ingress_drain),
         )

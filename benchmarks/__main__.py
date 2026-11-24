@@ -15,6 +15,8 @@ python -m benchmarks ingress [--loads 0.997] [--duration 30000] [--backend simpy
 python -m benchmarks ingress-summary benchmarks/results/<file>.json
 python -m benchmarks cells [--duration 30000] [--backend simpy rust ns3]
 python -m benchmarks cells-summary benchmarks/results/<file>.json
+python -m benchmarks pool [--duration 60000] [--backend simpy rust ns3]
+python -m benchmarks pool-summary benchmarks/results/<file>.json
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from benchmarks import cells, closed_loop, ingress, loss
+from benchmarks import cells, closed_loop, ingress, loss, pool
 from benchmarks.load import DURATION_MS, LOADS, run_load, summarize_load
 from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
@@ -149,6 +151,17 @@ def main() -> None:
     cel_summ = sub.add_parser("cells-summary", help="markdown tables of a cells results file")
     cel_summ.add_argument("file", type=Path)
 
+    po = sub.add_parser(
+        "pool", help="ADR-0015: fit the LS108GP's pool, reserve and drain, then validate"
+    )
+    po.add_argument("--duration", type=float, default=60_000, help="simulated ms per run")
+    po.add_argument("--backend", nargs="+", default=list(pool.ENGINES))
+    po.add_argument("--label", default="shared-pool")
+    po.add_argument("--out", type=Path, default=None)
+
+    po_summ = sub.add_parser("pool-summary", help="markdown tables of a pool results file")
+    po_summ.add_argument("file", type=Path)
+
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
@@ -191,6 +204,12 @@ def main() -> None:
         print(cells.summarize_cells(out))
     elif a.cmd == "cells-summary":
         print(cells.summarize_cells(a.file))
+    elif a.cmd == "pool":
+        out = pool.run_pool(a.duration, a.backend, a.label, a.out)
+        print(f"results written to {out}")
+        print(pool.summarize_pool(out))
+    elif a.cmd == "pool-summary":
+        print(pool.summarize_pool(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
         r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)

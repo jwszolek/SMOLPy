@@ -153,6 +153,9 @@ class Network:
         cell: int | None = None,
         resume: Limit | None = None,
         ingress_resume: Limit | None = None,
+        pool: Limit | None = None,
+        ingress_reserve: Limit | None = None,
+        ingress_drain: Limit | None = None,
     ) -> Switch:
         node = Switch(
             name,
@@ -165,6 +168,9 @@ class Network:
             cell=cell,
             resume=resume,
             ingress_resume=ingress_resume,
+            pool=pool,
+            ingress_reserve=ingress_reserve,
+            ingress_drain=ingress_drain,
         )
         self._register(node)
         return node

@@ -104,6 +104,21 @@ The rules:
 
   Without a resume level an account never enters the drop state, which is tail drop. In frames, `R = L − 1` is tail drop too: the account refuses only when full and leaves at the next release.
 - **Episodes.** A drop episode of an account is a maximal run of consecutive refusals among the frames it decides, with no admission between them. With a resume level it is one drop state; under tail drop, one run of refusals.
+
+**A shared pool** ([ADR-0015](adr/0015-shared-pool-and-drain-resume.md)). A switch with `pool` shares one buffer among its ingress ports, for what each holds beyond its `ingress_reserve`:
+- **The pool's use** is `Σ_p max(0, occ_p − reserve)`, with `occ_p` what ingress port p holds (its ingress account above). So a frame fills its port's reserve first, and the pool beyond it.
+- **Admission of a frame of u units from port p**, after the drop state and the port's own cap (`ingress_buffer`, if set):
+    - it is admitted if `occ_p + u ≤ reserve`;
+    - or else if the pool has room for the part beyond the reserve: `pool_use + max(0, occ_p + u − reserve) − max(0, occ_p − reserve) ≤ pool`.
+
+  Otherwise it is refused, as one ingress drop. Egress limits then decide each copy, as above.
+- **Release** updates the pool when the frame leaves its ingress account.
+- **The ingress scope has one unit:** `ingress_buffer`, `pool`, `ingress_reserve`, `ingress_resume` and `ingress_drain` share it.
+- **A drop state ended by a drain.** With `ingress_drain=D`:
+    - a port enters its drop state on any refusal;
+    - it leaves at the release at which the switch has freed at least D since then. Freed means the units of every frame released from any ingress account of the switch, at the take of its last copy.
+
+  `ingress_drain` excludes `ingress_resume`. In the drop state the port's frames are refused even if they would fit in its reserve.
 - **Release.** When a transmitter takes a copy, the copy leaves its egress account. When it takes the frame's last queued copy, the frame leaves its ingress account, at the same instant.
 - **A flooded frame** counts once on its ingress port while any of its copies is queued, and each copy counts on its own egress port.
 - **Ports between switches.** A frame from another switch is accounted on the inter-switch port it arrived on. The upstream switch released it when it took it onto that link.
@@ -116,8 +131,9 @@ The rules:
     - A limit in cells is a whole number of at least the cells of the largest frame of the scenario, and needs `cell`, a whole number of bytes of at least 1; `cell` without a limit in cells is an error.
     - An account has one unit: bytes, frames or cells.
     - A resume level needs its scope's limit, and is a whole number from 0 to less than it.
+    - `pool` is a whole number of at least 1. `ingress_reserve` needs `pool` and is at most `ingress_buffer`. `ingress_drain` needs `pool` or `ingress_buffer` and excludes `ingress_resume`. Reserve and pool together hold the largest frame.
 
-*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`; bounded queues in `test_buffers.py`: `test_a_frame_is_dropped_exactly_when_it_would_exceed_the_buffer`, `test_the_queue_never_holds_more_than_its_buffer`, `test_queueing_delay_is_bounded_by_the_buffer`, `test_a_buffer_that_is_never_full_changes_nothing`, `test_one_port_is_an_md1k_queue`; ingress accounts and limits in frames in `test_ingress.py`: `test_a_frame_is_dropped_exactly_when_its_ingress_account_is_full`, `test_a_frame_limit_counts_a_small_frame_as_a_large_one`, `test_the_account_is_released_when_the_transmitter_takes_the_frame`, `test_a_flooded_frame_is_held_once_until_its_last_copy_is_taken`, `test_one_ingress_port_is_its_egress_port`, `test_an_ingress_limit_isolates_a_light_source`, `test_a_frame_limit_is_an_mg1k_queue`; cells and the drop state in `test_hysteresis.py`: `test_a_frame_takes_its_cells_rounded_up`, `test_the_drop_state_follows_its_rules`, `test_an_arrival_at_the_release_that_ends_the_drop_state_is_admitted`, `test_in_frames_a_resume_level_one_below_the_limit_is_tail_drop`, `test_cells_of_the_only_frame_size_are_frames`, `test_a_port_with_hysteresis_is_the_exact_chain`.*
+*Tests: `test_single_hop_latency_is_tx_plus_prop_per_link`, `test_propagation_does_not_hold_the_link`, `test_priority_frames_carry_a_tag`, `test_saturated_link_reaches_nominal_capacity` in `test_simulation.py`, existing priority tests in `test_profinet.py`; bounded queues in `test_buffers.py`: `test_a_frame_is_dropped_exactly_when_it_would_exceed_the_buffer`, `test_the_queue_never_holds_more_than_its_buffer`, `test_queueing_delay_is_bounded_by_the_buffer`, `test_a_buffer_that_is_never_full_changes_nothing`, `test_one_port_is_an_md1k_queue`; ingress accounts and limits in frames in `test_ingress.py`: `test_a_frame_is_dropped_exactly_when_its_ingress_account_is_full`, `test_a_frame_limit_counts_a_small_frame_as_a_large_one`, `test_the_account_is_released_when_the_transmitter_takes_the_frame`, `test_a_flooded_frame_is_held_once_until_its_last_copy_is_taken`, `test_one_ingress_port_is_its_egress_port`, `test_an_ingress_limit_isolates_a_light_source`, `test_a_frame_limit_is_an_mg1k_queue`; cells and the drop state in `test_hysteresis.py`: `test_a_frame_takes_its_cells_rounded_up`, `test_the_drop_state_follows_its_rules`, `test_an_arrival_at_the_release_that_ends_the_drop_state_is_admitted`, `test_in_frames_a_resume_level_one_below_the_limit_is_tail_drop`, `test_cells_of_the_only_frame_size_are_frames`, `test_a_port_with_hysteresis_is_the_exact_chain`; the pool and the drain in `test_pool.py`: `test_the_pool_follows_its_rules`, `test_one_source_with_a_pool_and_reserve_is_an_ingress_buffer`, `test_in_frames_a_drain_is_a_resume_level`, `test_a_drained_drop_state_ends_at_the_instant_of_an_arrival`, `test_two_sources_have_runs_of_one_plus_their_arrivals_while_draining`.*
 
 ## 4. Switches
 
@@ -238,6 +254,7 @@ The ns-3 backend runs Modbus and MQTT over ns-3's TCP, which retransmits lost se
 | `egress_drop_episodes_total` | drop episodes of its egress accounts so far | episodes |
 | `ingress_drop_time_total` | time its ingress accounts have spent in the drop state so far, summed over its ports, up to the sample; 0 without resume levels | ms |
 | `egress_drop_time_total` | the same, for its egress accounts | ms |
+| `pool_occupancy` | the switch's pool use, `Σ_p max(0, occ_p − reserve)`, in the pool's unit; 0 without a pool ([§3](#3-links-and-egress-queues)) | the pool's unit |
 | `frames_sent` | frames whose transmission on the end station's link has completed so far | frames |
 | `frames_received` | frames the adapter accepted so far | frames |
 | `modbus_unanswered` | Modbus requests the adapter's polls have sent so far, less the responses it has accepted so far: lost polls plus polls in flight. With `outstanding=1`, requests that timed out plus those outstanding. | polls |
@@ -276,7 +293,7 @@ A metric's result key is `"<metric>:<node>"`. Its samples are `(time_ms, value)`
     - This holds on an idle port too: its transmitter takes a frame after the events already scheduled for the instant, so it takes the highest-priority frame queued by then.
 - **A poll with one request in flight** at the instant its previous request completes, by a response or a timeout, skips that instant, whichever event comes first. A response arriving at exactly its timeout is late, whichever comes first ([§6](#6-traffic-sources)). Neither rule depends on the order of events.
 - **Admissions to a switch's accounts** at the same instant are decided in the order the switch forwards the frames, each against what the accounts hold at that moment ([§3](#3-links-and-egress-queues)). Copies of a flooded frame are decided in port order. A frame the transmitter has taken no longer counts, in its egress account or, if it was its last copy, in its ingress account.
-- **The drop state** is part of that moment's state: a frame decided before the release that ends a drop state is refused, and one decided after it is admitted if it fits.
+- **The drop state** is part of that moment's state: a frame decided before the release that ends a drop state is refused, and one decided after it is admitted if it fits. That holds for a drain too: the release that completes it comes before a forward at the same instant, or after it, in event order.
 
 **Start-up order** decides the scheduling order of the first events:
 - link transmitters are started first, in link order, a then b direction;
@@ -302,3 +319,4 @@ Every disagreement between this page and the intended model is listed here, with
 | 8 | Buffers were one egress limit in bytes | A testbed switch dropped the frames of the port that congested it, small ones as often as large ones, and none of another port's frames to the same egress port. One egress limit in bytes cannot do either. | resolved in ADR-0013: ingress accounts per port, and limits in frames |
 | 9 | Only adapters sent flows | A host that is a traffic source and a Modbus server on one port needed two nodes on two links, which puts its responses on their own ingress port. | resolved in ADR-0013: flows between any two end stations |
 | 10 | Limits counted frames, and dropped only what did not fit | The testbed switch holds about 740 small frames, 190 of 512 B and 60 of 1 518 B: 128 B cells. Its losses come in runs of 6.4–6.7 frames, never one, and take small frames with them, which tail drop in cells cannot do. | resolved in ADR-0014: limits in cells, and a resume level |
+| 11 | Each ingress port had a buffer of its own | Two senders to one port lost twice the frames, in runs half as long, with the delay capped as by one shared limit, and no port's loss episode overlapped the other's; ADR-0014's own-occupancy resume gives runs of 6.6. | resolved in ADR-0015: a shared pool, a reserve per port, and a drop state ended by a drain |

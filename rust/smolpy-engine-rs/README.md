@@ -16,7 +16,7 @@ result = net.simulate(duration=60_000, backend="rust")
     - A 10 201-node plant (B4) at 100 M frames runs in 5.2 min, against 106 min.
 - **Scope: the whole model, headless.**
     - Adapters, switches (both QoS modes, learning and converged MAC tables), links, and flows between any two end stations with every pattern and IMIX sizes.
-    - Switch buffers: egress and ingress limits, in bytes, frames or cells, with tail drop or a resume threshold, and the metrics `drops`, `drops_total`, `ingress_drops_total`, `egress_drops_total`, and the drop episodes and drop time of each scope.
+    - Switch buffers: egress and ingress limits, in bytes, frames or cells, with tail drop or a resume threshold, a shared pool with reserves and drains, and the metrics `drops`, `drops_total`, `ingress_drops_total`, `egress_drops_total`, and the drop episodes and drop time of each scope.
     - The metrics `throughput`, `latency`, `bytes_sent`, `bytes_received`, `frames_sent`, `frames_received`, `queue_depth` and `utilization`.
     - Modbus TCP polling: slaves, open-loop polls and polls with one request in flight and a response timeout, `modbus_latency`, `modbus_unanswered`, `modbus_timeouts` and `modbus_skipped`, on a master or over the polls of a slave.
     - MQTT: brokers, publications with QoS 0 and 1, routes and `broker_queue`.

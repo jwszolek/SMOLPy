@@ -83,10 +83,10 @@ def test_smol_spells_cells_and_resume_levels(tmp_path: Path) -> None:
         ({"resume": 3_000}, "resume needs buffer"),
         ({"buffer": Frames(5), "resume": Frames(5)}, "resume must be a whole number of frames"),
         ({"buffer": Frames(5), "resume": Frames(-1)}, "resume must be a whole number of frames"),
-        ({"buffer": Frames(5), "resume": 3}, "resume is a level of its limit"),
+        ({"buffer": Frames(5), "resume": 3}, "resume is given in the unit of its scope's limit"),
         (
             {"cell": 128, "ingress_buffer": Cells(10), "ingress_resume": Frames(3)},
-            "ingress_resume is a level of its limit, so it is given in the limit's unit: Cells",
+            "ingress_resume is given in the unit of its scope's limit: Cells",
         ),
     ],
 )

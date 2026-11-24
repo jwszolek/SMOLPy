@@ -26,6 +26,9 @@ class SwitchDecl:
     cell: Any = None  # bytes (ADR-0014)
     resume: Any = None
     ingress_resume: Any = None
+    pool: Any = None  # ADR-0015
+    ingress_reserve: Any = None
+    ingress_drain: Any = None
 
 
 @dataclass

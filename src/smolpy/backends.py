@@ -58,7 +58,9 @@ class Capabilities:
     # "ingress_buffer": ingress accounts, "buffer_frames": limits in frames,
     # "station_flows": flows from and to any end station, and
     # "slave_metrics": Modbus metrics on a slave (ADR-0013); "buffer_cells":
-    # limits in cells, "buffer_hysteresis": resume levels (ADR-0014)
+    # limits in cells, "buffer_hysteresis": resume levels (ADR-0014);
+    # "buffer_pool": a shared pool and reserves, "drain_resume": drop states
+    # ended by a drain (ADR-0015)
     features: frozenset[str] = frozenset()
     priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
@@ -94,6 +96,9 @@ _FEATURES = frozenset(
         # ADR-0014
         "buffer_cells",
         "buffer_hysteresis",
+        # ADR-0015
+        "buffer_pool",
+        "drain_resume",
     }
 )
 
@@ -251,6 +256,7 @@ class Ns3Backend:
                     "egress_drop_episodes_total",
                     "ingress_drop_time_total",
                     "egress_drop_time_total",
+                    "pool_occupancy",
                 }
             ),
             features=_FEATURES,
@@ -334,7 +340,9 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
         egress, ingress = node.egress_limit, node.ingress_limit
         if egress is not None and "bounded_buffer" not in caps.features:
             raise unsupported(node, "bounded switch buffers", ("nodes", i))
-        if ingress is not None and "ingress_buffer" not in caps.features:
+        if (
+            ingress is not None or node.pool_limit is not None
+        ) and "ingress_buffer" not in caps.features:
             raise unsupported(node, "ingress buffer limits", ("nodes", i))
         units = {lim[1] for lim in (egress, ingress) if lim is not None}
         if "frames" in units and "buffer_frames" not in caps.features:
@@ -344,6 +352,15 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
         resumes = (node.buffer_resume, node.ingress_buffer_resume)
         if any(r is not None for r in resumes) and "buffer_hysteresis" not in caps.features:
             raise unsupported(node, "buffer resume levels (hysteresis)", ("nodes", i))
+        pool = node.pool_limit
+        if pool is not None and "cells" == pool[1] and "buffer_cells" not in caps.features:
+            raise unsupported(node, "buffer limits in cells", ("nodes", i))
+        if pool is not None and "frames" == pool[1] and "buffer_frames" not in caps.features:
+            raise unsupported(node, "buffer limits in frames", ("nodes", i))
+        if pool is not None and "buffer_pool" not in caps.features:
+            raise unsupported(node, "a shared buffer pool", ("nodes", i))
+        if node.ingress_drain is not None and "drain_resume" not in caps.features:
+            raise unsupported(node, "drop states ended by a drain", ("nodes", i))
     for i, link in enumerate(scenario.links):
         if not link.duplex and not caps.half_duplex:
             raise unsupported(link, "half-duplex links", ("links", i))

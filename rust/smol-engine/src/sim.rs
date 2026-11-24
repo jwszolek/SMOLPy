@@ -147,6 +147,10 @@ struct Account {
     episodes: u64,
     since: u64,
     drop_ns: u64,
+    /// an ingress account's drain, which ends its drop state (ADR-0015), and
+    /// what its switch had freed when it entered it
+    drain: Option<u64>,
+    drain_start: u64,
 }
 
 impl Account {
@@ -169,6 +173,8 @@ impl Account {
             episodes: 0,
             since: 0,
             drop_ns: 0,
+            drain: None,
+            drain_start: 0,
         })
     }
 
@@ -187,7 +193,14 @@ impl Account {
     /// Decide a frame: false if it is dropped, by tail drop or the drop
     /// state; a refusal that follows an admission starts an episode.
     fn admit(&mut self, size: u64, now: u64) -> bool {
-        if self.fits(size) && !self.dropping {
+        let fits = self.fits(size);
+        self.decide(fits, now, 0)
+    }
+
+    /// Decide a frame that fits or not; *freed* is what the switch has
+    /// freed so far, where a drain starts (ADR-0015).
+    fn decide(&mut self, fits: bool, now: u64, freed: u64) -> bool {
+        if fits && !self.dropping {
             self.refused = false;
             return true;
         }
@@ -195,11 +208,22 @@ impl Account {
             self.refused = true;
             self.episodes += 1;
         }
-        if !self.dropping && self.resume.is_some_and(|r| self.held > r) {
-            self.dropping = true;
-            self.since = now;
+        if !self.dropping {
+            if self.drain.is_some() {
+                self.dropping = true;
+                self.since = now;
+                self.drain_start = freed;
+            } else if self.resume.is_some_and(|r| self.held > r) {
+                self.dropping = true;
+                self.since = now;
+            }
         }
         false
+    }
+
+    fn leave(&mut self, now: u64) {
+        self.dropping = false;
+        self.drop_ns += now - self.since;
     }
 
     fn charge(&mut self, size: u64) {
@@ -209,14 +233,34 @@ impl Account {
     fn release(&mut self, size: u64, now: u64) {
         self.held -= self.units(size);
         if self.dropping && self.resume.is_some_and(|r| self.held <= r) {
-            self.dropping = false;
-            self.drop_ns += now - self.since;
+            self.leave(now);
         }
     }
 
     /// Its time in the drop state up to `now`.
     fn drop_time_ns(&self, now: u64) -> u64 {
         self.drop_ns + if self.dropping { now - self.since } else { 0 }
+    }
+}
+
+/// A switch's shared buffer pool (`_Pool`, ADR-0015): what its ingress ports
+/// hold beyond their reserves, the sum of max(0, held - reserve), against its
+/// limit.
+#[derive(Clone, Copy)]
+struct Pool {
+    limit: u64,
+    reserve: u64,
+    used: u64,
+}
+
+impl Pool {
+    fn beyond(&self, held: u64) -> u64 {
+        held.saturating_sub(self.reserve)
+    }
+
+    /// Whether a port holding *held* can take *u* more.
+    fn fits(&self, held: u64, u: u64) -> bool {
+        self.used + self.beyond(held + u) - self.beyond(held) <= self.limit
     }
 }
 
@@ -430,9 +474,70 @@ struct Switch {
     inbound: u32,
     out: Vec<(i32, u32)>, // (port, channel), in port order: out[p].0 == p
     mac_table: HashMap<u32, i32>,
-    /// ingress accounts by port, if the switch has an ingress limit (ADR-0013)
+    /// ingress accounts by port, if the switch has an ingress limit or a
+    /// pool (ADR-0013, ADR-0015)
     ingress: Vec<Account>,
     ingress_dropped: u64,
+    pool: Option<Pool>,
+    /// units freed by releases, in the ingress unit, and the ports whose
+    /// drop state a drain ends, in the order they entered it (ADR-0015)
+    freed: u64,
+    draining: Vec<usize>,
+}
+
+impl Switch {
+    /// Decide a frame of ingress port *port* (`_Account.admit`).
+    fn admit_ingress(&mut self, port: usize, size: u64, now: u64) -> bool {
+        let acc = &self.ingress[port];
+        let u = acc.units(size);
+        let fits = acc.fits(size) && self.pool.as_ref().is_none_or(|p| p.fits(acc.held, u));
+        let was = acc.dropping;
+        let freed = self.freed;
+        let acc = &mut self.ingress[port];
+        let ok = acc.decide(fits, now, freed);
+        if !was && acc.dropping && acc.drain.is_some() {
+            self.draining.push(port);
+        }
+        ok
+    }
+
+    fn charge_ingress(&mut self, port: usize, size: u64) {
+        let acc = &mut self.ingress[port];
+        let u = acc.units(size);
+        if let Some(p) = &mut self.pool {
+            p.used = p.used + p.beyond(acc.held + u) - p.beyond(acc.held);
+        }
+        acc.held += u;
+    }
+
+    /// A frame of *port* freed (`_Account.release`): the pool and the
+    /// switch's freed count, every drain that is complete, then the port's
+    /// own resume level.
+    fn release_ingress(&mut self, port: usize, size: u64, now: u64) {
+        let u = self.ingress[port].units(size);
+        let held = self.ingress[port].held;
+        if let Some(p) = &mut self.pool {
+            p.used = p.used + p.beyond(held - u) - p.beyond(held);
+        }
+        self.ingress[port].held -= u;
+        self.freed += u;
+        if !self.draining.is_empty() {
+            let freed = self.freed;
+            let ingress = &mut self.ingress;
+            self.draining.retain(|&q| {
+                let a = &mut ingress[q];
+                let done = freed - a.drain_start >= a.drain.expect("a drained account");
+                if done {
+                    a.leave(now);
+                }
+                !done
+            });
+        }
+        let acc = &mut self.ingress[port];
+        if acc.dropping && acc.resume.is_some_and(|r| acc.held <= r) {
+            acc.leave(now);
+        }
+    }
 }
 
 /// Which drops a switch's drop metric counts.
@@ -501,6 +606,8 @@ enum Sampled {
     /// ms, by these channels' egress accounts or its ingress accounts
     /// (ADR-0014): (channels, switch, ingress, time)
     Episodes(Vec<u32>, u32, bool, bool),
+    /// a switch's pool use (ADR-0015)
+    PoolOccupancy(u32),
 }
 
 struct Sampler {
@@ -620,7 +727,7 @@ impl Engine {
                 entry.copies -= 1;
                 if entry.copies == 0 {
                     let (w, port) = (entry.switch, entry.port);
-                    self.switches[w as usize].ingress[port as usize].release(size, now);
+                    self.switches[w as usize].release_ingress(port as usize, size, now);
                     self.stored_free.push(st);
                 }
             }
@@ -919,7 +1026,7 @@ impl Engine {
             None
         } else {
             let port = fr.in_port as u32;
-            if !sw.ingress[port as usize].admit(fr.size, self.now) {
+            if !sw.admit_ingress(port as usize, fr.size, self.now) {
                 sw.ingress_dropped += 1; // tail drop: no egress port is looked at
                 self.release(f);
                 return;
@@ -953,7 +1060,7 @@ impl Engine {
         if let Some((st, port)) = entry {
             if copies > 0 {
                 self.stored[st as usize].copies = copies;
-                self.switches[w as usize].ingress[port as usize].charge(fr.size);
+                self.switches[w as usize].charge_ingress(port as usize, fr.size);
             } else {
                 self.stored_free.push(st);
             }
@@ -1352,6 +1459,10 @@ impl Engine {
             }
             Sampled::SlaveTimeouts(s) => (Some(self.slaves[*s as usize].timeouts as f64), 0),
             Sampled::SlaveSkipped(s) => (Some(self.slaves[*s as usize].skipped as f64), 0),
+            Sampled::PoolOccupancy(w) => {
+                let used = self.switches[*w as usize].pool.map_or(0, |p| p.used);
+                (Some(used as f64), 0)
+            }
             Sampled::Episodes(chans, w, ingress, time) => {
                 let accounts: Vec<&Account> = if *ingress {
                     self.switches[*w as usize].ingress.iter().collect()
@@ -1558,6 +1669,9 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     mac_table: HashMap::new(),
                     ingress: Vec::new(),
                     ingress_dropped: 0,
+                    pool: None,
+                    freed: 0,
+                    draining: Vec::new(),
                 });
                 role.push(e.switches.len() - 1);
             }
@@ -1584,7 +1698,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             } | NodeKind::Switch {
                 ingress: Some(_),
                 ..
-            }
+            } | NodeKind::Switch { pool: Some(_), .. }
         )
     };
     // every node but a switch is an end station with a MAC address
@@ -1678,12 +1792,30 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             ingress,
             cell,
             ingress_resume,
+            pool,
+            reserve,
+            drain,
             ..
         } = node.kind
         {
-            if let Some(account) = Account::new(ingress, cell, ingress_resume) {
+            // with a pool and no cap of its own, an account is limited by
+            // the pool alone, in the pool's unit
+            let cap = ingress.or(pool.map(|p| match p {
+                Limit::Bytes(_) => Limit::Bytes(u64::MAX / 2),
+                Limit::Frames(_) => Limit::Frames(u64::MAX / 2),
+                Limit::Cells(_) => Limit::Cells(u64::MAX / 2),
+            }));
+            if let Some(mut account) = Account::new(cap, cell, ingress_resume) {
+                account.drain = drain;
                 let sw = &mut e.switches[role[i]];
                 sw.ingress = vec![account; sw.out.len()];
+                sw.pool = pool.map(|p| Pool {
+                    limit: match p {
+                        Limit::Bytes(n) | Limit::Frames(n) | Limit::Cells(n) => n,
+                    },
+                    reserve: reserve.unwrap_or(0),
+                    used: 0,
+                });
             }
         }
     }
@@ -2020,6 +2152,9 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                 Some(Sampled::Drops(chans, w, which, obs.metric == Metric::Drops))
             }
             Metric::FramesSent => out_of(&e).map(Sampled::FramesSent),
+            Metric::PoolOccupancy if is_switch(target) => {
+                Some(Sampled::PoolOccupancy(role[target] as u32))
+            }
             Metric::IngressDropEpisodesTotal
             | Metric::EgressDropEpisodesTotal
             | Metric::IngressDropTimeTotal

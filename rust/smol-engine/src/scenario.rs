@@ -1,7 +1,8 @@
 //! Reads Scenario IR JSON, format "smol-ir" version 2 (ADR-0007, ADR-0010),
 //! with the optional switch buffers of ADR-0011, the optional `outstanding`
 //! and `timeout_ms` of polls (ADR-0012), the ingress accounts and limits in
-//! frames of ADR-0013, and the cells and resume levels of ADR-0014.
+//! frames of ADR-0013, the cells and resume levels of ADR-0014, and the
+//! shared pool, reserves and drains of ADR-0015.
 //!
 //! The scenario has already been validated by `smolpy.model.validate`; this
 //! reader is strict about structure (unknown fields, kinds and versions are
@@ -42,6 +43,12 @@ pub enum NodeKind {
         cell: Option<u64>,
         buffer_resume: Option<u64>,
         ingress_resume: Option<u64>,
+        /// a pool shared by the ingress ports beyond their reserves, and the
+        /// drain that ends an ingress drop state, in the ingress unit
+        /// (ADR-0015)
+        pool: Option<Limit>,
+        reserve: Option<u64>,
+        drain: Option<u64>,
     },
 }
 
@@ -168,10 +175,11 @@ pub enum Metric {
     EgressDropEpisodesTotal,
     IngressDropTimeTotal,
     EgressDropTimeTotal,
+    PoolOccupancy,
 }
 
 impl Metric {
-    pub const ALL: [(&'static str, Metric); 24] = [
+    pub const ALL: [(&'static str, Metric); 25] = [
         ("throughput", Metric::Throughput),
         ("latency", Metric::Latency),
         ("bytes_sent", Metric::BytesSent),
@@ -202,6 +210,7 @@ impl Metric {
         ),
         ("ingress_drop_time_total", Metric::IngressDropTimeTotal),
         ("egress_drop_time_total", Metric::EgressDropTimeTotal),
+        ("pool_occupancy", Metric::PoolOccupancy),
     ];
 
     pub fn name(self) -> &'static str {
@@ -276,6 +285,7 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "egress_drop_episodes_total",
         "ingress_drop_time_total",
         "egress_drop_time_total",
+        "pool_occupancy",
     ],
     features: &[
         "imix",
@@ -289,6 +299,9 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         // ADR-0014
         "buffer_cells",
         "buffer_hysteresis",
+        // ADR-0015
+        "buffer_pool",
+        "drain_resume",
     ],
     notes: &[],
 };
@@ -549,11 +562,14 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
             };
             let buffer = limit("buffer")?;
             let ingress = limit("ingress_buffer")?;
+            let pool = limit("pool")?;
             let cell = take("cell_bytes", false)?;
             let buffer_resume = take("buffer_resume", true)?;
             let ingress_resume = take("ingress_buffer_resume", true)?;
+            let reserve = take("ingress_reserve", false)?;
+            let drain = take("ingress_drain", false)?;
             let cells = |l: Option<Limit>| matches!(l, Some(Limit::Cells(_)));
-            if (cells(buffer) || cells(ingress)) != cell.is_some() {
+            if (cells(buffer) || cells(ingress) || cells(pool)) != cell.is_some() {
                 return Err(format!(
                     "switch {name}: cell_bytes with limits in cells only"
                 ));
@@ -571,6 +587,22 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                     return Err(format!("switch {name}: {what} needs a limit above it"));
                 }
             }
+            let unit = |l: Option<Limit>| l.map(|l| std::mem::discriminant(&l));
+            if ingress.is_some() && pool.is_some() && unit(ingress) != unit(pool) {
+                return Err(format!(
+                    "switch {name}: ingress_buffer and pool in two units"
+                ));
+            }
+            if reserve.is_some() && pool.is_none() {
+                return Err(format!("switch {name}: ingress_reserve needs pool"));
+            }
+            if drain.is_some()
+                && (ingress_resume.is_some() || (pool.is_none() && ingress.is_none()))
+            {
+                return Err(format!(
+                    "switch {name}: ingress_drain needs pool or ingress_buffer, alone"
+                ));
+            }
             NodeKind::Switch {
                 fifo,
                 topology,
@@ -579,6 +611,9 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 cell,
                 buffer_resume,
                 ingress_resume,
+                pool,
+                reserve,
+                drain,
             }
         }
         "modbus_slave" => {

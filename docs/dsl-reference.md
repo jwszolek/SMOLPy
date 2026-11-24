@@ -66,6 +66,20 @@ sw = net.switch("sw", ports=8, cell=128, ingress_buffer=Cells(740), ingress_resu
 - **Metrics.** `ingress_drop_episodes_total` and `egress_drop_episodes_total` count the runs of drops, so the mean run is drops over episodes. `ingress_drop_time_total` and `egress_drop_time_total` give the time spent in the drop state, in ms.
 - **Tail drop** is the default, without a resume level. In frames, `resume = limit − 1` is tail drop too.
 - **Validation.** `cell` is a whole number of bytes, required with a limit in cells and an error otherwise. A limit in cells holds the largest frame. A resume level is in its limit's unit: `int`, `Frames` or `Cells`, as the limit.
+
+**A shared pool, reserves and a drain** ([ADR-0015](adr/0015-shared-pool-and-drain-resume.md)). Many switch chips have one packet memory for all ports, with a little guaranteed to each:
+
+```python
+sw = net.switch(
+    "sw", ports=8, cell=128,
+    pool=Cells(716), ingress_reserve=Cells(54), ingress_drain=Cells(72),
+)
+```
+
+- **`pool`** is shared by the ingress ports, for what each holds beyond its **`ingress_reserve`**. A frame is admitted if it fits in its port's reserve, or else in the pool.
+- **`ingress_drain`** ends a port's drop state once the switch has freed that much of its buffer, whatever port it came from. In the drop state the port's frames are dropped, even those that would fit in its reserve.
+- **`pool_occupancy`** samples the pool's use.
+- **Units and rules.** The ingress scope, `ingress_buffer`, `pool`, `ingress_reserve`, `ingress_resume` and `ingress_drain`, has one unit. `ingress_reserve` needs `pool`. `ingress_drain` needs `pool` or `ingress_buffer`, and excludes `ingress_resume`.
 - **On loss there is no retransmission** on SimPy and Rust. A poll whose request or response is lost stays unanswered (`modbus_unanswered`), or times out with `outstanding=1` and a timeout (below). On ns-3, Modbus and MQTT run over TCP, which retransmits ([Execution backends](backends.md#bounded-switch-buffers)).
 
 ## Traffic
@@ -205,6 +219,7 @@ net.observe(metric, on=node, every=interval_ms)
 | `egress_drop_episodes_total` | episodes | Switch: runs of drops by its egress accounts so far |
 | `ingress_drop_time_total` | ms | Switch: time its ingress accounts spent in the drop state so far |
 | `egress_drop_time_total` | ms | Switch: time its egress accounts spent in the drop state so far |
+| `pool_occupancy` | pool's unit | Switch: what its ingress ports hold beyond their reserves, in its shared pool |
 
 ## Simulation
 
@@ -241,7 +256,7 @@ result.export("out.csv", format="csv")   # explicit format override
 - **`smolpy.backends.installed()`** lists the backends that can run here.
 
 **The Rust backend** runs the whole model:
-- adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables, egress and ingress limits in bytes, frames or cells, with or without resume levels), links and flows between any end stations with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
+- adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables, egress and ingress limits in bytes, frames or cells, with or without resume levels, a shared pool with reserves and drains), links and flows between any end stations with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
 - Modbus TCP: slaves, `polls()`, open loop or with one request in flight, and `modbus_latency`;
 - MQTT: brokers, `publishes()` with QoS 0 and 1, `routes()` and `broker_queue`;
 - PROFINET RT: devices, `controls()` and its watchdog, `pn_latency`, `pn_jitter` and `pn_watchdog_expiries`;

@@ -126,6 +126,9 @@ class _Interpreter:
                         cell=d.cell,
                         resume=d.resume,
                         ingress_resume=d.ingress_resume,
+                        pool=d.pool,
+                        ingress_reserve=d.ingress_reserve,
+                        ingress_drain=d.ingress_drain,
                     )
                 elif isinstance(d, smol_ast.MqttBrokerDecl):
                     net.mqtt_broker(d.name, ip=d.ip)
