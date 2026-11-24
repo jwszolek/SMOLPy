@@ -29,10 +29,11 @@ dev = ["pytest>=8", "ruff", "mypy"]
 docs = ["mkdocs-material>=9"]
 # The native Rust engine (ADR-0008), released together with smolpy and with
 # the same version. At import smolpy checks the IR version the module reads,
-# and each run checks its capabilities. 1.13.0 runs everything up to ADR-0013:
-# ingress accounts, limits in frames and flows from any station; an older
-# engine refuses a run that needs what it lacks, by its capabilities.
-rust = ["smolpy-engine-rs>=1.13.0"]
+# and each run checks its capabilities. 1.14.0 runs everything up to ADR-0014:
+# limits in cells and resume levels; an older engine refuses a run that needs
+# what it lacks, by its capabilities. The floor is a release: a pre-release
+# in it would let pip pick the development builds published to PyPI.
+rust = ["smolpy-engine-rs>=1.14.0"]
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
