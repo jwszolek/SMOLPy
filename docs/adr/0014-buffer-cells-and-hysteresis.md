@@ -289,7 +289,7 @@ The switch is SMOL's own (ADR-0011, ADR-0013):
     - UDP loss of 0.64–0.74 %, against 0.55–0.66 %;
     - in the batch case, a ratio of 0.56–0.65, against 0.55; tail drop gives 0, and frames 0.29–0.37.
 - **The burst test** puts the model's held frames a little below the measured ones, by up to 72 cells: a burst can end in a drop state. 770 cells resuming at 698 fit the bursts better and lower the UDP loss to 0.69 % on SimPy, with the same runs. That is reported beside the scenario, which keeps 740 and 668.
-- **The `smolpy-engine-rs` floor** stays `>=1.13.0` until the release that carries this ADR; 1.13 refuses these scenarios by its capabilities. Raise it at that release.
+- **The `smolpy-engine-rs` floor** is `>=1.13.2.dev0`: the release after 1.13.1, and the development builds that lead to it, the first of which, 1.13.2.dev3, carries this ADR. 1.13 refuses these scenarios by its capabilities.
 
 ### Steps
 
