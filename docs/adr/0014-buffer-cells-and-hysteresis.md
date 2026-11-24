@@ -15,6 +15,8 @@
 
 ## Context
 
+> *Note, 2026-11-24:* [ADR-0015](0015-shared-pool-and-drain-resume.md) revises the switch model this ADR fits. With two senders the testbed shows one shared pool, with a reserve per port, and a drop state that ends after an amount of the buffer has been freed, not at a resume level of the port's own account. With one sender the two are equivalent, which is why this ADR fits every single-source measurement. The text below is as it was decided.
+
 ADR-0013 was checked on the testbed the same day.
 
 ### The scope is confirmed

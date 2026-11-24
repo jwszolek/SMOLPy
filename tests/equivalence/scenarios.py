@@ -599,6 +599,109 @@ def flood_drop_state() -> Scenario:
     return net.to_scenario(duration=40)
 
 
+def pool_two_sources() -> Scenario:
+    """A shared pool (ADR-0015): two constant sources fill a pool of 60
+    cells of 128 B beyond reserves of 6, with drop states ended by a drain
+    of 36 cells; a light port of small frames is admitted in its reserve
+    while the pool is full; PROFINET beside them."""
+    net = Network("pool-two-sources")
+    sw = net.switch(
+        "sw",
+        ports=6,
+        cell=128,
+        pool=Cells(60),
+        ingress_reserve=Cells(6),
+        ingress_drain=Cells(36),
+    )
+    left = net.adapter("left", ip="10.0.0.1")
+    right = net.adapter("right", ip="10.0.0.2")
+    light = net.adapter("light", ip="10.0.0.3")
+    srv = net.adapter("srv", ip="10.0.0.4")
+    plc = net.adapter("plc", ip="10.0.0.5")
+    io = net.profinet_device("io", ip="10.0.0.6")
+    net.link(left, sw, speed=1_000, length=5)
+    net.link(right, sw, speed=1_000, length=7)
+    net.link(light, sw, speed=1_000, length=9)
+    net.link(srv, sw, speed=100, length=10)
+    net.link(plc, sw, speed=100, length=10)
+    net.link(io, sw, speed=100, length=10)
+    plc.controls(io, cycle=1, inputs=64, outputs=64, hold=2)
+    left.sends(srv, rate=5_000, size=1_500)
+    right.sends(srv, rate=4_500, size=1_400, delay_ms=0.03)
+    light.sends(srv, rate=2_000, size=64, delay_ms=0.01)
+    net.observe("ingress_drops_total", on=sw, every=2)
+    net.observe("ingress_drop_episodes_total", on=sw, every=2)
+    net.observe("ingress_drop_time_total", on=sw, every=2)
+    net.observe("pool_occupancy", on=sw, every=0.5)
+    net.observe("frames_received", on=srv, every=2)
+    net.observe("latency", on=srv, every=2)
+    net.observe("pn_watchdog_expiries", on=plc, every=2)
+    return net.to_scenario(duration=40)
+
+
+def drain_tie() -> Scenario:
+    """Drop states ended by a drain at the instants of arrivals (ADR-0015):
+    two constant sources of 1230 B frames into one 100 Mb/s port, which takes
+    a frame every 100 us, B's link long enough (99 050 ns) that its frames
+    arrive exactly when the port takes one."""
+    net = Network("drain-tie")
+    sw = net.switch(
+        "sw",
+        ports=3,
+        pool=Frames(4),
+        ingress_reserve=Frames(1),
+        ingress_drain=Frames(2),
+        mac_table="topology",
+    )
+    a = net.adapter("a", ip="10.0.0.1")
+    b = net.adapter("b", ip="10.0.0.2")
+    sink = net.adapter("sink", ip="10.0.0.3")
+    net.link(a, sw, speed=1_000, length=2)
+    net.link(b, sw, speed=1_000, length=19_810)
+    net.link(sink, sw, speed=100, length=2)
+    a.sends(sink, rate=10_000, size=1_230)
+    b.sends(sink, rate=10_000, size=1_230)
+    for metric in ("ingress_drops_total", "ingress_drop_episodes_total", "pool_occupancy"):
+        net.observe(metric, on=sw, every=1)
+    net.observe("frames_received", on=sink, every=1)
+    net.observe("latency", on=sink, every=1)
+    return net.to_scenario(duration=20)
+
+
+def flood_full_pool() -> Scenario:
+    """Flooding with a full pool (ADR-0015): frames to a station behind a
+    second switch are flooded while another source keeps the pool full; a
+    flooded frame is charged once, to its port's reserve and the pool, and
+    an egress limit in bytes stands beside the pool."""
+    net = Network("flood-full-pool")
+    sw = net.switch(
+        "sw",
+        ports=4,
+        pool=Frames(8),
+        ingress_reserve=Frames(2),
+        ingress_drain=Frames(4),
+        buffer=14 * 1_500,
+    )
+    far = net.switch("far", ports=2)
+    a = net.adapter("a", ip="10.0.0.1")
+    c = net.adapter("c", ip="10.0.0.3")
+    d = net.adapter("d", ip="10.0.0.4")
+    b = net.adapter("b", ip="10.0.0.2")
+    net.link(a, sw, speed=1_000, length=5)
+    net.link(c, sw, speed=100, length=5)
+    net.link(d, sw, speed=1_000, length=5)
+    net.link(sw, far, speed=100, length=5)
+    net.link(b, far, speed=100, length=5)
+    a.sends(b, rate=6_000, size=1_500)
+    d.sends(c, rate=9_000, size=1_400, delay_ms=0.03)
+    for metric in ("ingress_drops_total", "egress_drops_total", "ingress_drop_episodes_total"):
+        net.observe(metric, on=sw, every=2)
+    net.observe("pool_occupancy", on=sw, every=1)
+    net.observe("frames_received", on=b, every=2)
+    net.observe("frames_received", on=c, every=2)
+    return net.to_scenario(duration=40)
+
+
 def random_drops() -> Scenario:
     """Poisson traffic into a bounded port at 150 % of its link: the buffer
     is nearly always full, so delay is capped and its mean is precise."""
@@ -694,6 +797,9 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "cells-mixed": cells_mixed,
     "hysteresis-tie": hysteresis_tie,
     "flood-drop-state": flood_drop_state,
+    "pool-two-sources": pool_two_sources,
+    "drain-tie": drain_tie,
+    "flood-full-pool": flood_full_pool,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
     "random-load": random_load,

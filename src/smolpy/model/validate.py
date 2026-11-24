@@ -107,6 +107,8 @@ METRIC_TARGETS: dict[str, tuple[type, ...] | None] = {
     "egress_drop_episodes_total": (SwitchNode,),
     "ingress_drop_time_total": (SwitchNode,),
     "egress_drop_time_total": (SwitchNode,),
+    # ADR-0015: the shared pool
+    "pool_occupancy": (SwitchNode,),
 }
 
 # Metrics that a station other than an adapter carries only since ADR-0013,
@@ -238,7 +240,12 @@ def _check_switch_buffers(node: SwitchNode) -> None:
                 f"{resume_label} must be a whole number of {unit} from 0 to less than"
                 f" {label} ({limit}), got {resume!r}",
             )
-    in_cells = node.buffer_cells is not None or node.ingress_buffer_cells is not None
+    _check_pool(node)
+    in_cells = (
+        node.buffer_cells is not None
+        or node.ingress_buffer_cells is not None
+        or node.pool_cells is not None
+    )
     cell = node.cell_bytes
     if cell is not None and (not _integer(cell) or cell < 1):
         raise _fail(node, f"cell must be a whole number of bytes, at least 1, got {cell!r}")
@@ -246,6 +253,49 @@ def _check_switch_buffers(node: SwitchNode) -> None:
         raise _fail(node, "a limit in cells needs cell, the cell size in bytes")
     if cell is not None and not in_cells:
         raise _fail(node, "cell is the size of the cells of a limit in cells; no limit is in cells")
+
+
+def _check_pool(node: SwitchNode) -> None:
+    """A switch's pool, reserve and drain (ADR-0015)."""
+    pools = [v for v in (node.pool_bytes, node.pool_frames, node.pool_cells) if v is not None]
+    if len(pools) > 1:
+        raise _fail(node, "pool is given in more than one unit (bytes, frames, cells); give one")
+    for unit, value in (("bytes", node.pool_bytes), ("frames", node.pool_frames),
+                        ("cells", node.pool_cells)):  # fmt: skip
+        if value is not None and (not _integer(value) or value < 1):
+            raise _fail(node, f"pool in {unit} must be a whole number of at least 1, got {value!r}")
+    pool, limit = node.pool_limit, node.ingress_limit
+    if pool is not None and limit is not None and pool[1] != limit[1]:
+        raise _fail(
+            node,
+            f"pool is in {pool[1]} and ingress_buffer in {limit[1]}: the ingress scope has"
+            " one unit",
+        )
+    scope_unit = node.ingress_unit
+    for label, value in (("ingress_reserve", node.ingress_reserve),
+                         ("ingress_drain", node.ingress_drain)):  # fmt: skip
+        if value is not None and (not _integer(value) or value < 1):
+            raise _fail(
+                node,
+                f"{label} must be a whole number of {scope_unit or 'units'}, at least 1,"
+                f" got {value!r}",
+            )
+    if node.ingress_reserve is not None:
+        if pool is None:
+            raise _fail(node, "ingress_reserve needs pool: it is room beside the shared pool")
+        if limit is not None and node.ingress_reserve > limit[0]:
+            raise _fail(
+                node,
+                f"ingress_reserve ({node.ingress_reserve}) is more than ingress_buffer"
+                f" ({limit[0]}), which caps what a port holds",
+            )
+    if node.ingress_drain is not None:
+        if pool is None and limit is None:
+            raise _fail(node, "ingress_drain needs pool or ingress_buffer: a refusal to end")
+        if node.ingress_buffer_resume is not None:
+            raise _fail(
+                node, "ingress_drain and ingress_resume both end a drop state; give one of them"
+            )
 
 
 def _check_limit(
@@ -473,6 +523,23 @@ def validate(scenario: Scenario) -> None:
                 raise ScenarioError(
                     f"{describe(node)}: {label} {in_bytes} B is smaller than the"
                     f" largest frame of the scenario, {largest} B, which it would always drop",
+                    ("nodes", i),
+                )
+        pool = node.pool_limit
+        if pool is not None and largest:
+            room = pool[0] + (node.ingress_reserve or 0)
+            need = (
+                largest
+                if pool[1] == "bytes"
+                else 1
+                if pool[1] == "frames"
+                else frame_cells(largest, node.cell_bytes or 1)
+            )
+            if room < need:
+                raise ScenarioError(
+                    f"{describe(node)}: pool and ingress_reserve hold {room} {pool[1]}, less than"
+                    f" the largest frame of the scenario ({largest} B, {need} {pool[1]}),"
+                    " which they would always drop",
                     ("nodes", i),
                 )
         for label, in_cells in (

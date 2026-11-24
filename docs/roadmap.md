@@ -268,6 +268,23 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
 - **Per-port metrics,** and a per-run metric: the run distribution now needs an audit of SimPy.
 - **A per-frame header in cells,** and limits per priority class.
 
+## A shared buffer pool ([ADR-0015](adr/0015-shared-pool-and-drain-resume.md))
+
+**Status: done.** A switch can share one pool among its ingress ports, beyond a reserve each, and end a port's drop state once it has freed an amount of its buffer. On all three backends.
+
+1. **The scenario: done.** `pool`, `ingress_reserve` and `ingress_drain`, validated, in the ingress scope's unit. Optional IR fields, so the IR stays version 2.
+2. **SimPy: done.** The pool, the reserves, the drain and `pool_occupancy`. Two sources' runs match 1 + (λ/2)·E[T].
+3. **Rust: done.** Bit for bit with SimPy.
+4. **ns-3: done.** Ethernet and PROFINET bit for bit with SimPy. `smol-ns3` format 6.
+5. **The testbed: done.** The LS108GP fitted on bursts, a reserve test and loss runs (716 / 54 / 72 cells), then validated on two senders, 10 Mb/s, 512 B and mixed sizes ([Execution backends](backends.md#a-shared-pool-the-ls108gp-calibrated-and-validated)).
+
+**Why.** Two senders to one port lost twice as many frames as ADR-0014 predicted, in runs half as long. The delay stayed capped as by one shared limit, and the Waveshare still lost nothing.
+
+**Still open:**
+- **Why two ports' drop states never overlap on the hardware.** In the model nearly half do.
+- **The pool's scope:** switch-wide or per egress port. A run with two congested egress ports would tell.
+- **Per-port metrics,** dynamic thresholds, and a drain for egress accounts.
+
 ## Candidates (not yet scheduled)
 
 - PROFINET IRT / TSN scheduling.

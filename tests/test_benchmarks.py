@@ -262,3 +262,52 @@ def test_cells_run_and_summary(tmp_path) -> None:
             assert s["drop_time_ms"] == 0
     table = cells.summarize_cells(out)
     assert table.count("| simpy |") == 4
+
+
+def test_pool_testbed_has_two_pis_and_the_waveshare() -> None:
+    """ADR-0015's validation scenario: each Pi a Modbus slave with its
+    flows, on ports 0 and 1, and the Waveshare."""
+    from benchmarks import pool
+    from smolpy.model import Flow, Poll, SwitchNode
+
+    pis, mbps, poll_ms, registers, ws = pool.CASES["two 4050"]
+    sc = pool.testbed(pool.switch(716, 54, 72), pis, 100, 1, mbps, poll_ms, registers, ws)
+    (sw,) = [n for n in sc.nodes if isinstance(n, SwitchNode)]
+    assert (sw.pool_cells, sw.ingress_reserve, sw.ingress_drain) == (716, 54, 72)
+    assert [(t.source, t.rate) for t in sc.traffic if isinstance(t, Flow)] == [
+        ("pi1", 4_050),
+        ("pi2", 4_040),
+    ]
+    assert {t.slave for t in sc.traffic if isinstance(t, Poll)} == {"pi1", "pi2", "waveshare"}
+
+
+def test_pool_burst_with_one_source_is_an_ingress_limit() -> None:
+    """One source: a pool of P with a reserve of R holds what P + R does."""
+    from benchmarks import pool
+
+    pooled = pool.burst(pool.switch(716, 54, 72), 64, 4_000, 239_454, "simpy")
+    single = pool.burst(pool.switch(770, 0, 72), 64, 4_000, 239_454, "simpy")
+    assert pooled == single
+
+
+def test_pool_validation_case_runs() -> None:
+    from benchmarks import pool
+
+    (row,) = pool.validate_case(
+        pool.switch(716, 54, 72), "two 4050", 2_000, (1,), ["simpy"], lambda s: None
+    )
+    assert row["waveshare"]["affected"] == 0
+    assert set(row["runs_by_port"]) <= {"0", "1"} and row["mean_run"] >= 1
+    hit, total = row["overlap"]
+    assert 0 <= hit <= total
+
+
+def test_pool_hardware_numbers_are_computed_from_the_raw_files() -> None:
+    from benchmarks import pool
+
+    if not pool.DATA.is_dir():
+        pytest.skip("the testbed's raw data is not here")
+    hw = pool.hardware()
+    (a, b) = hw["two 4050"]["udp"]
+    assert 0.006 < a["loss"] < 0.007 and 3.1 < a["mean_run"] < 3.4
+    assert hw["two 4050"]["waveshare"]["affected"] == 0

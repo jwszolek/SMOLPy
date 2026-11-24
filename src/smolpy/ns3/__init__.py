@@ -54,8 +54,9 @@ if TYPE_CHECKING:
 
 # 2: switch buffers (ADR-0011); 3: one request in flight, TCP (ADR-0012);
 # 4: ingress accounts, limits in frames, the Modbus counts of a slave (ADR-0013);
-# 5: cells, resume levels, drop episodes and drop time (ADR-0014)
-FORMAT_VERSION = 5
+# 5: cells, resume levels, drop episodes and drop time (ADR-0014);
+# 6: a shared pool, reserves and drains (ADR-0015)
+FORMAT_VERSION = 6
 UDP_IP_BYTES = 8 + 20
 ETHERNET_BYTES = 14 + 4  # header and FCS
 PROGRAM = "smol-ns3"
@@ -262,10 +263,11 @@ def _sends(
             now += tb.draw_ns(mean_ns * burst_len * rng.uniform(0.3, 1.2))
 
 
-def _limit(limit: tuple[int, str] | None, resume: int | None) -> str:
+def _limit(limit: tuple[int, str] | None, resume: int | None, unit_of: str | None = None) -> str:
     """A switch limit of the format: its value, its unit, b, f or c, and its
-    resume level; 0 for no limit and -1 for no resume level."""
-    unit = "b" if limit is None else limit[1][0]
+    resume level; 0 for no limit and -1 for no resume level. *unit_of* is
+    the scope's unit when it has no limit of its own (a pool, ADR-0015)."""
+    unit = (unit_of or "b")[0] if limit is None else limit[1][0]
     level = -1 if resume is None else resume
     return f"{0 if limit is None else limit[0]} {unit} {level}"
 
@@ -284,9 +286,11 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
     ]
     for n in scenario.nodes:
         if isinstance(n, model.SwitchNode):
+            pool = n.pool_limit
             lines.append(
                 f"switch {n.cell_bytes or 1} {_limit(n.egress_limit, n.buffer_resume)}"
-                f" {_limit(n.ingress_limit, n.ingress_buffer_resume)}"
+                f" {_limit(n.ingress_limit, n.ingress_buffer_resume, n.ingress_unit)}"
+                f" {0 if pool is None else pool[0]} {n.ingress_reserve or 0} {n.ingress_drain or 0}"
             )
         else:
             lines.append(f"adapter {n.mac} {n.ip}")  # a station, with IPv4
@@ -438,6 +442,8 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
         elif metric in ("drops", "drops_total"):
             ok = isinstance(target, model.SwitchNode)
             metric = "drops"  # smol-ns3 reports the total; drops is its difference
+        elif metric == "pool_occupancy":
+            ok = isinstance(target, model.SwitchNode)
         elif metric in ("ingress_drops_total", "egress_drops_total"):
             ok = isinstance(target, model.SwitchNode)
             metric = metric.removesuffix("_total")
@@ -507,6 +513,7 @@ def _metrics(
                 "egress_drops_total",
                 "ingress_drop_episodes_total",
                 "egress_drop_episodes_total",
+                "pool_occupancy",
                 "frames_sent",
                 "frames_received",
                 "modbus_timeouts",

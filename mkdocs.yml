@@ -57,6 +57,7 @@ nav:
       - ADR-0012 One Modbus Request in Flight: adr/0012-modbus-one-request-in-flight.md
       - ADR-0013 Ingress Buffer Accounting: adr/0013-ingress-buffer-accounting.md
       - ADR-0014 Buffer Cells and Hysteresis: adr/0014-buffer-cells-and-hysteresis.md
+      - ADR-0015 Shared Pool and Drain Resume: adr/0015-shared-pool-and-drain-resume.md
 
 markdown_extensions:
   - admonition

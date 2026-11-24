@@ -154,6 +154,9 @@ class _SmolTransformer(Transformer):
             cell=_bytes(kw["cell"]) if "cell" in kw else None,
             resume=_limit(kw["resume"]) if "resume" in kw else None,
             ingress_resume=_limit(kw["ingress_resume"]) if "ingress_resume" in kw else None,
+            pool=_limit(kw["pool"]) if "pool" in kw else None,
+            ingress_reserve=_limit(kw["ingress_reserve"]) if "ingress_reserve" in kw else None,
+            ingress_drain=_limit(kw["ingress_drain"]) if "ingress_drain" in kw else None,
         )
 
     def mqtt_broker_decl(self, meta: Any, children: list) -> MqttBrokerDecl:

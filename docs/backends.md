@@ -266,3 +266,66 @@ The columns:
 
 The results are in `benchmarks/results/2026-11-24-1006-simpy-rust-ns3-jaws-zbook-buffer-cells.json`. `python -m benchmarks cells-summary <file>` prints their tables, every burst included.
 
+### A shared pool: the LS108GP, calibrated and validated
+
+A switch can share one pool among its ingress ports, beyond a reserve each, and end a port's drop state once it has freed an amount of its buffer ([ADR-0015](adr/0015-shared-pool-and-drain-resume.md)). The engines apply the same rules:
+- **Rust** gives SimPy's results bit for bit, event counts included.
+- **ns-3** does too for Ethernet and PROFINET, random traffic included with the same seed.
+
+`python -m benchmarks pool` fits the LS108GP on one set of measurements, then predicts another without refitting. It computes the hardware's numbers itself, from the raw `.seq` and `.csv` files of the testbed.
+
+**Calibration.** Cells are 128 B. With one source, a pool P with a reserve R is an ingress limit of L = P + R, so the fit has two stages:
+1. **L and the drain D,** on the single-source measurements:
+    - the 57 burst tests;
+    - the loss runs at 8 100 frames/s: 0.55–0.59 % lost, runs of 6.42–6.68, none of a single frame.
+
+    The grid was L from 730 to 800 and D from 36 to 96. Best: L = 770 and D = 72, with a loss of 0.59 % and runs of 6.40.
+2. **R,** on the reserve test: Pi 1 holds the port full at a constant 9 000 frames/s, and Pi 2 sends bursts. Each modelled repetition starts at another phase of the background's 7.7 ms cycle of refill and drain.
+    - **The pace of Pi 2's 64 B bursts was not recorded,** and the burst tests saw 63 000 to 340 000 frames/s. It is fitted with R, from 110 000 to 230 000 frames/s.
+    - **R from 42 to 60 cells fits about equally well.** The best was R = 54 at 110 000 frames/s; R = 48 at 130 000 is nearly as good. So R is not sharply determined.
+
+| Pi 2's burst | 10 × 1 518 B | 20 × 1 518 B | 40 × 1 518 B | 50 × 64 B | 100 × 64 B | 200 × 64 B | 400 × 64 B |
+|---|---|---|---|---|---|---|---|
+| Measured: arrived | 5–9 (6.5) | 4–9 (6.5) | 7–12 (9) | 50 | 71–100 (100) | 112–168 (144) | 203–227 (207) |
+| Model, R = 54 | 4–10 (6.5) | 4–10 (6.5) | 4–10 (6.5) | 50 | 56–100 (96) | 68–176 (126) | 181–257 (202) |
+
+**The fitted LS108GP:** `cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells`.
+
+**Validation,** with those values. Three seeds per case, 60 s each, or 240 s at 10 Mb/s. Runs and single-frame shares are SimPy's, from an audit of its decisions:
+
+| Case | | Loss | Mean run | Single-frame runs | Pi's polls | RTT p99 / max (ms) | Waveshare |
+|---|---|---|---|---|---|---|---|
+| Two Pis, 2 × 4 050/s | hardware | 0.664 / 0.691 % | 3.24 / 3.35 | 13 % | 0.53 % | 8.48 / 9.26 | 0 |
+| | SimPy / Rust / ns-3 | 0.62 / 0.61 / 0.64 % | 3.76 / 3.74 / 3.80 | 6.8 % | 0.44 / 0.35 / 0.45 % | 8.2 / 8.5 | 0 |
+| Two Pis, 2 × 3 900/s | hardware | 0.036 / 0.039 % | 3.14 / 3.29 | 9–16 % | 0.04–0.06 % | 7.1 / 9.0 | 0 |
+| | SimPy / Rust / ns-3 | 0.024 / 0.021 / 0.024 % | 3.8 / 3.2 / 3.8 | 10 % | 0.01–0.02 % | 6.9 / 8.5 | 0 |
+| 10 Mb/s, 808/s | hardware | 0.60 % | 6.20 | 0.9 % | 0.49 % | 79.2 / 82.3 | |
+| | SimPy / Rust / ns-3 | 0.68 / 0.64 / 0.69 % | 6.38 / 6.35 / 6.39 | 0.3 % | 0.48–0.54 % | 76.2 / 80.0 | |
+| 10 Mb/s, 846/s | hardware | 4.27 % | 6.54 | 0.3 % | 4.03 % | 81.5 / 83.1 | |
+| | SimPy / Rust / ns-3 | 4.22 / 4.09 / 4.23 % | 6.60 / 6.61 / 6.58 | 0.4 % | 3.4–3.7 % | 78.6 / 80.0 | |
+| 512 B, 23 383/s | hardware | 0.117 % | 18.5 | 0 % | 0.08 % | 8.27 / 8.91 | 0 |
+| | SimPy / Rust / ns-3 | 0.098 / 0.116 / 0.100 % | 18.2 | 0 % | 0.09–0.11 % | 7.6 / 8.2 | 0 |
+| Mixed 1 518 + 512 B | hardware | 0.567 / 0.487 % (ratio 0.86) | 7.9, merged | | 0.36 % | 8.21 / 8.68 | 0 |
+| | SimPy / Rust / ns-3 | 0.60 / 0.54 % (ratio 0.89) | 8.2 | 0.1 % | 0.39–0.47 % | 7.6 / 8.0 | 0 |
+| ADR-0013's test, 8 100/s | hardware | 0.66 % | | | 0.49 % of polls sent | 8.21 / 8.69 | 0 |
+| | SimPy / Rust / ns-3 | 0.71 / 0.63 / 0.72 % | 6.3–6.5 | 0.4 % | 0.62 / 0.44 / 0.56 % | 7.6 / 8.0 | 0 |
+| Batch K = 8, 7 500/s | hardware | | | | ratio 0.55 | | |
+| | SimPy / Rust / ns-3 | 3.07 % | 8.5–8.6 | 12.5 % | ratio 0.60 / 0.59 / 0.63 | | 0 |
+
+- **Two senders are predicted, as ADR-0014 could not:**
+    - the loss at 2 × 4 050/s is 0.61–0.64 %, against 0.66–0.69 %, where ADR-0014 predicted 0.38 %;
+    - the runs are about half as long as with one sender: 3.7–3.8 in the model, 3.2–3.4 on the hardware;
+    - the Waveshare loses nothing.
+- **The single-source cases it was not fitted on** come out as measured:
+    - 10 Mb/s;
+    - 512 B;
+    - the mixed sizes' ratio, 0.89 against 0.86;
+    - the batch ratio, 0.59–0.63 against 0.55.
+- **The Pi's responses.** In ADR-0013's test the hardware retransmitted 133 of the 27 160 polls it sent, 0.49 %, not 0.44 %: it sent only 27 160 of its 30 000 poll instants. Counted the same way, the model's 0.44–0.62 % is within its engines' spread, so the residual gap of ADR-0014 is mostly this difference of denominators. The pool and the reserve do not change it.
+- **What the model does not get:**
+    - **The two Pis' drop states overlap in the model, and never on the hardware.** In SimPy 1 092 of 2 461 drop states of one Pi overlap one of the other's; on the hardware 0 of 2 072, merged by send time. A port refused while the pool is full is refused again while the other port drains the pool, so its runs are a little long (3.8 against 3.3) and rarely single (7 % against 13 %). The hardware seems to keep the other ports admitting while one is in its drop state. Finding how is the next step.
+    - **The round trips are a little shorter,** 8.2 / 8.5 ms against 8.5 / 9.3 ms. The model has no host processing time on either end.
+    - **At 2 × 3 900/s the model loses about 60 % of the hardware's frames,** 0.021–0.024 % against 0.036–0.039 %, from only about 30 runs per seed.
+
+The results are in `benchmarks/results/2026-11-24-1538-simpy-rust-ns3-jaws-zbook-shared-pool.json`. `python -m benchmarks pool-summary <file>` prints the calibration and validation tables.
+

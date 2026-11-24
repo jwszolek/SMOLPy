@@ -39,7 +39,7 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>] [pool=<limit>] [ingress_reserve=<limit>] [ingress_drain=<limit>]
 ```
 
 `mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
@@ -65,7 +65,19 @@ switch sw ports=8 buffer=115kB
 switch sw ports=8 ingress_buffer=60frames
 switch sw ports=8 buffer=115kB ingress_buffer=60frames
 switch sw ports=8 cell=128 ingress_buffer=740cells ingress_resume=668cells
+switch sw ports=8 cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells
 ```
+
+**A shared pool** ([ADR-0015](adr/0015-shared-pool-and-drain-resume.md)):
+- **`pool`** is a buffer shared by all the ports of the switch. Each port fills its own **`ingress_reserve`** first, and the pool beyond it.
+- **A frame is admitted** if it fits in its port's reserve, or else if the pool has room for the part beyond the reserve.
+- **`ingress_drain`** ends a port's drop state once the switch has freed that much of its buffer since the drop state began. With a drain a port enters the drop state on any refusal, and drops even frames that would fit in its reserve.
+- **Units.** `ingress_buffer`, `pool`, `ingress_reserve`, `ingress_resume` and `ingress_drain` are all in one unit.
+- **Rules:**
+    - `ingress_reserve` needs `pool`;
+    - `ingress_drain` needs `pool` or `ingress_buffer`;
+    - `ingress_drain` and `ingress_resume` exclude each other;
+    - `ingress_buffer`, if set, still caps each port.
 
 ### `mqtt_broker` — MQTT message broker
 
@@ -177,6 +189,7 @@ observe <metric> on <node> every=<ms>
 | `egress_drop_episodes_total` | episodes | Switch: runs of drops by its egress accounts so far |
 | `ingress_drop_time_total` | ms | Switch: time its ingress accounts spent in the drop state so far |
 | `egress_drop_time_total` | ms | Switch: time its egress accounts spent in the drop state so far |
+| `pool_occupancy` | pool's unit | Switch: what its ingress ports hold beyond their reserves, in its shared pool |
 
 Observing a metric on the wrong node type (or a metric that doesn't exist) is a semantic error, caught before the simulation runs.
 

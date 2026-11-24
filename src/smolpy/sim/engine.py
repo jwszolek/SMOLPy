@@ -228,17 +228,22 @@ class _Account:
         "episodes",
         "since",
         "drop_ns",
+        "switch",
+        "drain",
+        "drain_start",
     )
 
     def __init__(
         self,
-        limit: int,
+        limit: int | None,
         unit: str,
         env: _Environment,
         cell: int | None = None,
         resume: int | None = None,
+        switch: _Ingress | None = None,
+        drain: int | None = None,
     ) -> None:
-        self.limit = limit
+        self.limit = limit  # None: no cap of its own, only the switch's pool
         self.unit = unit
         self.cell = cell or 1
         self.resume = resume
@@ -249,6 +254,11 @@ class _Account:
         self.episodes = 0
         self.since = 0  # when it entered the drop state
         self.drop_ns = 0  # its time in the drop state before `since`
+        # an ingress account: its switch, with the pool and what it has freed,
+        # and the drain that ends its drop state (ADR-0015)
+        self.switch = switch
+        self.drain = drain
+        self.drain_start = 0
 
     def units(self, size: int) -> int:
         """What a frame of *size* bytes takes of the account."""
@@ -259,7 +269,11 @@ class _Account:
         return size
 
     def fits(self, size: int) -> bool:
-        return self.held + self.units(size) <= self.limit
+        u = self.units(size)
+        if self.limit is not None and self.held + u > self.limit:
+            return False
+        pool = None if self.switch is None else self.switch.pool
+        return pool is None or pool.fits(self.held, u)
 
     def admit(self, size: int) -> bool:
         """Decide a frame: False if it is dropped, by tail drop or the drop
@@ -270,19 +284,36 @@ class _Account:
         if not self.refused:
             self.refused = True
             self.episodes += 1
-        if not self.dropping and self.resume is not None and self.held > self.resume:
-            self.dropping = True
-            self.since = self.env._now
+        if not self.dropping:
+            if self.drain is not None:
+                self.dropping = True
+                self.since = self.env._now
+                self.drain_start = self.switch.freed  # type: ignore[union-attr]
+                self.switch.draining.append(self)  # type: ignore[union-attr]
+            elif self.resume is not None and self.held > self.resume:
+                self.dropping = True
+                self.since = self.env._now
         return False
 
     def charge(self, size: int) -> None:
-        self.held += self.units(size)
+        u = self.units(size)
+        if self.switch is not None and self.switch.pool is not None:
+            self.switch.pool.charge(self.held, u)
+        self.held += u
 
     def release(self, size: int) -> None:
-        self.held -= self.units(size)
-        if self.dropping and self.held <= self.resume:  # type: ignore[operator]
-            self.dropping = False
-            self.drop_ns += self.env._now - self.since
+        u = self.units(size)
+        if self.switch is not None and self.switch.pool is not None:
+            self.switch.pool.charge(self.held, -u)
+        self.held -= u
+        if self.switch is not None:
+            self.switch.free(u)
+        if self.dropping and self.resume is not None and self.held <= self.resume:
+            self.leave()
+
+    def leave(self) -> None:
+        self.dropping = False
+        self.drop_ns += self.env._now - self.since
 
     def drop_time_ns(self) -> int:
         """Its time in the drop state so far."""
@@ -856,13 +887,51 @@ def _topology_mac_table(
     return table
 
 
-class _Ingress:
-    """A switch's ingress accounts, by port, and the frames they dropped
-    (ADR-0013)."""
+class _Pool:
+    """A switch's shared buffer pool (ADR-0015): what its ingress ports hold
+    beyond their reserves, Σ max(0, held − reserve), against its limit."""
 
-    def __init__(self, accounts: dict[int, _Account]) -> None:
+    __slots__ = ("limit", "reserve", "used")
+
+    def __init__(self, limit: int, reserve: int) -> None:
+        self.limit = limit
+        self.reserve = reserve
+        self.used = 0
+
+    def _beyond(self, held: int) -> int:
+        return held - self.reserve if held > self.reserve else 0
+
+    def fits(self, held: int, u: int) -> bool:
+        """Whether a port holding *held* can take *u* more: in its reserve, or
+        in the pool for the part beyond it."""
+        return self.used + self._beyond(held + u) - self._beyond(held) <= self.limit
+
+    def charge(self, held: int, u: int) -> None:
+        """A port holding *held* takes *u* more, or gives *-u* back."""
+        self.used += self._beyond(held + u) - self._beyond(held)
+
+
+class _Ingress:
+    """A switch's ingress accounts, by port, the frames they dropped, and
+    with a pool, the pool, what the switch has freed so far and the ports
+    whose drop state a drain ends (ADR-0013, ADR-0015)."""
+
+    def __init__(self, accounts: dict[int, _Account], pool: _Pool | None = None) -> None:
         self.accounts = accounts
         self.dropped = 0
+        self.pool = pool
+        self.freed = 0  # units freed by releases, in the ingress scope's unit
+        self.draining: list[_Account] = []  # in their drop state, with a drain
+
+    def free(self, u: int) -> None:
+        """A release of *u*: every drained drop state ends at the release at
+        which its drain has been freed since it began."""
+        self.freed += u
+        if self.draining:
+            for account in list(self.draining):
+                if self.freed - account.drain_start >= account.drain:  # type: ignore[operator]
+                    self.draining.remove(account)
+                    account.leave()
 
 
 def _switch_forwarder(
@@ -1141,21 +1210,33 @@ def run_simulation(
         return isinstance(node, model.SwitchNode) and node.bounded
 
     def _account(node: model.SwitchNode, ingress: bool) -> _Account | None:
-        limit = node.ingress_limit if ingress else node.egress_limit
-        if limit is None:
-            return None
-        resume = node.ingress_buffer_resume if ingress else node.buffer_resume
-        return _Account(limit[0], limit[1], env, node.cell_bytes, resume)
+        if not ingress:
+            limit = node.egress_limit
+            if limit is None:
+                return None
+            return _Account(limit[0], limit[1], env, node.cell_bytes, node.buffer_resume)
+        cap = node.ingress_limit
+        return _Account(
+            None if cap is None else cap[0],
+            node.ingress_unit,  # type: ignore[arg-type]
+            env,
+            node.cell_bytes,
+            node.ingress_buffer_resume,
+            ingress_of[node.name],
+            node.ingress_drain,
+        )
 
     def _egress(node: model.NodeSpec) -> _Account | None:
         return _account(node, False) if isinstance(node, model.SwitchNode) else None
 
     # ingress accounts, by switch and port (ADR-0013)
-    ingress: dict[str, _Ingress] = {
-        name: _Ingress({})
-        for name, node in nodes.items()
-        if isinstance(node, model.SwitchNode) and node.ingress_limit is not None
-    }
+    ingress: dict[str, _Ingress] = {}
+    for name, node in nodes.items():
+        if isinstance(node, model.SwitchNode) and node.ingress_accounted:
+            pool = node.pool_limit
+            shared = None if pool is None else _Pool(pool[0], node.ingress_reserve or 0)
+            ingress[name] = _Ingress({}, shared)
+    ingress_of = ingress
 
     # Build directed link channels from topology
     next_port: dict[str, int] = defaultdict(int)
@@ -1430,6 +1511,13 @@ def run_simulation(
             dropped = _dropped(ports, ingress.get(target.name), obs.metric)
             window = obs.metric == "drops"
             env.process(_count_sampler(env, dropped, period, samples, window))
+        elif obs.metric == "pool_occupancy" and isinstance(target, model.SwitchNode):
+            accounts = ingress.get(target.name)
+            shared_pool = None if accounts is None else accounts.pool
+            occupancy = (
+                (lambda p: lambda: p.used)(shared_pool) if shared_pool is not None else (lambda: 0)
+            )
+            env.process(_count_sampler(env, occupancy, period, samples))
         elif obs.metric in (
             "ingress_drop_episodes_total",
             "egress_drop_episodes_total",

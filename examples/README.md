@@ -1,6 +1,6 @@
 # SMOLPy Examples
 
-Thirteen ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, a switch with a bounded buffer, a Modbus master that waits for each response, and a switch that bounds each ingress port.  Every example opens a live desktop dashboard as the simulation runs.
+Thirteen ready-to-run scenarios covering basic connectivity, file transfers, load scaling, multi-tier access bottlenecks, MQTT publish-subscribe, Modbus TCP polling, PROFINET RT cyclic I/O, a switch with a bounded buffer, a Modbus master that waits for each response, and the calibrated testbed switch.  Every example opens a live desktop dashboard as the simulation runs.
 
 ## Prerequisites
 
@@ -397,19 +397,19 @@ The bottleneck of example 11 at 99 % load, with `buffer=91080`, so that a full q
 - **On ns-3** the poll runs over TCP with Linux's minimum RTO of 200 ms. A lost response is retransmitted and arrives about 210 ms after its request: `modbus_latency` peaks at about 216 ms, the poll skips 210 instants in all, and no timeout fires.
 - **Without `outstanding` and `timeout`** the poll is open loop: a lost poll stays unanswered (`modbus_unanswered`), and the next ones go out on schedule.
 
-### 13. `example_ingress_buffer.smol` — A switch that bounds each ingress port, in cells
+### 13. `example_ingress_buffer.smol` — The calibrated LS108GP
 
 ```bash
 uv run smolpy run examples/example_ingress_buffer.smol
 uv run smolpy run examples/example_ingress_buffer.smol --backend ns3
 ```
 
-The testbed as measured for [ADR-0013](https://jwszolek.github.io/SMOLPy/adr/0013-ingress-buffer-accounting/) and [ADR-0014](https://jwszolek.github.io/SMOLPy/adr/0014-buffer-cells-and-hysteresis/): the Raspberry Pi is one `modbus_slave` that also sends Poisson UDP to the laptop at 99.7 % of its 100 Mb/s port, and a Waveshare relay module on another port is polled every 20 ms. The switch holds `cell=128 ingress_buffer=740cells ingress_resume=668cells`: 740 cells of 128 B per ingress port, and once full, nothing until it is back at 668.
+The testbed switch as fitted for [ADR-0015](https://jwszolek.github.io/SMOLPy/adr/0015-shared-pool-and-drain-resume/): `cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells`. It has one packet memory of 128 B cells, a reserve of 54 cells for each port, and a drop state that ends once the switch has freed 72 cells. The Raspberry Pi is one `modbus_slave` that also sends Poisson UDP to the laptop at 99.7 % of its 100 Mb/s port, and a Waveshare relay module on another port is polled every 20 ms.
 
-- **The Pi's port fills.** Its UDP frames and its Modbus responses are dropped in runs of about 6 frames: 0.63 % of its frames on SimPy, in 249 runs (`ingress_drops_total`, `ingress_drop_episodes_total`), and 10 of its polls time out.
-- **The Waveshare's port never does.** None of its polls times out, although its responses queue on the same full port to the laptop.
-- **With `buffer=91080` instead,** one egress buffer of 60 full frames, the Waveshare loses responses too: 4 on SimPy.
+- **The Pi's port fills.** Its UDP frames and its Modbus responses are dropped in runs of about 6 frames: 0.60 % of its frames on SimPy, and 7 of its polls time out.
+- **The Waveshare's frames always fit in its reserve,** so none of its polls times out.
 - **On ns-3** TCP retransmits each lost response after about 210 ms, so no poll times out.
+- **The earlier models,** ADR-0014's 740 cells resuming at 668 and ADR-0013's 60 frames, are kept as comments in the file.
 
 ---
 
@@ -447,6 +447,7 @@ net.link(edge_sw, core_sw, speed=1_000, length=5)   # inter-switch uplink
 | `egress_drop_episodes_total` | episodes | Switch: runs of drops by its egress accounts so far |
 | `ingress_drop_time_total` | ms | Switch: time its ingress accounts spent in the drop state so far |
 | `egress_drop_time_total` | ms | Switch: time its egress accounts spent in the drop state so far |
+| `pool_occupancy` | pool's unit | Switch: what its ingress ports hold beyond their reserves, in its shared pool |
 
 ### Traffic patterns
 

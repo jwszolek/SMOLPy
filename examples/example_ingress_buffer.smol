@@ -1,6 +1,7 @@
-# Ingress buffer accounting (ADR-0013), in cells with a resume threshold
-# (ADR-0014): the port that congests the switch loses its frames, in runs,
-# and another port's frames to the same place do not.
+# The calibrated LS108GP (ADR-0013 to ADR-0015): one packet memory shared by
+# its ports, a reserve for each, and a drop state that ends once the switch
+# has freed some of it. The port that congests the switch loses its frames,
+# in runs, and another port's frames to the same place do not.
 #
 # The testbed of ADR-0011 to ADR-0013, as measured: a TP-Link LS108GP. A
 # Raspberry Pi on a 1 Gb/s port sends Poisson UDP traffic of 1518 B frames to
@@ -10,18 +11,22 @@
 # port is polled every 20 ms. Both servers' responses are small, and both
 # queue on the laptop's port behind the UDP stream.
 #
-# The switch holds 740 cells of 128 B per ingress port, a frame taking
-# ceil(bytes / 128) of them: 12 for a UDP frame, 1 for a Modbus response.
-# When a frame does not fit, the port drops every frame arriving on it until
-# its occupancy is back at 668 cells, 6 full frames lower: so the Pi's UDP
-# frames are lost in runs of about 6, and its small responses with them,
-# while the Waveshare's port never fills. On the hardware 0.44 % of the Pi's
+# The switch stores frames in cells of 128 B, a frame taking ceil(bytes / 128)
+# of them: 12 for a UDP frame, 1 for a Modbus response. Each port has a
+# reserve of 54 cells, and beyond it the ports share a pool of 716. When a
+# frame finds no room, its port drops every frame arriving on it until the
+# switch has freed 72 cells, 6 full frames: so the Pi's UDP frames are lost in
+# runs of about 6, and its small responses with them, while the Waveshare's
+# few frames always fit in its reserve. The three values were fitted on burst
+# tests, a reserve test and loss runs, and then predicted two Pis sending at
+# once, a 10 Mb/s port, and 512 B and mixed frames (docs/backends.md). On the hardware 0.44 % of the Pi's
 # polls were retransmitted, none of the Waveshare's, 0.55-0.66 % of the UDP
 # frames were lost, in runs of 6.4-6.7 and never alone.
 #
-# ADR-0013's model, ingress_buffer=60frames, gives the same numbers for these
-# 1518 B frames, but holds 60 frames of any size: three times too few 512 B
-# frames, and twelve times too few 64 B ones, against the burst tests.
+# With one sender this is ADR-0014's ingress_buffer=770cells with a resume
+# level 72 cells lower. ADR-0013's ingress_buffer=60frames gives the same
+# numbers for 1518 B frames, but holds 60 frames of any size: three times too
+# few 512 B frames, and twelve times too few 64 B ones.
 #
 # The Modbus metrics observed on each slave count the polls of that slave.
 # Replace the switch's limits with buffer=91080, one egress buffer of 60 full
@@ -34,7 +39,8 @@
 
 network "ingress" {
 
-    switch       sw        ports=3 cell=128 ingress_buffer=740cells ingress_resume=668cells
+    switch       sw        ports=3 cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells
+    # ADR-0014: switch sw ports=3 cell=128 ingress_buffer=740cells ingress_resume=668cells
     # ADR-0013: switch sw ports=3 ingress_buffer=60frames
     modbus_slave pi        ip=10.0.0.1 unit_id=1
     modbus_slave waveshare ip=10.0.0.3 unit_id=1
@@ -56,6 +62,7 @@ network "ingress" {
     observe ingress_drops_total         on sw every=1000
     observe ingress_drop_episodes_total on sw every=1000
     observe ingress_drop_time_total     on sw every=1000
+    observe pool_occupancy              on sw every=1000
 
     simulate duration=30000 mode=headless
 }

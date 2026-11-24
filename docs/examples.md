@@ -247,21 +247,24 @@ The same bottleneck at 99 % load, with `buffer=91080`, so that a full queue drop
 
 See [Modbus TCP](modbus.md#one-request-in-flight) for the model.
 
-## 13. A switch that bounds each ingress port — [`example_ingress_buffer.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_ingress_buffer.smol)
+## 13. The calibrated LS108GP — [`example_ingress_buffer.smol`](https://github.com/jwszolek/SMOLPy/blob/main/examples/example_ingress_buffer.smol)
 
-The testbed of [ADR-0013](adr/0013-ingress-buffer-accounting.md) and [ADR-0014](adr/0014-buffer-cells-and-hysteresis.md): a Raspberry Pi is one `modbus_slave` that sends Poisson UDP at 99.7 % of the laptop's 100 Mb/s port and answers the laptop's polls every 10 ms; a Waveshare relay module on another port is polled every 20 ms. The switch holds `cell=128 ingress_buffer=740cells ingress_resume=668cells` per ingress port. Simulation: **30 s**, seed 42.
+The testbed of [ADR-0013](adr/0013-ingress-buffer-accounting.md) to [ADR-0015](adr/0015-shared-pool-and-drain-resume.md):
+- a Raspberry Pi is one `modbus_slave` that sends Poisson UDP at 99.7 % of the laptop's 100 Mb/s port and answers the laptop's polls every 10 ms;
+- a Waveshare relay module on another port is polled every 20 ms;
+- the switch is the fitted LS108GP, `cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells`: one pool shared by its ports, a reserve for each, and a drop state that ends once 72 cells have been freed.
 
-| Switch | Backend | Pi: `modbus_timeouts` | Waveshare: `modbus_timeouts` | Pi's frames dropped | Mean run |
-|---|---|---|---|---|---|
-| `740cells`, resume `668cells` | `simpy` | 10 | 0 | 0.63 % | 6.0 |
-| | `rust` | 8 | 0 | 0.57 % | 6.5 |
-| | `ns3` | 0, 14 windows above 100 ms | 0 | 0.64 % | 6.1 |
-| `buffer=91080` | `simpy` | 11 | 4 | 0.63 % | – |
-| | `rust` | 13 | 11 | 0.55 % | – |
+Simulation: **30 s**, seed 42.
 
-- **The Pi's port fills, the Waveshare's never does.** With ingress accounts the Waveshare loses nothing, as on the hardware.
-- **Losses come in runs of about 6 frames** (`ingress_drops_total / ingress_drop_episodes_total`): once the Pi's port is full, it drops every frame until it has drained 72 cells, 6 full frames. Its small responses are lost with them, as on the hardware.
-- **With one egress buffer**, the Waveshare's responses queue behind the same full port and are lost too.
-- **On ns-3** a lost response is retransmitted by TCP after about 210 ms, so `modbus_latency:pi` has windows above 100 ms and no poll times out.
+| Backend | Pi: `modbus_timeouts` | Waveshare: `modbus_timeouts` | Pi's frames dropped | Mean run |
+|---|---|---|---|---|
+| `simpy` | 7 | 0 | 0.60 % | 6.1 |
+| `rust` | 9 | 0 | 0.53 % | 6.4 |
+| `ns3` | 0, 10 windows above 100 ms | 0 | 0.60 % | 6.2 |
 
-See [Execution backends](backends.md#ingress-buffers) for the testbed comparison.
+- **The Pi's port fills, the Waveshare's never does:** its few frames always fit in its reserve.
+- **Losses come in runs of about 6 frames** (`ingress_drops_total / ingress_drop_episodes_total`), and the Pi's small responses are lost with them, as on the hardware.
+- **On ns-3** a lost response is retransmitted by TCP after about 210 ms, so no poll times out.
+- **The earlier models** are kept as comments in the file: ADR-0014's 740 cells resuming at 668, and ADR-0013's 60 frames.
+
+See [Execution backends](backends.md#a-shared-pool-the-ls108gp-calibrated-and-validated) for the calibration and the validation.

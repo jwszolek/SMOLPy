@@ -15,6 +15,8 @@
 ## Context
 
 > *Note, 2026-11-24:* the unit is refuted by [ADR-0014](0014-buffer-cells-and-hysteresis.md). Burst tests with 512 B and 64 B frames show that the testbed switch counts 128 B cells, not frames, and its loss runs show a resume threshold. The scope of this ADR, accounting per ingress port, is confirmed. The text below is as it was decided.
+>
+> *Note, 2026-11-24:* [ADR-0015](0015-shared-pool-and-drain-resume.md) adds the shared pool this ADR names as its next extension: the ingress accounts of a switch can share one pool, beyond a reserve each.
 
 ### The testbed, measured more widely
 

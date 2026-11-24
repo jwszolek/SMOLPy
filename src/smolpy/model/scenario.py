@@ -42,6 +42,12 @@ _OMITTED_WHEN_UNSET = {
     "ingress_buffer_cells",
     "buffer_resume",
     "ingress_buffer_resume",
+    # ADR-0015: a shared pool, reserves and drains
+    "pool_bytes",
+    "pool_frames",
+    "pool_cells",
+    "ingress_reserve",
+    "ingress_drain",
     "outstanding",
     "timeout_ms",
 }
@@ -77,7 +83,12 @@ class SwitchNode:
     *cell_bytes* (ADR-0014), at most one per account; ``None`` everywhere is
     unbounded. A frame that does not fit is dropped. With a resume level, in
     its limit's unit, the account then drops every frame until a release
-    brings it to that level (ADR-0014)."""
+    brings it to that level (ADR-0014).
+
+    A *pool* is shared by the ingress ports, for what each holds beyond its
+    *ingress_reserve*; with *ingress_drain*, a port's drop state ends once
+    the switch has freed that much since it began (ADR-0015). All of the
+    ingress scope is in one unit."""
 
     kind: ClassVar[str] = "switch"
     name: str
@@ -94,11 +105,35 @@ class SwitchNode:
     ingress_buffer_cells: int | None = None
     buffer_resume: int | None = None
     ingress_buffer_resume: int | None = None
+    pool_bytes: int | None = None
+    pool_frames: int | None = None
+    pool_cells: int | None = None
+    ingress_reserve: int | None = None
+    ingress_drain: int | None = None
 
     @property
     def bounded(self) -> bool:
         """Whether any account of the switch has a limit."""
-        return self.egress_limit is not None or self.ingress_limit is not None
+        return (
+            self.egress_limit is not None
+            or self.ingress_limit is not None
+            or self.pool_limit is not None
+        )
+
+    @property
+    def pool_limit(self) -> tuple[int, LimitUnit] | None:
+        return _limit(self.pool_bytes, self.pool_frames, self.pool_cells)
+
+    @property
+    def ingress_accounted(self) -> bool:
+        """Whether the switch keeps ingress accounts: a limit or a pool."""
+        return self.ingress_limit is not None or self.pool_limit is not None
+
+    @property
+    def ingress_unit(self) -> LimitUnit | None:
+        """The unit of the ingress scope: its limit's, or its pool's."""
+        limit = self.ingress_limit or self.pool_limit
+        return None if limit is None else limit[1]
 
     @property
     def egress_limit(self) -> tuple[int, LimitUnit] | None:
