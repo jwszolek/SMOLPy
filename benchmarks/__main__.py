@@ -19,6 +19,8 @@ python -m benchmarks pool [--duration 60000] [--backend simpy rust ns3]
 python -m benchmarks pool-summary benchmarks/results/<file>.json
 python -m benchmarks switch-drop [--duration 60000] [--backend simpy rust ns3]
 python -m benchmarks switch-drop-summary benchmarks/results/<file>.json
+python -m benchmarks light-port [--duration 56000] [--seeds 1 2 3]
+python -m benchmarks light-port-summary benchmarks/results/<file>.json
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from benchmarks import cells, closed_loop, ingress, loss, pool, switch_drop
+from benchmarks import cells, closed_loop, ingress, light_port, loss, pool, switch_drop
 from benchmarks.load import DURATION_MS, LOADS, run_load, summarize_load
 from benchmarks.runner import parse_size, run_batch, run_suite, size_label, summarize
 
@@ -178,6 +180,18 @@ def main() -> None:
     sd_summ = sub.add_parser("switch-drop-summary", help="markdown tables of a switch-drop file")
     sd_summ.add_argument("file", type=Path)
 
+    lp = sub.add_parser(
+        "light-port",
+        help="ADR-0017 Part 2: a light port's protection, against the quick model and hardware",
+    )
+    lp.add_argument("--duration", type=float, default=light_port.DURATION_MS, help="ms per run")
+    lp.add_argument("--seeds", type=int, nargs="+", default=list(light_port.SEEDS))
+    lp.add_argument("--label", default="light-port")
+    lp.add_argument("--out", type=Path, default=None)
+
+    lp_summ = sub.add_parser("light-port-summary", help="markdown tables of a light-port file")
+    lp_summ.add_argument("file", type=Path)
+
     a = p.parse_args()
     if a.cmd == "run":
         sizes = [parse_size(s) for s in a.frames]
@@ -234,6 +248,12 @@ def main() -> None:
         print(switch_drop.summarize(out))
     elif a.cmd == "switch-drop-summary":
         print(switch_drop.summarize(a.file))
+    elif a.cmd == "light-port":
+        out = light_port.run_light_port(a.duration, tuple(a.seeds), a.label, a.out)
+        print(f"results written to {out}")
+        print(light_port.summarize(out))
+    elif a.cmd == "light-port-summary":
+        print(light_port.summarize(a.file))
     elif a.cmd == "batch":
         frames = parse_size(a.frames)
         r = run_batch(a.scenario, frames, a.metrics, a.runs, a.jobs, a.timeout, a.seed, a.backend)

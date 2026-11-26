@@ -302,6 +302,23 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
 - **The two-sender loss gap:** the model loses 3–22 % less than the hardware with two senders, whatever the scope.
 - **Per-port metrics,** so that a port's runs need no audit.
 - **Dynamic thresholds.**
+- **Unequal loads:** refuted out of sample on 2026-11-25. A light port is protected far beyond its reserve, and the heavy port's runs are longer. Taken up by [ADR-0017](adr/0017-drain-counted-net.md).
+
+## The drain counted net, and a light port protected ([ADR-0017](adr/0017-drain-counted-net.md))
+
+**Status: done.** Both parts are built on the three backends and validated on the testbed.
+
+1. **Part 1, the drain counted net: done.** With `ingress_drain_count=net` the switch's drop state ends when its ingress occupancy has fallen by D since the entry, so frames admitted in the state lengthen it. On all three backends, bit for bit, with the one-sender identity with ADR-0016 and the duration `T₀ / (1 − λ_l·u_l·τ)` with a light port.
+2. **Part 2, the protection of a light port: done.**
+    - The pool's use counts the total occupancy (`ingress_pool_count=total`).
+    - A dynamic threshold applies outside the state (`ingress_alpha=24`, pool 740).
+    - At the entry of the state, the refused port and every port above 204 cells are marked and refused until it ends (`ingress_mark=204cells`).
+    - Confirmed by a prediction saved before the measurement (`2026-11-26_ciemno_mac`, 21 cases): the light stream's MAE is 0.12 points, against 0.29 for the best rule without one pool.
+    - With α, one sender's limit is 780 cells after a 12-cell frame, against ADR-0016's 768: the threshold takes the pool's use before the frame, as the quick model fitted it. Without α, one sender's results are ADR-0016's.
+3. **The testbed: done.** Fitted on five campaigns (101 cases). SMOLPy's own run, with no refitting and the testbed's Modbus polls, gives a light-loss MAE of 0.120 points blind on `2026-11-26_ciemno_mac`, against the quick model's 0.122. The heavy-loss MAE is 0.086 against 0.143, and the light-run MAE 0.119 against 0.138. On `noc2_mac`, in the fit, the light-loss MAE is 0.107 points.
+4. **Left open:** light frames of 5–6 cells in overload lose up to 0.7 points too much, in runs that are too long. The `smolpy-engine-rs` floor is to be raised at the release.
+
+**Why.** On unequal loads a light port at 1 200/s loses 1/80 of what the heavy port loses, where ADR-0016 says the same. While it is protected, the switch's drop state lasts `T₀ / (1 − λ_light / μ)`, within 1 %.
 
 ## Candidates (not yet scheduled)
 

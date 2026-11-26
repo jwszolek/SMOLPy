@@ -390,3 +390,34 @@ With `ingress_drop=switch` a switch has one drop state, entered at any port's re
 
 The results are in `benchmarks/results/2026-11-24-2122-simpy-rust-ns3-jaws-zbook-switch-drop-state.json`. `python -m benchmarks switch-drop-summary <file>` prints the tables.
 
+### The drain counted net
+
+With `ingress_drain_count=net` the switch's drop state ends once its ingress occupancy is `ingress_drain` below its value at the entry, so a light port's frames admitted in it lengthen it ([ADR-0017](adr/0017-drain-counted-net.md)). The engines apply the same rule:
+- **The capability** is `"drain_net"`. A backend without it rejects `ingress_drain_count`, either value.
+- **Rust** gives SimPy's results bit for bit, event counts included.
+- **ns-3** does too for Ethernet and PROFINET. The `switch` line of `smol-ns3` format 8 gains the count, 0 for `freed` and 1 for `net`.
+- **Without the parameter, or with `freed`,** every engine gives ADR-0016's results, event counts and benchmark hashes.
+- **With one sender** under ADR-0016's condition, `net` is `freed`, exactly.
+- **With a light port** whose frames all fit in its reserve, the state's mean duration is `T₀ / (1 − λ_l·u_l·τ)`: 732.1 µs in SimPy against 732.9 µs ± 2.3 µs, with T₀ = 660.8 µs, λ_l·u_l·τ = 0.098 and 1 954 states.
+
+### A light port protected: the LS108GP validated on unequal loads
+
+With `ingress_pool_count=total ingress_alpha=24 ingress_mark=204cells` and a pool of 740 cells, a light port is protected far beyond its reserve while a heavy one is refused ([ADR-0017](adr/0017-drain-counted-net.md), Part 2):
+- **The capability** is `"light_port"`. A backend without it rejects any of the three parameters.
+- **Rust and ns-3** give SimPy's results bit for bit on the deterministic scenarios, with SimPy's and Rust's event counts equal. The `switch` line of `smol-ns3` format 9 gains `<pool count> <alpha> <mark>`.
+- **Without the parameters** every engine gives Part 1's results, event counts and benchmark hashes. **With one sender and no α** they give ADR-0016's.
+- **With α, one sender's limit moves by about a frame.** The threshold takes the pool's use before the frame, as the quick model fitted it. With frames of 12 cells, a Pi alone holds 780 cells after a frame, against ADR-0016's 768.
+
+Validated with no refitting, on the testbed's scenario with its Modbus polls, at the rates the Pis sent. The model ran 3 seeds × 56 s, on SimPy, measured by its admission decisions:
+
+| Campaign | Cases | MAE light loss | MAE heavy loss | MAE light run | Waveshare polls lost |
+|---|---|---|---|---|---|
+| `2026-11-26_ciemno_mac`, blind | 21 | 0.120 pp | 0.086 pp | 0.119 frames | 0 |
+| `2026-11-25_noc2_mac`, in the fit | 44 | 0.107 pp | 0.073 pp | 0.107 frames | 0 |
+| *the quick model on `ciemno_mac`, saved before* | 21 | 0.122 pp | 0.143 pp | 0.138 frames | |
+
+- **Protected light streams lose 0.000–0.013 %,** against 0.000–0.004 % on the hardware.
+- **The largest error** is a light CBR stream of 5 000/s in 6-cell frames in overload: 4.03 % against 3.33 %. Light 5–6-cell frames in overload have runs that are too long: 3.16 against 2.38 at 4 000/s.
+- **Against the quick model with the same streams,** each stream's loss agrees within 2 standard errors in 29 of 38 comparisons. SMOLPy's heavy stream loses 0.03–0.18 points more where the light stream is CBR.
+
+The results are in `benchmarks/results/2026-11-26-1508-simpy-jaws-zbook-light-port.json`. `python -m benchmarks light-port-summary <file>` prints the tables.

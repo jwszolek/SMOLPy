@@ -126,6 +126,8 @@ SWITCH_MODES = ("store-and-forward", "cut-through")
 SWITCH_QOS = ("strict", "fifo")
 MAC_TABLES = ("learning", "topology")
 DROP_SCOPES = ("port", "switch")
+DRAIN_COUNTS = ("freed", "net")
+POOL_COUNTS = ("excess", "total")
 PATTERNS = ("constant", "poisson", "bursty", "batch")
 MQTT_QOS = (0, 1)  # QoS 2 is not modelled
 MODBUS_MAX_REGISTERS = 125  # Read Holding Registers limit
@@ -305,6 +307,53 @@ def _check_pool(node: SwitchNode) -> None:
                 "ingress_drop=switch needs ingress_drain: a switch-wide drop state ends"
                 " once the switch has freed that much",
             )
+    if node.ingress_drain_count is not None:
+        _one_of(node, "ingress_drain_count", node.ingress_drain_count, DRAIN_COUNTS)
+        if node.ingress_drop != "switch":
+            raise _fail(
+                node,
+                "ingress_drain_count needs ingress_drop=switch: it counts the drain of the"
+                " switch's drop state",
+            )
+    _check_light_port(node)
+
+
+def _check_light_port(node: SwitchNode) -> None:
+    """The protection of a light port (ADR-0017 Part 2): the pool's count,
+    the dynamic threshold and the mark, each with the switch's drop state
+    and its drain counted net."""
+    given = [
+        label
+        for label, value in (
+            ("ingress_pool_count", node.ingress_pool_count),
+            ("ingress_alpha", node.ingress_alpha),
+            ("ingress_mark", node.ingress_mark),
+        )  # fmt: skip
+        if value is not None
+    ]
+    if not given:
+        return
+    if node.ingress_pool_count is not None:
+        _one_of(node, "ingress_pool_count", node.ingress_pool_count, POOL_COUNTS)
+    alpha = node.ingress_alpha
+    if alpha is not None and (not _number(alpha) or not math.isfinite(alpha) or not alpha > 0):
+        raise _fail(node, f"ingress_alpha must be a positive number, got {alpha!r}")
+    mark = node.ingress_mark
+    if mark is not None and (not _integer(mark) or mark < 1):
+        raise _fail(
+            node,
+            f"ingress_mark must be a whole number of {node.ingress_unit or 'units'}, at least 1,"
+            f" got {mark!r}",
+        )
+    if node.ingress_drop != "switch" or node.ingress_drain_count != "net":
+        raise _fail(
+            node,
+            f"{given[0]} needs ingress_drop=switch and ingress_drain_count=net: it protects a"
+            " light port in the switch's drop state",
+        )
+    for label in ("ingress_pool_count", "ingress_alpha"):
+        if label in given and node.pool_limit is None:
+            raise _fail(node, f"{label} needs pool: it is about the shared pool's use")
 
 
 def _check_limit(

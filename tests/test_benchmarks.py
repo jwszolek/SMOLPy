@@ -377,3 +377,122 @@ def test_switch_drop_hardware_numbers_are_computed_from_the_raw_files() -> None:
     assert c["overlapping"] / c["runs_total"] < 0.05
     assert [round(p["affected"], 4) for p in h["pi"]] == [0.0061, 0.0062]
     assert h["waveshare"]["affected"] == 0
+
+
+def _campaign(tmp_path):
+    d = tmp_path / "camp"
+    d.mkdir()
+    (d / "plan.txt").write_text(
+        "# a plan\nk2000_8400 6400 2000 1472 const  light CBR\n"
+        "p5c4000_8400 6788 4000 554 poisson light Poisson, 5 cells\n"
+    )
+    (d / "RAPORT.md").write_text(
+        "| case | source | loss Pi1 % | loss Pi2 % | run Pi1 | run Pi2 | x |\n"
+        "|---|---|---|---|---|---|---|\n"
+        "| **k2000_8400** (6400/2000, 3×) | sprzęt | 4.491–4.738 | 0.000–0.001 (0+1+1 ramek)"
+        " | 6.33–6.37 | 1.00–1.00 | 1 |\n"
+        "| | ADR-0016 | 3.0 | 3.0 | 5.0 | 5.0 | 1 |\n"
+        "| **p5c4000_8400** (6788/4000, 3×) | sprzęt | 4.0 | 0.000–0.000 (0+0+0 ramek)"
+        " | 6.55–6.72 | – | 0 |\n"
+    )
+    for r, n in ((1, 112_000), (2, 112_100)):
+        (d / f"k2000_8400_r{r}_pi1_gen.txt").write_text(f"udp_gen: {n * 3} ramek w 56.00 s = x\n")
+        (d / f"k2000_8400_r{r}_pi2_gen.txt").write_text(f"udp_gen: {n} ramek w 56.00 s = x\n")
+    return d
+
+
+def test_light_port_reads_a_campaign(tmp_path) -> None:
+    from benchmarks import light_port as lp
+
+    _campaign(tmp_path)
+    assert lp.plan("camp", tmp_path) == {
+        "k2000_8400": (6_400.0, 2_000.0, 1_472, "const"),
+        "p5c4000_8400": (6_788.0, 4_000.0, 554, "poisson"),
+    }
+    hw = lp.hardware("camp", tmp_path)
+    assert hw["k2000_8400"]["loss"] == pytest.approx([0.046145, 0.000005])
+    assert hw["k2000_8400"]["mean_run"] == pytest.approx([6.35, 1.0])
+    assert hw["p5c4000_8400"] == {"loss": [0.04, 0.0], "mean_run": [6.635, None]}
+    r1, r2 = lp.sent_rates("camp", "k2000_8400", tmp_path)
+    assert (r1, r2) == pytest.approx((3 * 112_050 / 56, 112_050 / 56))
+    assert lp.sent_rates("camp", "p5c4000_8400", tmp_path) == (0.0, 0.0)
+    assert lp.frame(554) == 600 and lp.light_index({"rates": (6_788, 4_000), "payload": 554}) == 1
+    assert lp.light_index({"rates": (1_800, 6_290), "payload": 1_472}) == 0
+
+
+def test_light_port_quick_net_has_the_quick_model_s_streams() -> None:
+    from benchmarks import light_port as lp
+    from smolpy.model import Flow, SwitchNode
+
+    sc = lp.quick_net((6_000, 2_400, 554, "const")).to_scenario(duration=10)
+    (sw,) = [n for n in sc.nodes if isinstance(n, SwitchNode)]
+    assert (sw.pool_cells, sw.ingress_pool_count, sw.ingress_alpha, sw.ingress_mark) == (
+        740,
+        "total",
+        24.0,
+        204,
+    )
+    flows = [(f.rate, f.size, f.pattern) for f in sc.traffic if isinstance(f, Flow)]
+    assert flows == [
+        (6_000, 1_518, "poisson"),
+        (2_400, 600, "constant"),
+        (50, 64, "constant"),
+        (100, 64, "constant"),
+        (100, 64, "constant"),
+    ]
+
+
+def test_light_port_testbed_run_measures_each_stream() -> None:
+    from benchmarks import light_port as lp
+
+    run = lp._testbed((lp.LS108GP, (6_400, 2_000, 1_472, "const"), 1, 2_000))
+    heavy, light = run["streams"]
+    assert heavy["frames"] > 10_000 and 0.01 < heavy["loss"] < 0.1 and heavy["mean_run"] > 3
+    assert light["loss"] < 0.01  # protected
+    assert run["waveshare"]["affected"] == 0
+
+
+def test_light_port_summary(tmp_path) -> None:
+    from benchmarks import light_port as lp
+
+    s = {"loss": 0.01, "loss_se": 0.001, "mean_run": 2.0, "mean_run_se": 0.1}
+    q = {"loss": 0.011, "loss_se": 0.001, "mean_run": 2.1, "mean_run_se": 0.1}
+    stream = {"frames": 1, "loss": 0.02, "mean_run": 6.0}
+    light = {"frames": 1, "loss": 0.001, "mean_run": 1.5}
+    doc = {
+        "one_sender": {
+            "adr_0016": {"loss": 0.005, "mean_run": 6.2},
+            "part_2": {"loss": 0.0048, "mean_run": 6.3},
+        },
+        "quick_model": [
+            {"case": "c", "heavy": {"smolpy": s, "quick": q}, "light": {"smolpy": s, "quick": q}}
+        ],
+        "validation": [
+            {
+                "campaign": "camp",
+                "case": "k2000_8400",
+                "rates": (6_400, 2_000),
+                "payload": 1_472,
+                "hardware": {"loss": [0.03, 0.002], "mean_run": [6.4, 1.2]},
+                "runs": [{"streams": [stream, light], "waveshare": {"affected": 0}}],
+            }
+        ],
+    }
+    path = tmp_path / "lp.json"
+    path.write_text(json.dumps(doc))
+    text = lp.summarize(path)
+    assert "| c | 1.000 / 1.100 | 1.000 / 1.100 | 2.00 / 2.10 | 2.00 / 2.10 |" in text
+    assert "| k2000_8400 | 2.000 / 3.000 | 0.100 / 0.200 | 6.00 / 6.40 | 1.50 / 1.20 | 0 |" in text
+    assert "light loss 0.100 pp (bias -0.100); heavy loss 1.000 pp (bias -1.000)" in text
+
+
+def test_light_port_hardware_numbers_of_the_blind_campaign() -> None:
+    from benchmarks import light_port as lp
+
+    if not (lp.DATA / lp.CAMPAIGNS[0]).is_dir():
+        pytest.skip("the testbed's raw data is not here")
+    hw = lp.hardware(lp.CAMPAIGNS[0])
+    assert len(hw) == 21 and len(lp.plan(lp.CAMPAIGNS[0])) == 21
+    assert hw["k3000_8800"]["loss"] == pytest.approx([0.0821250, 0.06646])
+    assert hw["k5c4000_8400"]["mean_run"][1] is None
+    assert len(lp.hardware(lp.CAMPAIGNS[1])) == 44

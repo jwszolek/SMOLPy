@@ -95,6 +95,38 @@ sw = net.switch(
 - **`"port"`,** the default, is a drop state per ingress port, as above. With one sender the two give the same results.
 - **Rules.** `"switch"` needs `ingress_drain`.
 - **Metrics.** With `"switch"`, `ingress_drop_episodes_total` counts the switch's entries into its drop state and `ingress_drop_time_total` its time in it, so drops over episodes is the sum of every port's run in an episode, not one port's run.
+
+**The drain counted net** ([ADR-0017](adr/0017-drain-counted-net.md)). On the testbed switch, a light port's frames admitted in the drop state lengthen it: the state ends only once the occupancy, net of them, has fallen by the drain.
+
+```python
+sw = net.switch(
+    "sw", ports=8, cell=128,
+    pool=Cells(710), ingress_reserve=Cells(60), ingress_drain=Cells(72),
+    ingress_drop="switch", ingress_drain_count="net",
+)
+```
+
+- **`ingress_drain_count="net"`:** the switch's drop state ends at the release at which its ingress occupancy, summed over its ports, is `ingress_drain` below its value at the entry. That is what it has freed since the entry, less what it has admitted in the state. A refusal in the state still does not restart the count.
+- **`"freed"`,** the default, is ADR-0016's rule above: the state ends once the switch has freed `ingress_drain`. With one sender the two give the same results, if nothing is admitted in the state (ADR-0016's condition).
+- **Rules.** `ingress_drain_count` needs `ingress_drop="switch"`, either value.
+- **Metrics** keep their meaning. With `"net"`, `ingress_drop_time_total` grows by the time the admitted frames add.
+
+**The protection of a light port** ([ADR-0017](adr/0017-drain-counted-net.md), Part 2). On the testbed switch a light port is protected far beyond its reserve, while the heavy one is refused:
+
+```python
+sw = net.switch(
+    "sw", ports=8, cell=128,
+    pool=Cells(740), ingress_reserve=Cells(60), ingress_drain=Cells(72),
+    ingress_drop="switch", ingress_drain_count="net",
+    ingress_pool_count="total", ingress_alpha=24, ingress_mark=Cells(204),
+)
+```
+
+- **`ingress_pool_count="total"`:** the pool's use is the switch's whole ingress occupancy less one reserve, `max(0, Σ occ − R)`, so the switch holds about P + R however its ports share it. `"excess"`, the default, is `Σ max(0, occ − R)`, each port's reserve set aside.
+- **`ingress_alpha=α`:** outside the state, beyond its reserve, a frame of u units fits only while `occ + u ≤ R + α·(P − use)`, with the pool's use before the frame. A heavy port meets its threshold before the pool is full, so a light port's frame still finds room.
+- **`ingress_mark=Cells(n)`:** at the entry of the state the refused port, and each port holding more than n, are marked. In the state a marked port is refused, even within its reserve; an unmarked one is admitted if its frame fits, with α, or is marked at its first misfit. The marks last until the state ends. Without a mark, the state admits a frame only within its reserve.
+- **Rules.** Each needs `ingress_drop="switch"` and `ingress_drain_count="net"`; `ingress_pool_count` and `ingress_alpha` need `pool`.
+- **With one sender,** without α, the results are ADR-0016's. With α the sender's limit moves: it holds at most `⌊(α(P + R) + R − u)/(1 + α)⌋` before a frame of u beyond its reserve, 769 cells for the values above.
 - **On loss there is no retransmission** on SimPy and Rust. A poll whose request or response is lost stays unanswered (`modbus_unanswered`), or times out with `outstanding=1` and a timeout (below). On ns-3, Modbus and MQTT run over TCP, which retransmits ([Execution backends](backends.md#bounded-switch-buffers)).
 
 ## Traffic
@@ -271,7 +303,7 @@ result.export("out.csv", format="csv")   # explicit format override
 - **`smolpy.backends.installed()`** lists the backends that can run here.
 
 **The Rust backend** runs the whole model:
-- adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables, egress and ingress limits in bytes, frames or cells, with or without resume levels, a shared pool with reserves and drains, a drop state per port or for the whole switch), links and flows between any end stations with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
+- adapters, switches (`strict` and `fifo` QoS, `learning` and `topology` MAC tables, egress and ingress limits in bytes, frames or cells, with or without resume levels, a shared pool with reserves and drains, a drop state per port or for the whole switch, its drain counted freed or net, and the protection of a light port), links and flows between any end stations with every pattern (`constant`, `poisson`, `bursty`, `batch`) and with fixed or IMIX sizes;
 - Modbus TCP: slaves, `polls()`, open loop or with one request in flight, and `modbus_latency`;
 - MQTT: brokers, `publishes()` with QoS 0 and 1, `routes()` and `broker_queue`;
 - PROFINET RT: devices, `controls()` and its watchdog, `pn_latency`, `pn_jitter` and `pn_watchdog_expiries`;

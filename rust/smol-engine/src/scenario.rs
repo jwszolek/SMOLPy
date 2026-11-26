@@ -52,6 +52,16 @@ pub enum NodeKind {
         /// one drop state for the whole switch, `ingress_drop: "switch"`
         /// (ADR-0016)
         switch_drop: bool,
+        /// its drain counted net, `ingress_drain_count: "net"`: the fall of
+        /// the switch's ingress occupancy since the entry (ADR-0017)
+        drain_net: bool,
+        /// the protection of a light port (ADR-0017 Part 2): the pool's use
+        /// counted from the total occupancy, `ingress_pool_count: "total"`;
+        /// the dynamic threshold α; the level above which a port is marked at
+        /// the state's entry, in the ingress unit
+        pool_total: bool,
+        alpha: Option<f64>,
+        mark: Option<u64>,
     },
 }
 
@@ -307,6 +317,9 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "drain_resume",
         // ADR-0016
         "switch_drop_state",
+        // ADR-0017
+        "drain_net",
+        "light_port",
     ],
     notes: &[],
 };
@@ -573,6 +586,7 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
             let ingress_resume = take("ingress_buffer_resume", true)?;
             let reserve = take("ingress_reserve", false)?;
             let drain = take("ingress_drain", false)?;
+            let mark = take("ingress_mark", false)?;
             let scope = f
                 .take_or("ingress_drop")
                 .map(|v| v.as_str().unwrap_or("?").to_string());
@@ -582,6 +596,38 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 Some(other) => {
                     return Err(format!("switch {name}: unknown ingress_drop {other:?}"))
                 }
+            };
+            let count = f
+                .take_or("ingress_drain_count")
+                .map(|v| v.as_str().unwrap_or("?").to_string());
+            let drain_net = match count.as_deref() {
+                None | Some("freed") => false,
+                Some("net") => true,
+                Some(other) => {
+                    return Err(format!(
+                        "switch {name}: unknown ingress_drain_count {other:?}"
+                    ))
+                }
+            };
+            let pool_count = f
+                .take_or("ingress_pool_count")
+                .map(|v| v.as_str().unwrap_or("?").to_string());
+            let pool_total = match pool_count.as_deref() {
+                None | Some("excess") => false,
+                Some("total") => true,
+                Some(other) => {
+                    return Err(format!(
+                        "switch {name}: unknown ingress_pool_count {other:?}"
+                    ))
+                }
+            };
+            let alpha = match f.take_or("ingress_alpha") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_f64()
+                        .filter(|a| a.is_finite() && *a > 0.0)
+                        .ok_or_else(|| format!("switch {name}: ingress_alpha {v}"))?,
+                ),
             };
             let cells = |l: Option<Limit>| matches!(l, Some(Limit::Cells(_)));
             if (cells(buffer) || cells(ingress) || cells(pool)) != cell.is_some() {
@@ -623,6 +669,24 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                     "switch {name}: ingress_drop=switch needs ingress_drain"
                 ));
             }
+            if count.is_some() && !switch_drop {
+                return Err(format!(
+                    "switch {name}: ingress_drain_count needs ingress_drop=switch"
+                ));
+            }
+            if (pool_count.is_some() || alpha.is_some() || mark.is_some())
+                && !(switch_drop && drain_net)
+            {
+                return Err(format!(
+                    "switch {name}: ingress_pool_count, ingress_alpha and ingress_mark need \
+                     ingress_drop=switch and ingress_drain_count=net"
+                ));
+            }
+            if (pool_count.is_some() || alpha.is_some()) && pool.is_none() {
+                return Err(format!(
+                    "switch {name}: ingress_pool_count and ingress_alpha need pool"
+                ));
+            }
             NodeKind::Switch {
                 fifo,
                 topology,
@@ -635,6 +699,10 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 reserve,
                 drain,
                 switch_drop,
+                drain_net,
+                pool_total,
+                alpha,
+                mark,
             }
         }
         "modbus_slave" => {
@@ -863,6 +931,116 @@ mod tests {
         assert_eq!(sc.nodes.len(), 3);
         assert_eq!(sc.flows[0].rate, Q::int(50_000));
         assert_eq!(sc.duration_ms, Q::int(20));
+    }
+
+    #[test]
+    fn reads_the_count_of_the_drain() {
+        // ADR-0017: freed or net, only with a switch-wide drop state
+        let switch = |extra: &str| {
+            parse(&B1.replace(
+                "\"learning\"",
+                &format!("\"learning\", \"pool_frames\": 10, \"ingress_drain\": 2{extra}"),
+            ))
+        };
+        let net = switch(", \"ingress_drop\": \"switch\", \"ingress_drain_count\": \"net\"");
+        assert!(matches!(
+            net.unwrap().nodes[0].kind,
+            NodeKind::Switch {
+                switch_drop: true,
+                drain_net: true,
+                ..
+            }
+        ));
+        let freed = switch(", \"ingress_drop\": \"switch\", \"ingress_drain_count\": \"freed\"");
+        assert!(matches!(
+            freed.unwrap().nodes[0].kind,
+            NodeKind::Switch {
+                switch_drop: true,
+                drain_net: false,
+                ..
+            }
+        ));
+        assert!(switch(", \"ingress_drain_count\": \"net\"")
+            .unwrap_err()
+            .contains("ingress_drain_count needs ingress_drop=switch"));
+        assert!(
+            switch(", \"ingress_drop\": \"port\", \"ingress_drain_count\": \"freed\"")
+                .unwrap_err()
+                .contains("ingress_drain_count needs ingress_drop=switch")
+        );
+        assert!(
+            switch(", \"ingress_drop\": \"switch\", \"ingress_drain_count\": \"all\"")
+                .unwrap_err()
+                .contains("unknown ingress_drain_count")
+        );
+        assert!(CAPABILITIES.features.contains(&"drain_net"));
+    }
+
+    #[test]
+    fn reads_the_protection_of_a_light_port() {
+        // ADR-0017 Part 2: with a switch-wide drop state counted net
+        let switch = |extra: &str| {
+            parse(&B1.replace(
+                "\"learning\"",
+                &format!(
+                    "\"learning\", \"pool_frames\": 10, \"ingress_drain\": 2, \
+                     \"ingress_drop\": \"switch\"{extra}"
+                ),
+            ))
+        };
+        let all = switch(
+            ", \"ingress_drain_count\": \"net\", \"ingress_pool_count\": \"total\", \
+             \"ingress_alpha\": 24.0, \"ingress_mark\": 4",
+        );
+        assert!(matches!(
+            all.unwrap().nodes[0].kind,
+            NodeKind::Switch {
+                pool_total: true,
+                alpha: Some(24.0),
+                mark: Some(4),
+                ..
+            }
+        ));
+        let excess =
+            switch(", \"ingress_drain_count\": \"net\", \"ingress_pool_count\": \"excess\"");
+        assert!(matches!(
+            excess.unwrap().nodes[0].kind,
+            NodeKind::Switch {
+                pool_total: false,
+                alpha: None,
+                mark: None,
+                ..
+            }
+        ));
+        for extra in [
+            ", \"ingress_mark\": 4",
+            ", \"ingress_drain_count\": \"freed\", \"ingress_alpha\": 2",
+        ] {
+            assert!(switch(extra)
+                .unwrap_err()
+                .contains("need ingress_drop=switch and"));
+        }
+        let net = ", \"ingress_drain_count\": \"net\"";
+        for (extra, error) in [
+            (", \"ingress_alpha\": 0", "ingress_alpha 0"),
+            (", \"ingress_alpha\": -1.5", "ingress_alpha -1.5"),
+            (", \"ingress_mark\": 0", "ingress_mark 0"),
+            (
+                ", \"ingress_pool_count\": \"all\"",
+                "unknown ingress_pool_count",
+            ),
+        ] {
+            assert!(switch(&format!("{net}{extra}"))
+                .unwrap_err()
+                .contains(error));
+        }
+        let no_pool = parse(&B1.replace(
+            "\"learning\"",
+            "\"learning\", \"ingress_buffer_frames\": 10, \"ingress_drain\": 2, \
+             \"ingress_drop\": \"switch\", \"ingress_drain_count\": \"net\", \"ingress_alpha\": 2",
+        ));
+        assert!(no_pool.unwrap_err().contains("need pool"));
+        assert!(CAPABILITIES.features.contains(&"light_port"));
     }
 
     #[test]
