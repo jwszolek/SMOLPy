@@ -474,4 +474,4 @@ switch sw ports=8 cell=128 pool=740cells ingress_reserve=60cells ingress_drain=7
 - ~~**Run SMOLPy on the `ciemno_mac` and `noc2_mac` cases** with the Modbus traffic, and compare it with the quick model's predictions saved before each campaign.~~ Done: a light-loss MAE of 0.120 points blind, 0.107 in the fit.
 - **The residuals of §6.6** (light frames of 5–6 cells in overload; a light Poisson stream of 2 800–3 300/s in overload) are left as the model's stated error. They are not a reason for a further parameter.
 - **The heavy stream's 0.1 point above the quick model** in the light CBR cases: the quick model's admitted load is above the egress's capacity there. Not pursued.
-- **The `smolpy-engine-rs` floor** is raised to the release that carries this ADR, once it is published, never to a pre-release.
+- ~~**The `smolpy-engine-rs` floor** is raised to the release that carries this ADR.~~ Done: `>=1.17.0`. 1.16 refuses `ingress_drain_count` and Part 2's parameters by its capabilities.

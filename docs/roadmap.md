@@ -316,7 +316,7 @@ ns-3 cannot be installed with `pip`, so the backend ships as a container image, 
     - Confirmed by a prediction saved before the measurement (`2026-11-26_ciemno_mac`, 21 cases): the light stream's MAE is 0.12 points, against 0.29 for the best rule without one pool.
     - With α, one sender's limit is 780 cells after a 12-cell frame, against ADR-0016's 768: the threshold takes the pool's use before the frame, as the quick model fitted it. Without α, one sender's results are ADR-0016's.
 3. **The testbed: done.** Fitted on five campaigns (101 cases). SMOLPy's own run, with no refitting and the testbed's Modbus polls, gives a light-loss MAE of 0.120 points blind on `2026-11-26_ciemno_mac`, against the quick model's 0.122. The heavy-loss MAE is 0.086 against 0.143, and the light-run MAE 0.119 against 0.138. On `noc2_mac`, in the fit, the light-loss MAE is 0.107 points.
-4. **Left open:** light frames of 5–6 cells in overload lose up to 0.7 points too much, in runs that are too long. The `smolpy-engine-rs` floor is to be raised at the release.
+4. **Left open:** light frames of 5–6 cells in overload lose up to 0.7 points too much, in runs that are too long. The `smolpy-engine-rs` floor is `>=1.17.0`, the release of this ADR.
 
 **Why.** On unequal loads a light port at 1 200/s loses 1/80 of what the heavy port loses, where ADR-0016 says the same. While it is protected, the switch's drop state lasts `T₀ / (1 − λ_light / μ)`, within 1 %.
 
