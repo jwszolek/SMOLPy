@@ -52,6 +52,9 @@ pub enum NodeKind {
         /// one drop state for the whole switch, `ingress_drop: "switch"`
         /// (ADR-0016)
         switch_drop: bool,
+        /// its drain counted net, `ingress_drain_count: "net"`: the fall of
+        /// the switch's ingress occupancy since the entry (ADR-0017)
+        drain_net: bool,
     },
 }
 
@@ -307,6 +310,8 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         "drain_resume",
         // ADR-0016
         "switch_drop_state",
+        // ADR-0017
+        "drain_net",
     ],
     notes: &[],
 };
@@ -583,6 +588,18 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                     return Err(format!("switch {name}: unknown ingress_drop {other:?}"))
                 }
             };
+            let count = f
+                .take_or("ingress_drain_count")
+                .map(|v| v.as_str().unwrap_or("?").to_string());
+            let drain_net = match count.as_deref() {
+                None | Some("freed") => false,
+                Some("net") => true,
+                Some(other) => {
+                    return Err(format!(
+                        "switch {name}: unknown ingress_drain_count {other:?}"
+                    ))
+                }
+            };
             let cells = |l: Option<Limit>| matches!(l, Some(Limit::Cells(_)));
             if (cells(buffer) || cells(ingress) || cells(pool)) != cell.is_some() {
                 return Err(format!(
@@ -623,6 +640,11 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                     "switch {name}: ingress_drop=switch needs ingress_drain"
                 ));
             }
+            if count.is_some() && !switch_drop {
+                return Err(format!(
+                    "switch {name}: ingress_drain_count needs ingress_drop=switch"
+                ));
+            }
             NodeKind::Switch {
                 fifo,
                 topology,
@@ -635,6 +657,7 @@ fn parse_node(value: Value, i: usize) -> Res<Node> {
                 reserve,
                 drain,
                 switch_drop,
+                drain_net,
             }
         }
         "modbus_slave" => {
@@ -863,6 +886,49 @@ mod tests {
         assert_eq!(sc.nodes.len(), 3);
         assert_eq!(sc.flows[0].rate, Q::int(50_000));
         assert_eq!(sc.duration_ms, Q::int(20));
+    }
+
+    #[test]
+    fn reads_the_count_of_the_drain() {
+        // ADR-0017: freed or net, only with a switch-wide drop state
+        let switch = |extra: &str| {
+            parse(&B1.replace(
+                "\"learning\"",
+                &format!("\"learning\", \"pool_frames\": 10, \"ingress_drain\": 2{extra}"),
+            ))
+        };
+        let net = switch(", \"ingress_drop\": \"switch\", \"ingress_drain_count\": \"net\"");
+        assert!(matches!(
+            net.unwrap().nodes[0].kind,
+            NodeKind::Switch {
+                switch_drop: true,
+                drain_net: true,
+                ..
+            }
+        ));
+        let freed = switch(", \"ingress_drop\": \"switch\", \"ingress_drain_count\": \"freed\"");
+        assert!(matches!(
+            freed.unwrap().nodes[0].kind,
+            NodeKind::Switch {
+                switch_drop: true,
+                drain_net: false,
+                ..
+            }
+        ));
+        assert!(switch(", \"ingress_drain_count\": \"net\"")
+            .unwrap_err()
+            .contains("ingress_drain_count needs ingress_drop=switch"));
+        assert!(
+            switch(", \"ingress_drop\": \"port\", \"ingress_drain_count\": \"freed\"")
+                .unwrap_err()
+                .contains("ingress_drain_count needs ingress_drop=switch")
+        );
+        assert!(
+            switch(", \"ingress_drop\": \"switch\", \"ingress_drain_count\": \"all\"")
+                .unwrap_err()
+                .contains("unknown ingress_drain_count")
+        );
+        assert!(CAPABILITIES.features.contains(&"drain_net"));
     }
 
     #[test]

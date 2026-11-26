@@ -30,6 +30,7 @@ class SwitchDecl:
     ingress_reserve: Any = None
     ingress_drain: Any = None
     ingress_drop: str | None = None  # port | switch (ADR-0016)
+    ingress_drain_count: str | None = None  # freed | net (ADR-0017)
 
 
 @dataclass

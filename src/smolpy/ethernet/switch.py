@@ -11,6 +11,7 @@ SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
 MacTableMode = Literal["learning", "topology"]
 DropScope = Literal["port", "switch"]
+DrainCount = Literal["freed", "net"]
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,11 @@ class Switch(Node):
     ingress refusal and ended by ingress_drain; in it a frame is admitted
     only if it fits in its port's ingress_reserve (ADR-0016). None, the
     default, is "port": a drop state per ingress port.
+
+    ingress_drain_count="net" ends that state once the switch's ingress
+    occupancy is ingress_drain below its value at the entry: what it has
+    freed since, less what it has admitted in the state (ADR-0017). None,
+    the default, is "freed": once it has freed ingress_drain.
     """
 
     def __init__(
@@ -110,6 +116,7 @@ class Switch(Node):
         ingress_reserve: Limit | None = None,
         ingress_drain: Limit | None = None,
         ingress_drop: DropScope | None = None,
+        ingress_drain_count: DrainCount | None = None,
     ) -> None:
         super().__init__(name)
         self.ports = ports
@@ -125,6 +132,7 @@ class Switch(Node):
         self.ingress_reserve = ingress_reserve
         self.ingress_drain = ingress_drain
         self.ingress_drop = ingress_drop
+        self.ingress_drain_count = ingress_drain_count
         check_node(self.to_spec())
 
     def to_spec(self) -> SwitchNode:
@@ -153,4 +161,5 @@ class Switch(Node):
             _resume(self.name, "ingress_reserve", scope, self.ingress_reserve),
             _resume(self.name, "ingress_drain", scope, self.ingress_drain),
             self.ingress_drop,
+            self.ingress_drain_count,
         )

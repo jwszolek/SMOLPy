@@ -39,7 +39,7 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>] [pool=<limit>] [ingress_reserve=<limit>] [ingress_drain=<limit>] [ingress_drop=port|switch]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>] [pool=<limit>] [ingress_reserve=<limit>] [ingress_drain=<limit>] [ingress_drop=port|switch] [ingress_drain_count=freed|net]
 ```
 
 `mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
@@ -67,6 +67,7 @@ switch sw ports=8 buffer=115kB ingress_buffer=60frames
 switch sw ports=8 cell=128 ingress_buffer=740cells ingress_resume=668cells
 switch sw ports=8 cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells
 switch sw ports=8 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch
+switch sw ports=8 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch ingress_drain_count=net
 ```
 
 **A shared pool** ([ADR-0015](adr/0015-shared-pool-and-drain-resume.md)):
@@ -85,6 +86,11 @@ switch sw ports=8 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=7
 - **`switch`:** one for the switch. Any port's refusal starts it. In it, a frame is admitted only if it fits in its own port's `ingress_reserve`, so a light port keeps its frames while the others lose theirs. It ends once the switch has freed `ingress_drain`.
 - **Rules:** `switch` needs `ingress_drain`, and so excludes `ingress_resume`. With one sender `switch` gives the same results as `port`.
 - **Metrics.** With `switch`, `ingress_drop_episodes_total` counts the switch's entries into its drop state, and `ingress_drop_time_total` its time in it.
+
+**The count of the drain** ([ADR-0017](adr/0017-drain-counted-net.md)). `ingress_drain_count` is how the switch's drop state counts its drain:
+- **`freed`,** the default: it ends once the switch has freed `ingress_drain` since the entry, as above.
+- **`net`:** it ends once the switch's ingress occupancy, summed over its ports, is `ingress_drain` below its value at the entry. A frame admitted in the state, within its port's reserve, delays the end by its units. A refusal in the state does not restart the count.
+- **Rules:** `ingress_drain_count` needs `ingress_drop=switch`. With one sender `net` gives the same results as `freed` when ADR-0016's condition holds.
 
 ### `mqtt_broker` — MQTT message broker
 

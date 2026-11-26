@@ -158,6 +158,9 @@ class _SmolTransformer(Transformer):
             ingress_reserve=_limit(kw["ingress_reserve"]) if "ingress_reserve" in kw else None,
             ingress_drain=_limit(kw["ingress_drain"]) if "ingress_drain" in kw else None,
             ingress_drop=str(kw["ingress_drop"]) if "ingress_drop" in kw else None,
+            ingress_drain_count=(
+                str(kw["ingress_drain_count"]) if "ingress_drain_count" in kw else None
+            ),
         )
 
     def mqtt_broker_decl(self, meta: Any, children: list) -> MqttBrokerDecl:

@@ -390,3 +390,12 @@ With `ingress_drop=switch` a switch has one drop state, entered at any port's re
 
 The results are in `benchmarks/results/2026-11-24-2122-simpy-rust-ns3-jaws-zbook-switch-drop-state.json`. `python -m benchmarks switch-drop-summary <file>` prints the tables.
 
+### The drain counted net
+
+With `ingress_drain_count=net` the switch's drop state ends once its ingress occupancy is `ingress_drain` below its value at the entry, so a light port's frames admitted in it lengthen it ([ADR-0017](adr/0017-drain-counted-net.md)). The engines apply the same rule:
+- **The capability** is `"drain_net"`. A backend without it rejects `ingress_drain_count`, either value.
+- **Rust** gives SimPy's results bit for bit, event counts included.
+- **ns-3** does too for Ethernet and PROFINET. The `switch` line of `smol-ns3` format 8 gains the count, 0 for `freed` and 1 for `net`.
+- **Without the parameter, or with `freed`,** every engine gives ADR-0016's results, event counts and benchmark hashes.
+- **With one sender** under ADR-0016's condition, `net` is `freed`, exactly.
+- **With a light port** whose frames all fit in its reserve, the state's mean duration is `T₀ / (1 − λ_l·u_l·τ)`: 732.1 µs in SimPy against 732.9 µs ± 2.3 µs, with T₀ = 660.8 µs, λ_l·u_l·τ = 0.098 and 1 954 states.

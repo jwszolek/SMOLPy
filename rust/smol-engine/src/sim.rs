@@ -486,30 +486,35 @@ struct Switch {
     /// the switch's own drop state, ended by its drain, with its entries
     /// and time, if it has one for every port (`_Ingress.state`, ADR-0016)
     state: Option<Account>,
+    /// the ports' occupancies summed, and with the state's drain counted
+    /// net, that sum at the state's entry (`_Ingress.held`, ADR-0017)
+    held: u64,
+    net: bool,
+    entry_held: u64,
 }
 
 impl Switch {
     /// Decide a frame of ingress port *port* (`_Account.admit`).
     fn admit_ingress(&mut self, port: usize, size: u64, now: u64) -> bool {
-        let acc = &self.ingress[port];
-        let u = acc.units(size);
-        let fits = acc.fits(size) && self.pool.as_ref().is_none_or(|p| p.fits(acc.held, u));
-        if let Some(state) = &mut self.state {
-            // `_Account._admit_in_switch`: in the state, only within the
-            // port's reserve; outside it, a refusal enters it
-            if state.dropping {
-                return acc.held + u <= self.pool.map_or(0, |p| p.reserve);
+        let fits = self.fits_ingress(port, size);
+        if let Some(dropping) = self.state.as_ref().map(|s| s.dropping) {
+            // `_Account._admit_in_switch`: in the state, by
+            // `admits_in_state`; outside it, a refusal enters it
+            if dropping {
+                return self.admits_in_state(port, size);
             }
             if fits {
                 return true;
             }
+            let state = self.state.as_mut().expect("a switch-wide state");
             state.episodes += 1;
             state.dropping = true;
             state.since = now;
             state.drain_start = self.freed;
+            self.entry_held = self.held;
             return false;
         }
-        let was = acc.dropping;
+        let was = self.ingress[port].dropping;
         let freed = self.freed;
         let acc = &mut self.ingress[port];
         let ok = acc.decide(fits, now, freed);
@@ -519,6 +524,21 @@ impl Switch {
         ok
     }
 
+    /// Whether a frame of *port* fits outside a drop state
+    /// (`_Account.fits`): its cap, then its reserve or the pool (ADR-0015).
+    fn fits_ingress(&self, port: usize, size: u64) -> bool {
+        let acc = &self.ingress[port];
+        let u = acc.units(size);
+        acc.fits(size) && self.pool.as_ref().is_none_or(|p| p.fits(acc.held, u))
+    }
+
+    /// Whether a frame of *port* is admitted in the switch's drop state
+    /// (`_Account.admits_in_state`): only within its reserve (ADR-0016).
+    fn admits_in_state(&self, port: usize, size: u64) -> bool {
+        let acc = &self.ingress[port];
+        acc.held + acc.units(size) <= self.pool.map_or(0, |p| p.reserve)
+    }
+
     fn charge_ingress(&mut self, port: usize, size: u64) {
         let acc = &mut self.ingress[port];
         let u = acc.units(size);
@@ -526,6 +546,7 @@ impl Switch {
             p.used = p.used + p.beyond(acc.held + u) - p.beyond(acc.held);
         }
         acc.held += u;
+        self.held += u;
     }
 
     /// A frame of *port* freed (`_Account.release`): the pool and the
@@ -538,6 +559,7 @@ impl Switch {
             p.used = p.used + p.beyond(held - u) - p.beyond(held);
         }
         self.ingress[port].held -= u;
+        self.held -= u;
         self.freed += u;
         if !self.draining.is_empty() {
             let freed = self.freed;
@@ -552,10 +574,18 @@ impl Switch {
             });
         }
         if let Some(state) = &mut self.state {
-            if state.dropping
-                && self.freed - state.drain_start >= state.drain.expect("a drained state")
-            {
-                state.leave(now);
+            if state.dropping {
+                let drain = state.drain.expect("a drained state");
+                // freed since the entry, or net, the fall of the occupancy
+                // since the entry (ADR-0017)
+                let drained = if self.net {
+                    self.held + drain <= self.entry_held
+                } else {
+                    self.freed - state.drain_start >= drain
+                };
+                if drained {
+                    state.leave(now);
+                }
             }
         }
         let acc = &mut self.ingress[port];
@@ -1702,6 +1732,9 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     freed: 0,
                     draining: Vec::new(),
                     state: None,
+                    held: 0,
+                    net: false,
+                    entry_held: 0,
                 });
                 role.push(e.switches.len() - 1);
             }
@@ -1826,6 +1859,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             reserve,
             drain,
             switch_drop,
+            drain_net,
             ..
         } = node.kind
         {
@@ -1843,6 +1877,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     let mut state = account;
                     state.drain = drain;
                     sw.state = Some(state);
+                    sw.net = drain_net;
                 } else {
                     account.drain = drain;
                 }

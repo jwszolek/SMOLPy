@@ -297,15 +297,22 @@ class _Account:
 
     def _admit_in_switch(self, size: int, state: _Account) -> bool:
         """Decide a frame with a drop state for the whole switch (ADR-0016):
-        in the state, only a frame that fits in its port's reserve; outside
-        it, by the cap, the reserve and the pool, a refusal entering it."""
+        in the state, by admits_in_state; outside it, by fits, the cap, the
+        reserve and the pool, a refusal entering it."""
         if state.dropping:
-            return self.held + self.units(size) <= self.switch.reserve  # type: ignore[union-attr]
+            return self.admits_in_state(size)
         if self.fits(size):
             return True
         state.episodes += 1
         state.enter()
+        sw = self.switch
+        sw.entry_held = sw.held  # type: ignore[union-attr]
         return False
+
+    def admits_in_state(self, size: int) -> bool:
+        """Whether a frame is admitted in the switch's drop state: only if it
+        fits in its port's reserve (ADR-0016)."""
+        return self.held + self.units(size) <= self.switch.reserve  # type: ignore[union-attr]
 
     def enter(self) -> None:
         """Enter a drop state ended by a drain (ADR-0015)."""
@@ -316,17 +323,22 @@ class _Account:
 
     def charge(self, size: int) -> None:
         u = self.units(size)
-        if self.switch is not None and self.switch.pool is not None:
-            self.switch.pool.charge(self.held, u)
+        sw = self.switch
+        if sw is not None:
+            sw.held += u
+            if sw.pool is not None:
+                sw.pool.charge(self.held, u)
         self.held += u
 
     def release(self, size: int) -> None:
         u = self.units(size)
-        if self.switch is not None and self.switch.pool is not None:
-            self.switch.pool.charge(self.held, -u)
+        sw = self.switch
+        if sw is not None and sw.pool is not None:
+            sw.pool.charge(self.held, -u)
         self.held -= u
-        if self.switch is not None:
-            self.switch.free(u)
+        if sw is not None:
+            sw.held -= u
+            sw.free(u)
         if self.dropping and self.resume is not None and self.held <= self.resume:
             self.leave()
 
@@ -935,7 +947,8 @@ class _Ingress:
     with a pool, the pool, what the switch has freed so far and the ports
     whose drop state a drain ends (ADR-0013, ADR-0015). With a drop state
     for the whole switch, *state* holds it: its drop state, entries and time,
-    with no limit of its own (ADR-0016)."""
+    with no limit of its own (ADR-0016). With *net*, its drain is the fall of
+    the switch's ingress occupancy, *held*, since the entry (ADR-0017)."""
 
     def __init__(self, accounts: dict[int, _Account], pool: _Pool | None = None) -> None:
         self.accounts = accounts
@@ -945,14 +958,22 @@ class _Ingress:
         self.freed = 0  # units freed by releases, in the ingress scope's unit
         self.draining: list[_Account] = []  # in their drop state, with a drain
         self.state: _Account | None = None
+        self.held = 0  # Σ of the ports' occupancies
+        self.net = False  # the state's drain counted net (ADR-0017)
+        self.entry_held = 0  # the occupancy at the state's entry
 
     def free(self, u: int) -> None:
         """A release of *u*: every drained drop state ends at the release at
-        which its drain has been freed since it began."""
+        which its drain has been freed since it began, or with *net*, at
+        which the occupancy is its drain below its value at the entry."""
         self.freed += u
         if self.draining:
             for account in list(self.draining):
-                if self.freed - account.drain_start >= account.drain:  # type: ignore[operator]
+                if self.net:
+                    drained = self.entry_held - self.held
+                else:
+                    drained = self.freed - account.drain_start
+                if drained >= account.drain:  # type: ignore[operator]
                     self.draining.remove(account)
                     account.leave()
 
@@ -1273,6 +1294,7 @@ def run_simulation(
                     switch=ingress[name],
                     drain=node.ingress_drain,
                 )
+                ingress[name].net = node.ingress_drain_count == "net"
     ingress_of = ingress
 
     # Build directed link channels from topology

@@ -61,7 +61,8 @@ class Capabilities:
     # limits in cells, "buffer_hysteresis": resume levels (ADR-0014);
     # "buffer_pool": a shared pool and reserves, "drain_resume": drop states
     # ended by a drain (ADR-0015); "switch_drop_state": the ingress_drop
-    # scope, a drop state for the whole switch (ADR-0016)
+    # scope, a drop state for the whole switch (ADR-0016); "drain_net": the
+    # ingress_drain_count, the drain of that state counted net (ADR-0017)
     features: frozenset[str] = frozenset()
     priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
@@ -102,6 +103,8 @@ _FEATURES = frozenset(
         "drain_resume",
         # ADR-0016
         "switch_drop_state",
+        # ADR-0017
+        "drain_net",
     }
 )
 
@@ -366,6 +369,8 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
             raise unsupported(node, "drop states ended by a drain", ("nodes", i))
         if node.ingress_drop is not None and "switch_drop_state" not in caps.features:
             raise unsupported(node, "the scope of the ingress drop state", ("nodes", i))
+        if node.ingress_drain_count is not None and "drain_net" not in caps.features:
+            raise unsupported(node, "the count of the drain", ("nodes", i))
     for i, link in enumerate(scenario.links):
         if not link.duplex and not caps.half_duplex:
             raise unsupported(link, "half-duplex links", ("links", i))

@@ -50,6 +50,8 @@ _OMITTED_WHEN_UNSET = {
     "ingress_drain",
     # ADR-0016: the scope of the ingress drop state
     "ingress_drop",
+    # ADR-0017: how the drain of the switch's drop state is counted
+    "ingress_drain_count",
     "outstanding",
     "timeout_ms",
 }
@@ -58,6 +60,7 @@ SwitchMode = Literal["store-and-forward", "cut-through"]
 SwitchQoS = Literal["strict", "fifo"]
 MacTableMode = Literal["learning", "topology"]
 DropScope = Literal["port", "switch"]
+DrainCount = Literal["freed", "net"]
 TrafficPattern = Literal["constant", "poisson", "bursty", "batch"]
 FrameSize = int | Literal["imix"]
 
@@ -93,7 +96,10 @@ class SwitchNode:
     the switch has freed that much since it began (ADR-0015). All of the
     ingress scope is in one unit. With *ingress_drop* ``"switch"`` the drop
     state belongs to the whole switch, and in it a frame is admitted only
-    within its port's reserve (ADR-0016); ``None`` is ``"port"``."""
+    within its port's reserve (ADR-0016); ``None`` is ``"port"``. With
+    *ingress_drain_count* ``"net"`` that state ends once the switch's ingress
+    occupancy is the drain below its value at the entry, not once the switch
+    has freed that much (ADR-0017); ``None`` is ``"freed"``."""
 
     kind: ClassVar[str] = "switch"
     name: str
@@ -116,6 +122,7 @@ class SwitchNode:
     ingress_reserve: int | None = None
     ingress_drain: int | None = None
     ingress_drop: DropScope | None = None
+    ingress_drain_count: DrainCount | None = None
 
     @property
     def bounded(self) -> bool:

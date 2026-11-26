@@ -126,6 +126,7 @@ SWITCH_MODES = ("store-and-forward", "cut-through")
 SWITCH_QOS = ("strict", "fifo")
 MAC_TABLES = ("learning", "topology")
 DROP_SCOPES = ("port", "switch")
+DRAIN_COUNTS = ("freed", "net")
 PATTERNS = ("constant", "poisson", "bursty", "batch")
 MQTT_QOS = (0, 1)  # QoS 2 is not modelled
 MODBUS_MAX_REGISTERS = 125  # Read Holding Registers limit
@@ -304,6 +305,14 @@ def _check_pool(node: SwitchNode) -> None:
                 node,
                 "ingress_drop=switch needs ingress_drain: a switch-wide drop state ends"
                 " once the switch has freed that much",
+            )
+    if node.ingress_drain_count is not None:
+        _one_of(node, "ingress_drain_count", node.ingress_drain_count, DRAIN_COUNTS)
+        if node.ingress_drop != "switch":
+            raise _fail(
+                node,
+                "ingress_drain_count needs ingress_drop=switch: it counts the drain of the"
+                " switch's drop state",
             )
 
 
