@@ -52,6 +52,10 @@ _OMITTED_WHEN_UNSET = {
     "ingress_drop",
     # ADR-0017: how the drain of the switch's drop state is counted
     "ingress_drain_count",
+    # ADR-0017 Part 2: the protection of a light port
+    "ingress_pool_count",
+    "ingress_alpha",
+    "ingress_mark",
     "outstanding",
     "timeout_ms",
 }
@@ -61,6 +65,7 @@ SwitchQoS = Literal["strict", "fifo"]
 MacTableMode = Literal["learning", "topology"]
 DropScope = Literal["port", "switch"]
 DrainCount = Literal["freed", "net"]
+PoolCount = Literal["excess", "total"]
 TrafficPattern = Literal["constant", "poisson", "bursty", "batch"]
 FrameSize = int | Literal["imix"]
 
@@ -99,7 +104,17 @@ class SwitchNode:
     within its port's reserve (ADR-0016); ``None`` is ``"port"``. With
     *ingress_drain_count* ``"net"`` that state ends once the switch's ingress
     occupancy is the drain below its value at the entry, not once the switch
-    has freed that much (ADR-0017); ``None`` is ``"freed"``."""
+    has freed that much (ADR-0017); ``None`` is ``"freed"``.
+
+    With the drain counted net, three more protect a light port (ADR-0017
+    Part 2). *ingress_pool_count* ``"total"`` counts the pool's use as the
+    switch's whole ingress occupancy less one reserve, not each port's excess
+    over its reserve; ``None`` is ``"excess"``. *ingress_alpha* bounds what a
+    port holds beyond its reserve by α times the pool's free room, its use
+    taken before the frame. *ingress_mark* marks, at the entry of the state,
+    the refused port and each port holding more than it, in the ingress
+    unit; in the state a marked port is refused, and an unmarked one is
+    admitted if its frame fits, or else marked."""
 
     kind: ClassVar[str] = "switch"
     name: str
@@ -123,6 +138,9 @@ class SwitchNode:
     ingress_drain: int | None = None
     ingress_drop: DropScope | None = None
     ingress_drain_count: DrainCount | None = None
+    ingress_pool_count: PoolCount | None = None
+    ingress_alpha: float | None = None
+    ingress_mark: int | None = None
 
     @property
     def bounded(self) -> bool:

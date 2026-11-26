@@ -59,7 +59,7 @@ nav:
       - ADR-0014 Buffer Cells and Hysteresis: adr/0014-buffer-cells-and-hysteresis.md
       - ADR-0015 Shared Pool and Drain Resume: adr/0015-shared-pool-and-drain-resume.md
       - ADR-0016 Switch-Wide Drop State: adr/0016-switch-wide-drop-state.md
-      - ADR-0017 Drain Counted Net (proposed): adr/0017-drain-counted-net.md
+      - ADR-0017 Drain Counted Net and a Light Port: adr/0017-drain-counted-net.md
 
 markdown_extensions:
   - admonition

@@ -1,6 +1,6 @@
 # ADR-0017: The Switch's Drop State Ends on the Fall of Its Occupancy, and a Light Port Is Protected
 
-**Status:** Proposed (2026-11-26). Part 1 is settled by the data and built (As built below). Part 2, the rule that protects a light port, is decided (§6, Decision Part 2), confirmed by a prediction saved before the measurement, and not yet built.  
+**Status:** Accepted (2026-11-26). Part 1 is settled by the data and built. Part 2, the rule that protects a light port, was decided (§6, Decision Part 2) and confirmed by a prediction saved before the measurement. It is built, and validated against the hardware with no refitting (As built, both parts).  
 **Date:** 2026-11-25, Part 2 2026-11-26  
 **Amends:**
 - ADR-0016: what counts towards the drain of the switch-wide drop state; which frames are admitted in it.
@@ -175,7 +175,7 @@ Light frames of 5 cells in overload show it most: om5_1800's run is 3.00 on the 
 
 #### 6.5 The dynamic threshold: α between 20 and 28
 
-Outside the state a port's frame fits if `occ_p + u ≤ R + α·(P − pool_use)`, with P = 710·(1 + 1/α) so that one sender keeps L = 770 (§4).
+Outside the state a port's frame fits if `occ_p + u ≤ R + α·(P − pool_use)`, with P = 710·(1 + 1/α) so that one sender keeps L = 770 (§4). *Corrected at the build:* with the pool's use taken before the frame, as here, one sender's limit is about a frame above 770 (Decision, Part 2, the identity for one sender).
 - **α must be below 30.** From α = 30, a light CBR port of 1 800/s in overload starts the state itself and loses 0.35–1.9 points, against 0.001 % on the hardware.
 - **A larger α gives the light port more of the starts:** with light 3 300/s at 8 400/s, the hardware starts 57 % of the states with a light refusal; α = 12 gives 36 %, α = 24 43 %.
 - **Fitted on all five campaigns** (101 cases, actual rates, `obciazenie_mac/ocena_zbiorcza_q*.txt`). Every variant has one pool for the total, the net drain and D = 72.
@@ -313,7 +313,7 @@ switch sw ports=8 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=7
     - Rust: `Switch::admits_in_state()` and `Switch::fits_ingress()`;
     - ns-3: `SmolSwitch::AdmitsInState()` and `SmolSwitch::FitsIngress()`.
 
-### Part 2 (decided, not built): the protection of a light port
+### Part 2: the protection of a light port
 
 Option G. Three new optional switch parameters, each valid only with `ingress_drop=switch` and `ingress_drain_count=net`:
 
@@ -331,7 +331,7 @@ switch sw ports=8 cell=128 pool=740cells ingress_reserve=60cells ingress_drain=7
     - the pool has room: `pool_use + Δ ≤ P`, where Δ is the frame's addition to `pool_use`;
     - `occ_p + u ≤ R + α·(P − pool_use)`.
 - **Without the parameter there is no dynamic threshold,** as now.
-- **The pool to set with it is P = 710·(1 + 1/α), rounded:** 740 for α = 24. Then one sender keeps L = R + α·P/(1 + α) = 770. The validator does not impose this; the testbed scenarios do.
+- **The pool to set with it is P = 710·(1 + 1/α), rounded:** 740 for α = 24. Then one sender's equilibrium occupancy is R + α·P/(1 + α) = 770.4, and its limit with frames of 12 cells is 780 after a frame (below). The validator does not impose this; the testbed scenarios do.
 
 **`ingress_mark=<cells>`: who is refused in the state.**
 - **At the entry of the state** the switch marks:
@@ -346,11 +346,14 @@ switch sw ports=8 cell=128 pool=740cells ingress_reserve=60cells ingress_drain=7
 
 **The occupancies are ADR-0015's:** in cells, a frame from its admission until its transmission starts, the frame being sent not counted.
 
-**The identity for one sender.**
+**The identity for one sender holds without α only** (corrected at the build, 2026-11-26).
 - Under ADR-0016's condition (`L − R ≥ D + u_max − u_min − 1`), the sender's occupancy stays above R throughout the state.
-- So its frames are refused there with or without the mark, and `total` equals `excess`.
-- With P = 710·(1 + 1/α), α moves its fit limit L only by rounding: L − R = α·P/(1 + α) = 710.4 for α = 24.
-- **So one sender's results are ADR-0016's,** with the same events. The test pins this with P = 740.
+- So its frames are refused there with or without the mark: it is the refused port. With one sender `total` equals `excess`.
+- **Without α, one sender's results are ADR-0016's,** with the same events. The tests pin this for `total`, `excess` and the mark.
+- **With α the limit moves by about a frame.** The threshold takes the pool's use before the frame, as the quick model does, on which α was fitted. Beyond its reserve a frame of u cells fits while `occ + u ≤ R + α·(P + R − occ)`. That is while the port holds at most `⌊(α(P + R) + R − u)/(1 + α)⌋` before it: 769 cells for u = 12, α = 24, P = 740 and R = 60, and 770 for u = 1.
+- **With frames of 12 cells, a Pi alone holds at most 780 cells after a frame,** against ADR-0016's 768. That agrees with the hardware's reconstruction of one sender, which never exceeds 780 (§4).
+- **The draft's L − R = α·P/(1 + α) = 710.4 was the limit with the use taken after the frame.** It would have given ADR-0016's results exactly, but it is not the rule the campaigns fitted. In the quick model, one Pi at 8 090/s loses 0.517 % with the use after the frame, which is ADR-0016's, and 0.506 % with the use before it. A light CBR stream of 2 400/s of 8 400/s loses 0.744 % against 0.947 %.
+- **The tests pin the bound:** from the formula, at every decision SimPy makes, and the quick model's loss and runs with the same streams.
 
 **Isolation.** A port of 1-cell frames (the Waveshare, the Modbus responses) sits far below the level, so it is not marked. It fits within its reserve, so it is admitted in the state.
 
@@ -381,7 +384,7 @@ switch sw ports=8 cell=128 pool=740cells ingress_reserve=60cells ingress_drain=7
     - the validator's combinations.
 - **Identities, on every engine:**
     - without the parameters nothing changes: the same hashes and event counts as Part 1;
-    - with one sender and P = 710·(1 + 1/α), the results equal Part 1's.
+    - with one sender and P = 710·(1 + 1/α), the results equal Part 1's. *Corrected at the build:* without α only; with α, the sender's bound above.
 - **Against the quick model** (`stanowisko/model/symulacja_puli.py`, `res_shared=True`, `alpha`, `snap`):
     - SMOLPy, with the same streams and the Modbus traffic, reproduces its loss and mean runs within the sampling error;
     - checked on the `ciemno_mac` cases.
@@ -402,10 +405,73 @@ switch sw ports=8 cell=128 pool=740cells ingress_reserve=60cells ingress_drain=7
 - `2026-11-26_ciemno_mac`, predicted before the measurement (§6.6);
 - once built, SMOLPy's own run of its 21 cases, against the hardware and against the quick model.
 
+*As built (2026-11-26), Part 2:*
+- **The parameters:**
+    - `ingress_pool_count=excess|total`, `ingress_alpha=<α>` and `ingress_mark=<limit>` on the switch, in Python and `.smol`;
+    - each needs `ingress_drop=switch` and `ingress_drain_count=net`, and `ingress_pool_count` and `ingress_alpha` need `pool`;
+    - α is a positive finite number, and the mark is a whole number of the ingress unit, at least 1;
+    - three optional IR fields, written only when set; the IR stays version 2;
+    - the capability `"light_port"`;
+    - `smol-ns3` format 9, with `<pool count> <alpha> <mark>` at the end of the `switch` line. α is written as Python's shortest decimal, so it is read back exactly, and 0 means unset for α and the mark.
+- **One decision of the build: the threshold takes the pool's use before the frame,** as the quick model does. So the one-sender identity holds without α only (Decision, Part 2, corrected).
+- **Δ under `total`** is the frame's addition to `max(0, Σ occ − R)`. The quick model adds the port's own excess instead. The two differ only for a frame across its reserve's edge with the pool nearly full, and the quick model gives the same results either way on the cases tried.
+- **Where it went:**
+    - the pool's count in `_Pool` / `Switch::pool_use` / `SmolSwitch::PoolUse`;
+    - α in `fits()`, `fits_ingress()` and `FitsIngress()`;
+    - the marks in `_admit_in_switch` and `admits_in_state()`, and their counterparts.
+
+    Each entry takes the marks afresh, so they need no clearing at the end; outside the state they are not read.
+- **Nothing changes without the parameters.** B1–B4's output hashes and event counts are unchanged on SimPy and Rust. The full suite passes: 950 passed and 10 skipped, 3 of them the quick-model tests, which need `SMOLPY_QUICK_MODEL`. ruff, mypy (73, as before), `cargo fmt`, clippy and the docs build are clean.
+- **The audit** (`tests/light_port_audit.py`) checks every SimPy decision against an oracle of the rule, written apart from the engine. That covers the pool's count, the room, the threshold and the marks, kept by the audit and compared with the engine's at each decision in the state. `tests/test_light_port.py` (63 tests) also checks:
+    - the boundary of α, at the bound and one cell above, for five (α, P, R, u);
+    - the marks at the level and one above;
+    - a marked port refused within its reserve, where ADR-0016's rule admits it;
+    - an unmarked port admitted while it fits, then marked at its misfit and refused when it would fit again;
+    - a fresh mark at the next entry;
+    - `total` holding P + R where `excess` holds up to P + 2R;
+    - the Waveshare's 1-cell port in overload, never refused.
+- **The identities, on every engine:**
+    - `excess` with no α and no mark is Part 1's run, events included;
+    - one sender under ADR-0016's condition, with `total`, `excess` or a mark and no α, is ADR-0016's run, events included.
+- **One sender with α, from the formula:**
+    - beyond the reserve, every SimPy decision admits exactly while `occ ≤ ⌊(α(P + R) + R − u)/(1 + α)⌋`;
+    - a Pi of frames of 12 cells holds at most 780 after a frame, against 768 under ADR-0016;
+    - one Pi at 8 090/s with the Waveshare, 3 seeds × 30 s, loses 0.688 % in runs of 6.33 under Part 2, against 0.702 % and 6.26 under ADR-0016.
+- **Bit for bit on SimPy, Rust and ns-3,** with SimPy's and Rust's event counts equal:
+    - `light-port-mark`: a port above the level marked at the entry though not refused, and a marked port refused within its reserve;
+    - `light-port-admitted`: an unmarked light port admitted beyond its reserve;
+    - `light-port-misfit`: an unmarked heavy port marked at its misfit against α;
+    - `light-port-excess`: a misfit against the pool's room, counted by the excess, with no α.
+
+    For stochastic traffic SimPy and Rust draw different numbers. They agree in distribution, not bit for bit; ns-3, fed SimPy's send times, agrees bit for bit.
+- **Against the quick model with the same streams.** These are the heavy Pi, the light Pi and the three 1-cell response streams, on the 21 `ciemno_mac` cases, with nominal rates, 3 seeds × 56 s each, and SMOLPy on SimPy.
+    - Each stream's loss agrees within 2 standard errors in 29 of 38 comparisons (the 4 protected light streams lose nothing on either), and each mean run within 0.1 frame but one, 4.59 against 4.86 at a total of 8 000/s.
+    - SMOLPy's heavy stream loses 0.03–0.18 points more in the cases with a light CBR stream, the mean z being +1.3. In a load balance, the quick model admits 1.0001 of the egress's capacity there and SMOLPy 0.999, so part of it is the quick model's own queue, not the rule.
+- **Against the hardware, with no refitting.** The testbed's scenario has the Pis as Modbus slaves polled every 10 ms for 10 registers, the Waveshare every 20 ms, and Pi 2's frames of 554, 680 or 1 472 B of payload, at the rates the Pis sent. The model takes 3 seeds × 56 s, the window in which both Pis send. The light Pi is the one with fewer cells per second. `benchmarks/results/2026-11-26-1508-simpy-jaws-zbook-light-port.json`; `python -m benchmarks light-port-summary <file>`.
+
+    | Campaign | Cases | MAE light loss [pp] | bias | MAE heavy loss | MAE light run [frames] | bias | Waveshare polls lost |
+    |---|---|---|---|---|---|---|---|
+    | `2026-11-26_ciemno_mac`, blind | 21 | **0.120** | +0.051 | **0.086** | **0.119** | +0.077 | 0 |
+    | `2026-11-25_noc2_mac`, in the fit | 44 | 0.107 | +0.016 | 0.073 | 0.107 | +0.003 | 0 |
+    | *the quick model on `ciemno_mac`, saved before (§6.6)* | 21 | 0.122 | +0.007 | 0.143 | 0.138 | | |
+    | *the quick model, at the rates sent (§6.6)* | 21 | 0.145 | | 0.094 | 0.150 | | |
+
+    - **SMOLPy reproduces the blind check as well as the quick model or better,** with the Modbus traffic as the testbed has it: a Pi's responses come from its own port.
+    - **The protected cases:** CBR 2 000/s of 8 400 and of 8 800, 4 000/s of 5 cells and 3 000/s of 6 cells lose 0.000–0.013 % in the model, against 0.000–0.004 % on the hardware.
+    - **The cases the rules told apart (§6.6):**
+        - light CBR 2 500/s of 8 700: 3.22 % against 2.92 %;
+        - CBR 2 600/s of 8 500: 2.67 % against 2.56 %;
+        - CBR 5 000/s of 6 cells of 8 800: 4.03 % against 3.33 %. That is the largest error, as in the quick model (+0.54 there).
+    - **§6.6's residuals stay:**
+        - light frames of 5–6 cells in overload lose up to 0.7 points too much, and their runs are too long: 3.16 against 2.38 at 4 000/s, 4.39 against 3.99 at 6 000/s;
+        - a light Poisson stream of 2 800–3 000/s in overload loses 0.1–0.2 points too little.
+
 ---
 
 ## Remaining (2026-11-26)
 
-- **Build Part 2** in SimPy, Rust and ns-3, with the tests above.
-- **Run SMOLPy on the `ciemno_mac` and `noc2_mac` cases** with the Modbus traffic, and compare it with the quick model's predictions saved before each campaign.
+- ~~**Build Part 2** in SimPy, Rust and ns-3, with the tests above.~~ Done (As built, Part 2).
+- ~~**Run SMOLPy on the `ciemno_mac` and `noc2_mac` cases** with the Modbus traffic, and compare it with the quick model's predictions saved before each campaign.~~ Done: a light-loss MAE of 0.120 points blind, 0.107 in the fit.
 - **The residuals of §6.6** (light frames of 5–6 cells in overload; a light Poisson stream of 2 800–3 300/s in overload) are left as the model's stated error. They are not a reason for a further parameter.
+- **The heavy stream's 0.1 point above the quick model** in the light CBR cases: the quick model's admitted load is above the egress's capacity there. Not pursued.
+- **The `smolpy-engine-rs` floor** is raised to the release that carries this ADR, once it is published, never to a pre-release.

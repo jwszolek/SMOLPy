@@ -62,7 +62,9 @@ class Capabilities:
     # "buffer_pool": a shared pool and reserves, "drain_resume": drop states
     # ended by a drain (ADR-0015); "switch_drop_state": the ingress_drop
     # scope, a drop state for the whole switch (ADR-0016); "drain_net": the
-    # ingress_drain_count, the drain of that state counted net (ADR-0017)
+    # ingress_drain_count, the drain of that state counted net (ADR-0017);
+    # "light_port": ingress_pool_count, ingress_alpha and ingress_mark, the
+    # protection of a light port (ADR-0017 Part 2)
     features: frozenset[str] = frozenset()
     priorities: bool = True  # 802.1Q priorities above 0 on flows
     half_duplex: bool = False
@@ -105,6 +107,7 @@ _FEATURES = frozenset(
         "switch_drop_state",
         # ADR-0017
         "drain_net",
+        "light_port",
     }
 )
 
@@ -371,6 +374,12 @@ def check(scenario: Scenario, backend: str = DEFAULT, *, dashboard: bool = False
             raise unsupported(node, "the scope of the ingress drop state", ("nodes", i))
         if node.ingress_drain_count is not None and "drain_net" not in caps.features:
             raise unsupported(node, "the count of the drain", ("nodes", i))
+        if (
+            node.ingress_pool_count is not None
+            or node.ingress_alpha is not None
+            or node.ingress_mark is not None
+        ) and "light_port" not in caps.features:
+            raise unsupported(node, "the protection of a light port", ("nodes", i))
     for i, link in enumerate(scenario.links):
         if not link.duplex and not caps.half_duplex:
             raise unsupported(link, "half-duplex links", ("links", i))

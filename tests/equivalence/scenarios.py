@@ -772,6 +772,90 @@ def random_drops() -> Scenario:
     return net.to_scenario(duration=1_000, seed=23)
 
 
+def light_port(
+    name: str,
+    rates: tuple[float, float, float],
+    *,
+    alpha: float | None,
+    mark: int,
+    drain: int,
+    count: str = "total",
+    sizes: tuple[int, int, int] = (1_518, 1_518, 1_518),
+    lengths: tuple[float, float, float] = (2, 17, 331),
+    duration: float = 40,
+) -> Scenario:
+    """The protection of a light port (ADR-0017 Part 2): three constant
+    sources at 1 Gb/s into one 100 Mb/s port, cells of 128 B, a pool of 120
+    cells beside reserves of 24, the switch's drop state counted net, its
+    pool's use counted by *count*, a dynamic threshold *alpha* and a mark at
+    *mark* cells. The link lengths set the sources' phases."""
+    net = Network(name)
+    sw = net.switch(
+        "sw",
+        ports=4,
+        cell=128,
+        pool=Cells(120),
+        ingress_reserve=Cells(24),
+        ingress_drain=Cells(drain),
+        ingress_drop="switch",
+        ingress_drain_count="net",
+        ingress_pool_count=count,  # type: ignore[arg-type]
+        ingress_alpha=alpha,
+        ingress_mark=Cells(mark),
+        mac_table="topology",
+    )
+    sink = net.adapter("sink", ip="10.0.0.99")
+    for i, (rate, size, length) in enumerate(zip(rates, sizes, lengths, strict=True)):
+        source = net.adapter(f"s{i}", ip=f"10.0.0.{i + 1}")
+        net.link(source, sw, speed=1_000, length=length)
+        source.sends(sink, rate=rate, size=size)
+    net.link(sink, sw, speed=100, length=2)
+    for metric in (
+        "ingress_drops_total",
+        "ingress_drop_episodes_total",
+        "ingress_drop_time_total",
+        "pool_occupancy",
+    ):
+        net.observe(metric, on=sw, every=1)
+    net.observe("frames_received", on=sink, every=1)
+    net.observe("latency", on=sink, every=1)
+    return net.to_scenario(duration=duration)
+
+
+LIGHT_PORT: dict[str, Callable[[], Scenario]] = {
+    # a port above the level marked at the entry, though not refused, and a
+    # marked port refused within its reserve
+    "light-port-mark": lambda: light_port(
+        "light-port-mark", (4_000, 3_500, 1_200), alpha=0.5, mark=36, drain=72, duration=60
+    ),
+    # an unmarked light port admitted in the state beyond its reserve
+    "light-port-admitted": lambda: light_port(
+        "light-port-admitted", (5_000, 2_500, 2_000), alpha=1.0, mark=72, drain=72
+    ),
+    # two near-equal heavy ports below the level: the one not refused at the
+    # entry is unmarked, and marked at its misfit against the threshold
+    "light-port-misfit": lambda: light_port(
+        "light-port-misfit",
+        (4_500, 4_000, 800),
+        alpha=1.0,
+        mark=96,
+        drain=36,
+        lengths=(2, 191, 57),
+    ),
+    # the pool's use counted by each port's excess, no threshold: a misfit
+    # against the pool's room
+    "light-port-excess": lambda: light_port(
+        "light-port-excess",
+        (5_000, 3_500, 2_000),
+        alpha=None,
+        mark=48,
+        drain=72,
+        count="excess",
+        lengths=(2, 332, 334),
+    ),
+}
+
+
 def random_load() -> Scenario:
     """Poisson and bursty traffic with IMIX sizes into one server port, at
     about 40 % of its link."""
@@ -862,6 +946,8 @@ DETERMINISTIC: dict[str, Callable[[], Scenario]] = {
     "drain-net-tie": drain_net_tie,
     "drain-net-two-ports": lambda: pool_two_sources("switch", "net"),
     "drain-net-flood": lambda: flood_full_pool("switch", "net"),
+    # ADR-0017 Part 2: the protection of a light port
+    **LIGHT_PORT,
 }
 STOCHASTIC: dict[str, Callable[[], Scenario]] = {
     "random-load": random_load,

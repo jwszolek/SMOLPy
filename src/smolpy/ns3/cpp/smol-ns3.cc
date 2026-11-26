@@ -4,15 +4,17 @@
 // scenario that smolpy.ns3 has lowered to plain lines of integers, with every
 // time already in integer nanoseconds (Model Semantics §1):
 //
-//     smol-ns3 8
+//     smol-ns3 9
 //     duration <ns>
 //     tcp <min RTO ns> <clock granularity ns> <delayed ACK ns> <SYN RTO ns>
 //     adapter <mac> <ipv4>                   nodes, numbered from 0 in order
-//     switch <cell B> <egress limit> <unit> <egress resume> <ingress limit> <unit> <ingress resume> <pool> <reserve> <drain> <scope> <count>
+//     switch <cell B> <egress limit> <unit> <egress resume> <ingress limit> <unit> <ingress resume> <pool> <reserve> <drain> <scope> <count> <pool count> <alpha> <mark>
 //            b: bytes, f: frames, c: cells; 0: no limit, -1: no resume; the pool, reserve and
 //            drain in the ingress unit, 0 for none; the scope of the ingress drop state,
 //            0: each port's, 1: the switch's; the count of the switch's drain, 0: freed,
-//            1: net
+//            1: net; the count of the pool's use, 0: each port's excess, 1: the total less
+//            one reserve; the dynamic threshold, 0 for none; the mark level in the ingress
+//            unit, 0 for none
 //     link <a> <b> <speed num> <speed den> <propagation ns> <gap ns> <strict a> <strict b>
 //     static <switch> <mac> <port>          a switch's MAC table at the start
 //     flow <src> <dst ipv4> <udp payload> <priority> <delay ns> <period num> <period den>
@@ -312,6 +314,7 @@ struct Account
     uint64_t dropNs = 0;
     int64_t drain = -1; // ADR-0015; -1: none
     uint64_t drainStart = 0;
+    bool marked = false; // refused in the switch's drop state (ADR-0017)
 
     uint64_t Unit(uint64_t bytes) const
     {
@@ -390,11 +393,13 @@ struct Account
 // when the last of its queued copies is taken.
 // A switch's shared buffer pool (ADR-0015): what its ingress ports hold
 // beyond their reserves, the sum of max(0, held - reserve), against its limit.
+// With total, its use is the ports' whole occupancy less one reserve (ADR-0017).
 struct Pool
 {
     uint64_t limit = 0; // 0: none
     uint64_t reserve = 0;
     uint64_t used = 0;
+    bool total = false;
 
     uint64_t Beyond(uint64_t held) const
     {
@@ -972,6 +977,15 @@ class SmolSwitch
             state.since = Simulator::Now().GetNanoSeconds();
             state.drainStart = freed;
             heldAtEntry = held;
+            if (mark > 0)
+            {
+                // the marks at the entry: each port above the level, and this one
+                for (Account& q : ingress)
+                {
+                    q.marked = q.held > mark;
+                }
+                a.marked = true;
+            }
             return false;
         }
         bool was = a.dropping;
@@ -983,20 +997,63 @@ class SmolSwitch
         return ok;
     }
 
+    // What the pool holds, by its count.
+    uint64_t PoolUse() const
+    {
+        return pool.total ? pool.Beyond(held) : pool.used;
+    }
+
     // Whether a frame fits outside a drop state: its port's cap, then its
-    // reserve or the pool (ADR-0015).
+    // reserve or the pool (ADR-0015), and with a dynamic threshold, beyond
+    // its reserve, at most R + alpha (P - pool use) held after it (ADR-0017).
     bool FitsIngress(uint32_t in, uint64_t bytes) const
     {
         const Account& a = ingress[in];
-        return a.Fits(bytes) && (pool.limit == 0 || pool.Fits(a.held, a.Unit(bytes)));
+        if (!a.Fits(bytes))
+        {
+            return false;
+        }
+        if (pool.limit == 0)
+        {
+            return true;
+        }
+        uint64_t u = a.Unit(bytes);
+        uint64_t after = a.held + u;
+        bool room = pool.total ? after <= pool.reserve || pool.Beyond(held + u) <= pool.limit
+                               : pool.Fits(a.held, u);
+        if (!room)
+        {
+            return false;
+        }
+        if (alpha <= 0 || after <= pool.reserve)
+        {
+            return true;
+        }
+        int64_t free = static_cast<int64_t>(pool.limit) - static_cast<int64_t>(PoolUse());
+        return static_cast<double>(after) <=
+               static_cast<double>(pool.reserve) + alpha * static_cast<double>(free);
     }
 
     // Whether a frame is admitted in the switch's drop state: only within
-    // its port's reserve (ADR-0016).
-    bool AdmitsInState(uint32_t in, uint64_t bytes) const
+    // its port's reserve (ADR-0016); with a mark, if its port is unmarked and
+    // it fits, a misfit marking the port (ADR-0017).
+    bool AdmitsInState(uint32_t in, uint64_t bytes)
     {
-        const Account& a = ingress[in];
-        return a.held + a.Unit(bytes) <= pool.reserve;
+        Account& a = ingress[in];
+        if (mark == 0)
+        {
+            return a.held + a.Unit(bytes) <= pool.reserve;
+        }
+        if (a.marked)
+        {
+            return false;
+        }
+        if (FitsIngress(in, bytes))
+        {
+            return true;
+        }
+        a.marked = true;
+        return false;
     }
 
     void ChargeIngress(uint32_t in, uint64_t bytes)
@@ -1059,6 +1116,8 @@ class SmolSwitch
     bool net = false;               // its drain counted net (ADR-0017)
     uint64_t held = 0;              // the ports' occupancies, summed
     uint64_t heldAtEntry = 0;       // held at the state's entry
+    double alpha = 0;               // the dynamic threshold, 0: none (ADR-0017)
+    uint64_t mark = 0;              // the mark level, 0: none
 
     uint64_t QueueDepth() const
     {
@@ -1805,7 +1864,7 @@ Sample(Observation* o)
         a = o->host->modbusSkipped;
         break;
     case Kind::PoolOccupancy:
-        a = o->sw->pool.used;
+        a = o->sw->PoolUse();
         break;
     case Kind::PolledUnanswered:
         a = o->host->polledRequests;
@@ -1839,9 +1898,9 @@ Run(std::istream& in, std::ostream& out)
 
     std::string word;
     uint32_t version = 0;
-    if (!(in >> word >> version) || word != "smol-ns3" || version != 8)
+    if (!(in >> word >> version) || word != "smol-ns3" || version != 9)
     {
-        Fail("not a smol-ns3 version 8 scenario");
+        Fail("not a smol-ns3 version 9 scenario");
     }
 
     uint64_t durationNs = 0;
@@ -1911,14 +1970,21 @@ Run(std::istream& in, std::ostream& out)
                 int64_t drain;
                 int scope;
                 int count = -1;
+                int poolCount = -1;
                 s >> cell >> sw.egress.limit >> egressUnit >> sw.egress.resume >>
                     sw.ingressLimit.limit >> ingressUnit >> sw.ingressLimit.resume >>
-                    sw.pool.limit >> sw.pool.reserve >> drain >> scope >> count;
+                    sw.pool.limit >> sw.pool.reserve >> drain >> scope >> count >> poolCount >>
+                    sw.alpha >> sw.mark;
+                bool light = poolCount == 1 || sw.alpha != 0 || sw.mark != 0;
                 if ((scope != 0 && (scope != 1 || drain <= 0)) ||
-                    (count != 0 && (count != 1 || scope != 1)))
+                    (count != 0 && (count != 1 || scope != 1)) ||
+                    (poolCount != 0 && poolCount != 1) || !(sw.alpha >= 0) ||
+                    (light && count != 1) ||
+                    ((poolCount == 1 || sw.alpha != 0) && sw.pool.limit == 0))
                 {
                     Fail("bad switch: " + line);
                 }
+                sw.pool.total = poolCount == 1;
                 sw.switchDrop = scope == 1;
                 sw.net = count == 1;
                 sw.state.drain = drain > 0 ? drain : -1;

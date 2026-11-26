@@ -231,6 +231,7 @@ class _Account:
         "switch",
         "drain",
         "drain_start",
+        "marked",
     )
 
     def __init__(
@@ -259,6 +260,7 @@ class _Account:
         self.switch = switch
         self.drain = drain
         self.drain_start = 0
+        self.marked = False  # refused in the switch's drop state (ADR-0017)
 
     def units(self, size: int) -> int:
         """What a frame of *size* bytes takes of the account."""
@@ -269,11 +271,23 @@ class _Account:
         return size
 
     def fits(self, size: int) -> bool:
+        """Whether a frame fits outside a drop state: its cap, then its
+        reserve or the pool (ADR-0015), and with a dynamic threshold, beyond
+        its reserve, at most R + α·(P − pool use) held after it (ADR-0017)."""
         u = self.units(size)
         if self.limit is not None and self.held + u > self.limit:
             return False
-        pool = None if self.switch is None else self.switch.pool
-        return pool is None or pool.fits(self.held, u)
+        sw = self.switch
+        pool = None if sw is None else sw.pool
+        if pool is None or not pool.fits(self.held, u):
+            return pool is None
+        alpha = sw.alpha  # type: ignore[union-attr]
+        after = self.held + u
+        return (
+            alpha is None
+            or after <= pool.reserve
+            or after <= pool.reserve + alpha * (pool.limit - pool.use())
+        )
 
     def admit(self, size: int) -> bool:
         """Decide a frame: False if it is dropped, by tail drop or the drop
@@ -307,12 +321,27 @@ class _Account:
         state.enter()
         sw = self.switch
         sw.entry_held = sw.held  # type: ignore[union-attr]
+        mark = sw.mark  # type: ignore[union-attr]
+        if mark is not None:
+            # the marks at the entry: each port above the level, and this one
+            for account in sw.accounts.values():  # type: ignore[union-attr]
+                account.marked = account.held > mark
+            self.marked = True
         return False
 
     def admits_in_state(self, size: int) -> bool:
         """Whether a frame is admitted in the switch's drop state: only if it
-        fits in its port's reserve (ADR-0016)."""
-        return self.held + self.units(size) <= self.switch.reserve  # type: ignore[union-attr]
+        fits in its port's reserve (ADR-0016); with a mark, if its port is
+        unmarked and it fits, a misfit marking the port (ADR-0017)."""
+        sw = self.switch
+        if sw.mark is None:  # type: ignore[union-attr]
+            return self.held + self.units(size) <= sw.reserve  # type: ignore[union-attr]
+        if self.marked:
+            return False
+        if self.fits(size):
+            return True
+        self.marked = True
+        return False
 
     def enter(self) -> None:
         """Enter a drop state ended by a drain (ADR-0015)."""
@@ -920,26 +949,37 @@ def _topology_mac_table(
 
 class _Pool:
     """A switch's shared buffer pool (ADR-0015): what its ingress ports hold
-    beyond their reserves, Σ max(0, held − reserve), against its limit."""
+    beyond their reserves, Σ max(0, held − reserve), against its limit. With
+    *total*, its use is the ports' whole occupancy less one reserve,
+    max(0, Σ held − reserve) (ADR-0017)."""
 
-    __slots__ = ("limit", "reserve", "used")
+    __slots__ = ("limit", "reserve", "used", "total", "held")
 
-    def __init__(self, limit: int, reserve: int) -> None:
+    def __init__(self, limit: int, reserve: int, total: bool = False) -> None:
         self.limit = limit
         self.reserve = reserve
-        self.used = 0
+        self.used = 0  # Σ max(0, held − reserve)
+        self.total = total
+        self.held = 0  # Σ held
 
     def _beyond(self, held: int) -> int:
         return held - self.reserve if held > self.reserve else 0
 
+    def use(self) -> int:
+        """What the pool holds, by its count."""
+        return self._beyond(self.held) if self.total else self.used
+
     def fits(self, held: int, u: int) -> bool:
         """Whether a port holding *held* can take *u* more: in its reserve, or
-        in the pool for the part beyond it."""
+        in the pool for what it adds to the pool's use."""
+        if self.total:
+            return held + u <= self.reserve or self._beyond(self.held + u) <= self.limit
         return self.used + self._beyond(held + u) - self._beyond(held) <= self.limit
 
     def charge(self, held: int, u: int) -> None:
         """A port holding *held* takes *u* more, or gives *-u* back."""
         self.used += self._beyond(held + u) - self._beyond(held)
+        self.held += u
 
 
 class _Ingress:
@@ -961,6 +1001,10 @@ class _Ingress:
         self.held = 0  # Σ of the ports' occupancies
         self.net = False  # the state's drain counted net (ADR-0017)
         self.entry_held = 0  # the occupancy at the state's entry
+        # the protection of a light port (ADR-0017 Part 2): the dynamic
+        # threshold, and the level above which a port is marked at the entry
+        self.alpha: float | None = None
+        self.mark: int | None = None
 
     def free(self, u: int) -> None:
         """A release of *u*: every drained drop state ends at the release at
@@ -1284,7 +1328,11 @@ def run_simulation(
     for name, node in nodes.items():
         if isinstance(node, model.SwitchNode) and node.ingress_accounted:
             pool = node.pool_limit
-            shared = None if pool is None else _Pool(pool[0], node.ingress_reserve or 0)
+            shared = (
+                None
+                if pool is None
+                else _Pool(pool[0], node.ingress_reserve or 0, node.ingress_pool_count == "total")
+            )
             ingress[name] = _Ingress({}, shared)
             if node.ingress_drop == "switch":
                 ingress[name].state = _Account(
@@ -1295,6 +1343,8 @@ def run_simulation(
                     drain=node.ingress_drain,
                 )
                 ingress[name].net = node.ingress_drain_count == "net"
+                ingress[name].alpha = node.ingress_alpha
+                ingress[name].mark = node.ingress_mark
     ingress_of = ingress
 
     # Build directed link channels from topology
@@ -1574,7 +1624,7 @@ def run_simulation(
             accounts = ingress.get(target.name)
             shared_pool = None if accounts is None else accounts.pool
             occupancy = (
-                (lambda p: lambda: p.used)(shared_pool) if shared_pool is not None else (lambda: 0)
+                (lambda p: lambda: p.use())(shared_pool) if shared_pool is not None else (lambda: 0)
             )
             env.process(_count_sampler(env, occupancy, period, samples))
         elif obs.metric in (

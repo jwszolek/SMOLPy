@@ -39,7 +39,7 @@ adapter <name> ip=<ip> [mac=<mac>]
 ### `switch` — Layer-2 switch
 
 ```
-switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>] [pool=<limit>] [ingress_reserve=<limit>] [ingress_drain=<limit>] [ingress_drop=port|switch] [ingress_drain_count=freed|net]
+switch <name> ports=<n> [mode=store-and-forward|cut-through] [qos=strict|fifo] [mac_table=learning|topology] [buffer=<limit>] [ingress_buffer=<limit>] [cell=<bytes>] [resume=<limit>] [ingress_resume=<limit>] [pool=<limit>] [ingress_reserve=<limit>] [ingress_drain=<limit>] [ingress_drop=port|switch] [ingress_drain_count=freed|net] [ingress_pool_count=excess|total] [ingress_alpha=<α>] [ingress_mark=<limit>]
 ```
 
 `mode` defaults to `store-and-forward`. `qos` defaults to `strict` (egress queues serve 802.1Q priorities strictly); `fifo` ignores frame priorities on this switch. `mac_table` defaults to `learning`, where the switch learns addresses and floods unknown destinations. `topology` starts it with the port towards every end station already known.
@@ -68,6 +68,7 @@ switch sw ports=8 cell=128 ingress_buffer=740cells ingress_resume=668cells
 switch sw ports=8 cell=128 pool=716cells ingress_reserve=54cells ingress_drain=72cells
 switch sw ports=8 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch
 switch sw ports=8 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch ingress_drain_count=net
+switch sw ports=8 cell=128 pool=740cells ingress_reserve=60cells ingress_drain=72cells ingress_drop=switch ingress_drain_count=net ingress_pool_count=total ingress_alpha=24 ingress_mark=204cells
 ```
 
 **A shared pool** ([ADR-0015](adr/0015-shared-pool-and-drain-resume.md)):
@@ -91,6 +92,13 @@ switch sw ports=8 cell=128 pool=710cells ingress_reserve=60cells ingress_drain=7
 - **`freed`,** the default: it ends once the switch has freed `ingress_drain` since the entry, as above.
 - **`net`:** it ends once the switch's ingress occupancy, summed over its ports, is `ingress_drain` below its value at the entry. A frame admitted in the state, within its port's reserve, delays the end by its units. A refusal in the state does not restart the count.
 - **Rules:** `ingress_drain_count` needs `ingress_drop=switch`. With one sender `net` gives the same results as `freed` when ADR-0016's condition holds.
+
+**The protection of a light port** ([ADR-0017](adr/0017-drain-counted-net.md), Part 2). Three parameters, each with `ingress_drop=switch` and `ingress_drain_count=net`:
+- **`ingress_pool_count`:** how the pool's use is counted. `excess`, the default, is each port's occupancy beyond its reserve, summed. `total` is the switch's whole ingress occupancy less one reserve. A port within its reserve is admitted either way, but under `total` its units count against the pool.
+- **`ingress_alpha=<α>`:** a dynamic threshold, a positive number. Outside the state, a frame of u units of a port holding `occ` fits beyond the reserve R only if, besides the pool's room, `occ + u ≤ R + α·(P − use)`, the pool's use taken before the frame.
+- **`ingress_mark=<limit>`:** who is refused in the state, in the ingress unit, at least 1. At the entry the refused port is marked, and so is every port holding more than the level. In the state a marked port is refused, even within its reserve. An unmarked port is admitted if its frame fits as outside the state, or is marked and refused. Without it, a frame in the state is admitted only within its reserve.
+- **Rules:** `ingress_pool_count` and `ingress_alpha` need `pool`.
+- **With one sender** and no `ingress_alpha`, the results are ADR-0016's. With `ingress_alpha` the sender holds at most `⌊(α·(P + R) + R − u)/(1 + α)⌋` units before a frame of u beyond its reserve. That is 769 cells for the LS108GP's α = 24, P = 740 and R = 60, so 780 cells after a frame of 12.
 
 ### `mqtt_broker` — MQTT message broker
 

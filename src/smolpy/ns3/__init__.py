@@ -57,8 +57,9 @@ if TYPE_CHECKING:
 # 5: cells, resume levels, drop episodes and drop time (ADR-0014);
 # 6: a shared pool, reserves and drains (ADR-0015);
 # 7: the scope of the ingress drop state (ADR-0016);
-# 8: the count of the drain of the switch's drop state (ADR-0017)
-FORMAT_VERSION = 8
+# 8: the count of the drain of the switch's drop state (ADR-0017);
+# 9: the pool's count, the dynamic threshold and the mark (ADR-0017 Part 2)
+FORMAT_VERSION = 9
 UDP_IP_BYTES = 8 + 20
 ETHERNET_BYTES = 14 + 4  # header and FCS
 PROGRAM = "smol-ns3"
@@ -295,6 +296,9 @@ def lower(scenario: model.Scenario, tcp: TcpSettings | None = None) -> tuple[str
                 f" {0 if pool is None else pool[0]} {n.ingress_reserve or 0} {n.ingress_drain or 0}"
                 f" {1 if n.ingress_drop == 'switch' else 0}"
                 f" {1 if n.ingress_drain_count == 'net' else 0}"
+                f" {1 if n.ingress_pool_count == 'total' else 0}"
+                f" {0 if n.ingress_alpha is None else repr(float(n.ingress_alpha))}"
+                f" {n.ingress_mark or 0}"
             )
         else:
             lines.append(f"adapter {n.mac} {n.ip}")  # a station, with IPv4

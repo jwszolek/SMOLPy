@@ -151,6 +151,9 @@ struct Account {
     /// what its switch had freed when it entered it
     drain: Option<u64>,
     drain_start: u64,
+    /// refused in the switch's drop state, marked at its entry or at a
+    /// misfit in it (ADR-0017)
+    marked: bool,
 }
 
 impl Account {
@@ -175,6 +178,7 @@ impl Account {
             drop_ns: 0,
             drain: None,
             drain_start: 0,
+            marked: false,
         })
     }
 
@@ -245,12 +249,14 @@ impl Account {
 
 /// A switch's shared buffer pool (`_Pool`, ADR-0015): what its ingress ports
 /// hold beyond their reserves, the sum of max(0, held - reserve), against its
-/// limit.
+/// limit. With *total*, its use is the ports' whole occupancy less one
+/// reserve (ADR-0017).
 #[derive(Clone, Copy)]
 struct Pool {
     limit: u64,
     reserve: u64,
     used: u64,
+    total: bool,
 }
 
 impl Pool {
@@ -491,6 +497,10 @@ struct Switch {
     held: u64,
     net: bool,
     entry_held: u64,
+    /// the protection of a light port (`_Ingress.alpha`, `_Ingress.mark`,
+    /// ADR-0017 Part 2)
+    alpha: Option<f64>,
+    mark: Option<u64>,
 }
 
 impl Switch {
@@ -512,6 +522,13 @@ impl Switch {
             state.since = now;
             state.drain_start = self.freed;
             self.entry_held = self.held;
+            if let Some(mark) = self.mark {
+                // the marks at the entry: each port above the level, and this one
+                for acc in &mut self.ingress {
+                    acc.marked = acc.held > mark;
+                }
+                self.ingress[port].marked = true;
+            }
             return false;
         }
         let was = self.ingress[port].dropping;
@@ -524,19 +541,55 @@ impl Switch {
         ok
     }
 
+    /// What the pool holds, by its count (`_Pool.use`).
+    fn pool_use(&self) -> u64 {
+        self.pool
+            .map_or(0, |p| if p.total { p.beyond(self.held) } else { p.used })
+    }
+
     /// Whether a frame of *port* fits outside a drop state
-    /// (`_Account.fits`): its cap, then its reserve or the pool (ADR-0015).
+    /// (`_Account.fits`): its cap, then its reserve or the pool (ADR-0015),
+    /// and with a dynamic threshold, beyond its reserve, at most
+    /// R + α·(P − pool use) held after it (ADR-0017).
     fn fits_ingress(&self, port: usize, size: u64) -> bool {
         let acc = &self.ingress[port];
         let u = acc.units(size);
-        acc.fits(size) && self.pool.as_ref().is_none_or(|p| p.fits(acc.held, u))
+        if !acc.fits(size) {
+            return false;
+        }
+        let Some(p) = &self.pool else {
+            return true;
+        };
+        let after = acc.held + u;
+        let room = if p.total {
+            after <= p.reserve || p.beyond(self.held + u) <= p.limit
+        } else {
+            p.fits(acc.held, u)
+        };
+        room && (after <= p.reserve
+            || self.alpha.is_none_or(|alpha| {
+                let free = p.limit as i64 - self.pool_use() as i64;
+                after as f64 <= p.reserve as f64 + alpha * free as f64
+            }))
     }
 
     /// Whether a frame of *port* is admitted in the switch's drop state
-    /// (`_Account.admits_in_state`): only within its reserve (ADR-0016).
-    fn admits_in_state(&self, port: usize, size: u64) -> bool {
-        let acc = &self.ingress[port];
-        acc.held + acc.units(size) <= self.pool.map_or(0, |p| p.reserve)
+    /// (`_Account.admits_in_state`): only within its reserve (ADR-0016); with
+    /// a mark, if its port is unmarked and it fits, a misfit marking the
+    /// port (ADR-0017).
+    fn admits_in_state(&mut self, port: usize, size: u64) -> bool {
+        if self.mark.is_none() {
+            let acc = &self.ingress[port];
+            return acc.held + acc.units(size) <= self.pool.map_or(0, |p| p.reserve);
+        }
+        if self.ingress[port].marked {
+            return false;
+        }
+        if self.fits_ingress(port, size) {
+            return true;
+        }
+        self.ingress[port].marked = true;
+        false
     }
 
     fn charge_ingress(&mut self, port: usize, size: u64) {
@@ -1515,7 +1568,7 @@ impl Engine {
             Sampled::SlaveTimeouts(s) => (Some(self.slaves[*s as usize].timeouts as f64), 0),
             Sampled::SlaveSkipped(s) => (Some(self.slaves[*s as usize].skipped as f64), 0),
             Sampled::PoolOccupancy(w) => {
-                let used = self.switches[*w as usize].pool.map_or(0, |p| p.used);
+                let used = self.switches[*w as usize].pool_use();
                 (Some(used as f64), 0)
             }
             Sampled::Episodes(chans, w, ingress, time) => {
@@ -1735,6 +1788,8 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     held: 0,
                     net: false,
                     entry_held: 0,
+                    alpha: None,
+                    mark: None,
                 });
                 role.push(e.switches.len() - 1);
             }
@@ -1860,6 +1915,9 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
             drain,
             switch_drop,
             drain_net,
+            pool_total,
+            alpha,
+            mark,
             ..
         } = node.kind
         {
@@ -1878,6 +1936,8 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     state.drain = drain;
                     sw.state = Some(state);
                     sw.net = drain_net;
+                    sw.alpha = alpha;
+                    sw.mark = mark;
                 } else {
                     account.drain = drain;
                 }
@@ -1888,6 +1948,7 @@ pub fn run(sc: &Scenario) -> Result<Outcome, String> {
                     },
                     reserve: reserve.unwrap_or(0),
                     used: 0,
+                    total: pool_total,
                 });
             }
         }
